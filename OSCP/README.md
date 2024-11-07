@@ -1143,6 +1143,7 @@ ssh -i id_rsa -p 2222 dave@192.168.50.201
 ## Working with Password Hashes
 
 ### Cracking NTLM
+
 Mimikatz includes the **sekurlsa** module, which extracts password hashes from the Local Security Authority Subsystem (LSASS) process memory.
 
 **LSASS** is a process in Windows that handles user authentication, password changes, and access token creation. LSASS caches NTLM hashes and other credentials. LSASS runs under the **SYSTEM** user, which even more privileged than a process started as **Administrator**.
