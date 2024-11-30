@@ -863,7 +863,7 @@ LoadLibrary can not be invoked on a remote process.
 
 => Resolve the address of **LoadLibraryA** inside the remote process and invoke it while supplying the name of the DLL we want to load. If the address of LoadLibraryA is given as the 4th argument to **CreateRemoteThread**, it will be invoked when we call CreateRemoteThread.
 
-Several restrictions we must consider:
+Several restrictions to consider:
 
 1. The DLL must be written in C or C++ and must be unmanaged because we can not load a managed DLL into an unmanaged process.
 
@@ -7840,7 +7840,7 @@ dir \\appsrv01.prod.corp1.com\c$
 
 We can use our CIFS access to obtain code execution on appsrv01, but in the process we will perform a network login instead of an interactive login.
 
-U> our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
+Our access will be limited to appsrv01 and cannot directly be used to expand access towards the rest of the domain.
 
 ## Active Directory Forest
 
@@ -8561,7 +8561,7 @@ namespace SQL
 }
 ```
 
-We obtain access to a MSSQL database, this time across the forest trust. If the database contains any misconfigurations, this could allow us to elevate privileges to sysadmin and compromise the operating system itself.
+We obtain access to a MSSQL database, this time across the forest trust. If the database contains any misconfigurations, this could allow us to elevate privileges to sysadmin and compromise the OS itself.
 
 ```csharp
 using System;
