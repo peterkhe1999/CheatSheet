@@ -2850,6 +2850,7 @@ Get-NetUser | select cn,pwdlastset,lastlogon
 Get-NetGroup | select cn
 Get-NetGroup "Sales Department" | select member
 Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
+Get-NetComputer | select dnshostname | Resolve-IPAddress
 ```
 
 ## Manual Enumeration - Expanding our Repertoire
