@@ -26,7 +26,7 @@ PAUSE
 strComputer = "."
 Set objWMIService = GetObject("winmgmts:" _
  & "{impersonationLevel=impersonate}!\\" & strComputer & "\root\cimv2")
- 
+
 Set colOSes = objWMIService.ExecQuery("Select * from Win32_OperatingSystem")
 For Each objOS in colOSes
   Wscript.Echo "Computer Name: " & objOS.CSName
@@ -85,7 +85,7 @@ Each Windows event entry has a level, or **severity**:
 The Security logs include **Audit Success** and **Audit Failure** event levels. These can be configured in the Local Group Policy Editor, or applied from a group policy pushed from the Domain controller. They highlight all security control activity and track successes and failures.
 
 2 major elements in the XML:
-- Within the **System** element are tags such as Provider Name, EventID, and TimeCreated. The **Provider Name** indicates that the provider for **Security** logs is named **Microsoft-Windows-Security-Auditing**. 
+- Within the **System** element are tags such as Provider Name, EventID, and TimeCreated. The **Provider Name** indicates that the provider for **Security** logs is named **Microsoft-Windows-Security-Auditing**.
 - The **EventData** elements change with every type of event that is logged.
 
 Event ID **4624** indicates that "An account was successfully logged on".
@@ -201,7 +201,7 @@ Sysmon events are stored in **Applications and Services Logs/Microsoft/Windows/S
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational"
 ```
 
-`Get-Sysmon.psm1`
+`Import-Module C:\Sysmon\Get-Sysmon.psm1`
 
 ```pwsh
 function Get-SysmonEvent{
@@ -211,11 +211,11 @@ function Get-SysmonEvent{
         $end
     )
     $filters = @{LogName = "Microsoft-Windows-Sysmon/Operational"}
-    
+
     if ($eventid -ne $null) {
         $filters.ID = $eventid
     }
-    
+
     if ($start -ne $null) {
         $filters.StartTime = $start
     }
@@ -228,7 +228,6 @@ function Get-SysmonEvent{
 ```
 
 ```pwsh
-Import-Module C:\Get-Sysmon.psm1
 Get-Module | Where-Object { $_.ModuleType -eq "Script" }
 ```
 
@@ -278,7 +277,7 @@ Search for Logon events (Event ID **4624**) occurring over the course of 2 days 
 Get-WinEvent -FilterHashTable @{LogName='Security'; StartTime="4/23/2024 19:00:00"; EndTime="4/26/2024 07:00:00"; ID=4624 } | Where-Object { $_.properties[8].value -eq 10 } | Format-List
 ```
 
-`Get-Security.psm1`
+`Import-Module C:\Sysmon\Get-Security.psm1`
 
 ```pwsh
 function Get-SecurityEvent{
@@ -288,7 +287,7 @@ function Get-SecurityEvent{
         $end
     )
     $filters = @{LogName = "Security"}
-    
+
     if ($eventid -ne $null) {
         $filters.ID = $eventid
     }
@@ -323,7 +322,7 @@ The **Status** code C000006D indicates that the failure is due to a bad username
 
 Since we have NLA enabled, look at the **SubStatus** code C000006A to determine the details. Both the Status and Substatus explain the authentication failure.
 
-If we suspect logons are indicative of a brute force credential attack, extract Target User Name, Status, SubStatus, Logon Type, Workstation Name, and IP Address. 
+If we suspect logons are indicative of a brute force credential attack, extract Target User Name, Status, SubStatus, Logon Type, Workstation Name, and IP Address.
 
 ```pwsh
 Get-SecurityEvent 4625 "5/6/2021 00:00:00" "5/7/2021 00:00:00" | Format-List TimeCreated, @{Label = "Logon Type"; Expression = {$_.properties[10].value}}, @{Label = "Status"; Expression = {'{0:X8}' -f $_.properties[7].value}}, @{Label = "Substatus"; Expression = {'{0:X8}' -f $_.properties[9].value}}, @{Label = "Target User Name"; Expression = {$_.properties[5].value}}, @{Label = "Workstation Name"; Expression = {$_.properties[13].value}}, @{Label = "IP Address"; Expression = {$_.properties[19].value}}
@@ -608,7 +607,7 @@ function Get-PSLogEvent{
         $end
     )
     $filters = @{LogName = "Microsoft-Windows-PowerShell/Operational"}
-    
+
     if ($eventid -ne $null) {
         $filters.ID = $eventid
     }
@@ -668,7 +667,7 @@ Query script block events => the obfuscation makes it harder for us to understan
 Get-PSLogEvent 4104 "6/21/2021 19:35:06" "6/21/2021 19:35:08" | Format-List
 ```
 
-Query module log events within the same time range 
+Query module log events within the same time range
 
 ```pwsh
 Get-PSLogEvent 4103 "6/21/2021 19:35:06" "6/21/2021 19:35:08" | Format-List
@@ -834,7 +833,9 @@ Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*IOBit.exe*" } 
 
 # Windows Persistence
 
-## Persisting via Windows Service
+## Persistence on Disk
+
+### Persisting via Windows Service
 
 Creates a new service named "VindowsUpdate".
 - (start= auto) indicates that the service should start after the operating system boots, even if no users have logged on.
@@ -893,7 +894,7 @@ Investigate **NetworkConnect** events with the same filter parameters for PID
 Get-SysmonEvent 3 "10/29/2021 12:33:41" | Where-Object { $_.properties[3].value -eq 3332 } | Format-List
 ```
 
-A defender could watch for changes or additions to key values in `HKLM\System\CurrentControlSet\Services\`. 
+A defender could watch for changes or additions to key values in `HKLM\System\CurrentControlSet\Services\`.
 
 Look for a ProcessCreate event where the ParentImage is `dropper.exe`.
 
@@ -919,7 +920,7 @@ Look for a **NetworkConnect** event within the same minute of the DnsQuery event
 Get-SysmonEvent 3 | Where-Object { $_.properties[14].value -eq "192.168.51.50" } | Format-List
 ```
 
-## Persisting via Scheduled Tasks
+### Persisting via Scheduled Tasks
 
 ```pwsh
 schtasks /query /tn MicrosoftEdgeUpdateTaskMachineCore
@@ -959,7 +960,7 @@ DNSEvent, NetworkConnect
 
 ```pwsh
 Get-SysmonEvent 22 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List
-Get-SysmonEvent 3 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List 
+Get-SysmonEvent 3 "11/12/2021 7:29:00" "11/12/2021 7:29:30" | Format-List
 ```
 
 Find the FileCreate event where the **TargetFilename** matches the Command listed in the newly-created Scheduled Task
@@ -974,7 +975,7 @@ Find a ProcessCreate event where the **Image** matches the command in the newly-
 Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*exercise_schedtask.exe*" } | Format-List
 ```
 
-## Persisting by DLL-Sideloading/Hijacking
+### Persisting by DLL-Sideloading/Hijacking
 
 For both of these techniques, the vulnerability lies with **DLL search order**.
 
@@ -1027,8 +1028,459 @@ Look for the ProcessCreate events with On-Screen Keyboard's file in the Image fi
 Get-SysmonEvent 1 | Where-Object { $_.properties[4].value -like "*osk*" } | Format-List
 ```
 
-Look for a CreateRemoteThread event where the TargetImage matches the new process (mai check lai)
+Look for a CreateRemoteThread event where the **TargetImage** matches the new process
 
 ```pwsh
 Get-SysmonEvent 8 | Where-Object { $_.properties[6].value -like "*lsass.exe*" } | Format-List
+```
+
+## Persistence in Registry
+
+### Using Run Keys
+
+When a user logs in to the system, the programs listed in these keys are automatically run:
+
+- `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
+- `HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run`
+- `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\RunOnce`
+- `HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\RunOnce`
+
+The **RunOnce** key is cleared after a user logs on. => not viable for persistence.
+
+The **Run** key will persist no matter how many times the user logs on.
+
+**RunOnceEx**: The program listed in this key will run once, but it will not be cleared until the program has completed execution.
+
+The **HKEY_CURRENT_USER** hive contains data specific to the user that is currently logged in. This includes the Run/RunOnce keys, which are specific to that one user currently logged in to the endpoint.
+
+The **HKEY_LOCAL_MACHINE** hive maintains configuration information for the endpoint itself, and has Run/RunOnce keys that will execute when any user logs in.
+
+```bat
+reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\
+reg query HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\
+```
+
+```bat
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v WindowsUpdote /t REG_SZ /d "C:\tools\windows_persistence\prst_runshell443.exe" /f
+```
+
+examining the ProcessCreate event (reg add)
+
+```pwsh
+Get-SysmonEvent 1 "11/15/2021 8:49:11" "11/15/2021 8:49:13" | Format-List
+```
+
+Registry events
+
+```pwsh
+Get-SysmonEvent 13 "11/15/2021 8:49:11" "11/15/2021 8:49:13" | Format-List
+```
+
+search for a Logon event (Event 4624)7 with a Logon Type of 10 and the authenticating user is Administrator
+
+```pwsh
+Get-SecurityEvent 4624 | Where-Object { $_.properties[8].value -eq 10 -and $_.properties[5].value -eq "Administrator" }
+```
+
+Search for ProcessCreate events containing the filename `prst_runshell443.exe` in the **Image** field
+
+```pwsh
+Get-SysmonEvent 1 "11/15/2021 11:42:10" | Where-Object { $_.properties[4].value -like "*prst_runshell443.exe*" } | Format-List
+```
+
+Find a ProcessCreate event where the **ParentCommandLine** contains the file listed in the Run key that has been created.
+
+```pwsh
+Get-SysmonEvent 1 | Where-Object { $_.properties[21].value -like "*farmer.vbs*" } | Format-List
+```
+
+Find a NetworkConnect event where the Image field contains the file `squeaker.exe`
+
+```pwsh
+Get-SysmonEvent 3 | Where-Object { $_.properties[4].value -like "*squeaker.exe*" } | Format-List
+```
+
+### Using Winlogon Helper
+
+When authenticating to a Windows endpoint, the OS relies on the Windows Logon (Winlogon) process.
+
+Winlogon controls everything between the load of a user profile and the unlocking of the workstation.
+
+Winlogon draws from information stored in the HKEY_CURRENT_USER hive when creating the separation of duties for a logged in user, but its own configuration is in HKEY_LOCAL_MACHINE.
+
+It is stored at `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon` and contains several subkeys that are applicable to every user that authenticates.
+
+3 of them are at risk for abuse:
+
+- The **Shell** subkey refers to the executable to run as the default shell for users logging in to Windows. The default value in this key is `explorer.exe`. Logging in to a workstation or accessing the system via Remote Desktop will invoke the default shell for any user. If a malicious executable is added to the default shell value, it will be loaded alongside the default shell.
+
+- The **UserInit** subkey points to an executable that Winlogon uses for every user that logs in. The default executable (`userinit.exe`) will run the default shell as well as load the fonts, colors, and wallpaper for the current user.
+
+- The **Notify** subkey exists by default in older versions of Windows up to Windows 7. This subkey contains keys and other configuration entries for Winlogon's notification packages. Attackers could change the value of the **DLLName** subkey to a malicious DLL, which Winlogon will load.
+
+```bat
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "explorer.exe, C:\tools\windows_persistence\prst_winlogshell443.exe" /f
+```
+
+ProcessCreate event (reg.exe)
+
+```pwsh
+Get-SysmonEvent 1 "11/17/2021 12:24:29" "11/17/2021 12:24:31" | Format-List
+```
+
+RegistryEvent
+
+```pwsh
+Get-SysmonEvent 13 "11/17/2021 12:24:29" "11/17/2021 12:24:31" | Format-List
+```
+
+ProcessCreate event (ParentImage is `userinit.exe`)
+
+```pwsh
+Get-SysmonEvent 1 "11/17/2021 12:24:30" | Where-Object { $_.properties[4].value -like "*winlogshell443.exe*" } | Format-List
+```
+
+=> Searching for processes where the ParentImage is `userinit.exe` but the Image is not `explorer.exe` might find anomalous processes enabling persistence.
+
+
+# Linux Endpoint Introduction
+
+```bash
+vncviewer 192.168.51.13:5901
+```
+
+## Logging on Linux and the Syslog Framework
+
+On Linux systems, log files are usually saved within the `/var/log` folder:
+-	`rsyslog/journal`: logs generated by the log manager.
+-	Kernel logs: : events generated by the Linux kernel.
+-	Audit logs: specially-crafted kernel logs generated by the audit daemon.
+-	Applications/Daemons Logs: sshd, firewalld, and application-specific logs, such as Apache and MySQL.
+
+Note: above categories can span multiple files. E.g., kernel logs appear in both audit and messages log files.
+
+| PURPOSE	        | SOURCE PROCESS   | CENTOS LOCATION | UBUNTU LOCATION |
+| --------------- | ---------------- | --------------- | --------------- |
+| Authentication  | sudo, sshd, etc. | secure | auth.log |
+| Web Server      | apache           | httpd/ | apache2/ |
+| System Logs     | systemd, kernel, rsyslogd | messages | syslog |
+| Package management Logs | dpkg    | yum.log | dpkg.log |
+
+```bash
+sudo grep sshd /var/log/secure
+```
+
+The **Syslog Daemon** is responsible for receiving syslog messages from local applications through either the traditional `/dev/log` socket or via the more recent **systemd-journald** module.
+
+It can then write them to specific log files, typically contained in the `/var/log` folder and, if configured, forward them through a transport protocol to one or more syslog servers for centralized log collection.
+
+Multiple log management solutions derived from the initial syslog architecture: rsyslog, syslog-ng and nxlog.
+
+=> **rsyslog** has become the de-facto standard on many Linux distributions.
+
+The 1st attempt to standardize log file formatting (**RFC3164**) introduced fields such as priority number, timestamp, and hostname, among others.
+
+An official standard was formalized later via **RFC5424**, most log management applications remain backwards-compatible to the fields specified by RFC3164.
+
+rsyslog configuration on the CentOS machine under the `/etc/rsyslog.conf.rfc` file translates any raw message entering `/var/log/messages` into an **RFC3164**-like format
+
+```
+...
+#### RULES ####
+$template RFC3164fmt,"<%PRI%>%TIMESTAMP% %HOSTNAME% %syslogtag%%msg%\n"
+...
+# The authpriv file has restricted access.
+authpriv.*                                              /var/log/secure;RFC3164fmt
+...
+# Forwarding to remote syslog collectors
+# ----------------------------
+#*.*	@linux01     # udp transport
+#*.*	@@linux01    # tcp transport
+```
+
+Make a backup of the current configuration > copy the custom configuration to our target > restart the rsyslog service
+
+```bash
+sudo cp /etc/rsyslog.conf /etc/rsyslog.conf.old
+s
+udo cp /etc/rsyslog.conf.rfc /etc/rsyslog.conf
+sudo systemctl restart rsyslog
+```
+
+RFC3164 syslog format:
+-	**Priority**: "<86>" - This value is a combined value derived by the **facility** and the **severity** fields. The resulting **priority** value indicates the importance of the message (the lower the value, the higher the priority).
+- **Timestamp**: "Jun 28 12:05:21" - Indicates the original time and date the log message was generated.
+-	**Hostname** - Describes which host initially generated the log event. This field is important when correlating events on a syslog server that gathers logs from multiple hosts.
+- App name: "sshd" - Indicates from which process the log event originated.
+-	Process id - the process ID related to the application: might be important to trace back the log message's originating process.
+-	message "Failed password for offsec from 192.168.51.50 port 54209 ssh2"
+
+### Syslog Facilities Codes
+
+The facility code specifies the program that first generated the log entry, which ranges from 0 to 23.
+
+| FACILITY CODE |	KEYWORD	| DESCRIPTION |
+| -- | ---- | ---- |
+| 0  | kern | Kernel messages |
+| 1	 | user	| User-level messages |
+| 2  | mail	| Mail system |
+| 3	 | daemon	| System daemons |
+| 4	 | auth	| Security/authentication messages |
+| 5	 | syslog	| Messages generated internally by syslogd |
+| 6	 | lpr | Line printer subsystem |
+| 7	 | news	| Network news subsystem |
+| 8	 | uucp	| UUCP subsystem |
+| 9	 | cron	| Cron subsystem |
+| 10 | authpriv	| Security/authentication messages |
+| 11 | ftp | FTP daemon |
+| 12 | ntp | NTP subsystem |
+| 13 | security |	Log audit |
+| 14 | console | Log alert |
+| 15 |	solaris-cron | Scheduling daemon |
+| 16–23	| local0 – local7	| Locally used facilities |
+
+Custom applications may use Facility values from 16 to 23.
+
+### Syslog Severity Levels
+
+The severity level is a numeric value spanning from 0 to 7 that represents the criticality of a syslog event.
+
+| VALUE	| SEVERITY | KEYWORD | DESCRIPTION |
+| ---- | ---- | ---- | ---- |
+| 0	| Emergency	| emerg | System is unusable - A panic condition |
+| 1	| Alert	| alert | Action must be taken immediately |
+| 2	| Critical | crit | Critical conditions |
+| 3	| Error	| err	| Error conditions |
+| 4	| Warning	| warning	| Warning conditions |
+| 5	| Notice | notice	| Normal but significant conditions |
+| 6	| Informational | info | Informational messages |
+| 7 |	Debug | debug | Debug-level messages |
+
+The priority field indicates the importance of the message by deriving its value from the severity and facility parameters using the following formula:
+
+Syslog Priority = (facility * 8) + (severity)
+
+## Rsyslog Meets Journal
+
+2 processes are responsible for log creation and log processing: systemd-journal and rsyslog
+
+The **systemd** software suite has become the de-facto standard for configuration and service management on almost every Linux distribution.
+
+The **systemd_journald**, or journal in short, is one of the components responsible for centralizing log management that aims to eventually replace syslog entirely.
+
+systemd journal compresses log messages into a binary format, as opposed to the plain-text output of syslog.
+
+Rsyslog has replaced the legacy syslog daemon (syslogd) and comes installed by default on nearly every Linux distribution.
+
+To provide backwards compatibility with older UNIX systems, rsyslog runs in parallel with journal and reads its syslog messages as they arrive. It then processes and saves them to local files or, if configured, remote servers.
+
+The journal daemon can run solo or in combination with the rsyslog daemon, based on our configuration needs.
+
+Trace the process that has the /var/log/secure log file currently open
+
+```bash
+sudo lsof -p $(pgrep syslogd) | grep '/var/log/secure'
+```
+
+The original syslog event (generated by the SSH daemon) is forwarded to the journal daemon first, after which the rsyslog daemon reads from the journal logs via the **imjournal** module.
+
+To confirm that rsyslog reads the syslog messages from journald, examine the `/etc/rsyslog.conf` configuration file.
+
+```
+...
+#### MODULES ####
+	
+module(load="imuxsock"
+       SysSock.Use="off") # provides support for local system logging (e.g. via logger command)
+#module(load="imklog")   # provides kernel logging support (previously done by rklogd)
+#module(load"immark")  # provides --MARK-- message capability
+
+# provides access to the systemd journal and file to store the position in the journal
+module(load="imjournal" StateFile="imjournal.state")
+...
+```
+
+Note that although Ubuntu systems adopt the traditional **imuxsock** module as the default rsyslog configuration, the end result is equivalent to CentOS', as they both result in two identical copies of the same log event, with one copy in the rsyslog log file and another copy in the journal logs.
+
+```bash
+journalctl -u sshd.service --since "1 hour ago"
+sudo tail /var/log/secure
+```
+
+## Web Daemon Logging
+
+Each time we access a resource, such as a web page running on an Apache server, an access log is generated under `/var/log/httpd/access_log`, or for CentOS or Ubuntu, `/var/log/apache2/access.log`.
+
+```bash
+sudo systemctl start httpd
+```
+
+```bash
+sudo cat /var/log/httpd/access_log
+```
+
+```
+192.168.51.50  - - [12/Jul/2021:08:57:30 -0400] "GET / HTTP/1.1" 403 199691 "-" "Mozilla/5.0 (X11; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0"
+```
+
+Apache logs follow the **Combined Log Format** (CLF) syntax, meaning each field is delimited by a hyphen (-) or a blank space.
+-	192.168.51.50 : The source IP that requested the web resource
+-	\- -: As Remote Log Name and User ID do not appear in the log, these are replaced with a hyphen (-)
+-	[12/Jul/2021:08:57:30 -0400]: Date and Time Zone (timestamp)
+-	GET: Request method
+-	/: The resource path, in this case the web server's root folder
+-	HTTP/1.1: Request version
+-	403: Response status3
+-	199691: The resource size
+-	\- : Since the referer of the resource is also not present, it is replaced with a hyphen (-)
+-	Mozilla/5.0 (X11; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0: Client User Agent
+
+Extract all logs with a Response Status of 403
+
+```bash
+sudo cat /var/log/httpd/access_log | grep " 403 "
+```
+
+Extract a single log parameter, such as the path to the requested resource
+
+```bash
+sudo cat /var/log/httpd/access_log  | cut -d " " -f 7
+```
+
+Find the mod_ssl related error under the `/var/log/httpd/error_log` file
+
+## Python for Log Analysis
+
+Create a Python script to search for SSH-related events inside the raw authentication log files.
+
+Regex are special string sequences used by **search** or **search_and_replace** functions, among others, to match patterns within a text in a clear-cut manner.
+
+4 essential regex operators:
+-	^ matches position just before the first character of the string
+-	$ matches position just after the last character of the string
+-	. matches a single character, except the newline (\n) character
+-	\* matches preceding match zero or more times
+
+E.g., a simple regex pattern to match every line containing the word "cat", followed by any other combination of characters, would be cat.*.
+
+```bash
+sudo python3 ssh_log_parser.py
+```
+
+```python
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_ssh_log_file_path = "/var/log/secure"
+ubuntu_shh_log_file_path = "/var/log/auth.log"
+
+ssh_log_files = [centos_ssh_log_file_path,ubuntu_shh_log_file_path]
+
+regex = 'sshd\[.*\]'
+for log_file in ssh_log_files:
+    if os.path.isfile(log_file) :
+        with open(log_file, "r") as file:
+            for line in file:
+                for match in re.finditer(regex, line, re.S):
+                    print(line,end = '')
+```
+
+```bash
+sudo python3 apache_log_parser.py
+```
+
+```python
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_apache_log_file_path = "/var/log/httpd/access_log"
+ubuntu_shh_log_file_path = "/var/log/apache2/access.log"
+
+apache_log_files = [centos_apache_log_file_path,ubuntu_shh_log_file_path]
+
+regex = '([(\d\.)]+) - - \[(.*?)\] \"(.*?)\" (\d+) (\d+) \"(.*?)\" \"(.*?)\"'
+for log_file in apache_log_files:
+    if os.path.isfile(log_file):
+        with open(log_file, "r") as file:
+            for line in file:
+                for match in re.finditer(regex, line, re.S):
+                    log_line = (re.match(regex, line)).groups()
+                        print(log_line[0])
+```
+
+
+The regex consists of 9 capturing patterns, each of which matches a specific pattern of the log line:
+-	([(\d.)]+) searches for the Source_IP; it matches any sequence of digits of undefined length.
+-	\- - represent Remote Log Name and User Id; it matches two literal hyphens, which stand for empty fields.
+-	[(.*?)] searches for the timestamp field by examining for any character in between opening and closing square brackets.
+-	"(.*?)" searches for the Request_Method, Resource_Path and Request_Version, matching any value in double quotes.
+-	(\d+) searches for the Response Status by matching any numerical value sequence.
+-	(\d+) searches for the Resource_Size using the same method as above.
+-	"(.*?)" searches for the Referer in literal double quotes.
+-	"(.*?)" uses the same matching pattern once again to search for the User Agent comprised between double quotes.
+
+Once we receive a regex match, we need to combine each matched group as a Python tuple to the log_line variable. This will enable us to access each web log field as a positional argument.
+
+E.g., To print the client source IP only: `print(log_line[0])`
+
+## DevOps Tools
+
+Ansible Playbook `log_parser.yml`
+
+```yaml
+---
+- name: logparser
+  hosts: soc200
+  tasks:
+
+   - name: list files in folder
+     become: yes
+     become_user: root
+     script: /home/kali/SOC-200/Linux_Endpoint_Introduction/ssh_log_parser.py
+     args:
+        executable: python3
+     register: output
+   - debug: var=output.stdout_lines
+```
+
+```bash
+sudo ansible soc200 -m ping -u offsec  --key-file=/home/kali/.ssh/ansible_rsa
+```
+
+```bash
+ansible-playbook ./log_parser.yml -u offsec  --key-file='/home/kali/.ssh/ansible_rsa' -K
+```
+
+## Hunting for Login Attempts
+
+```bash
+sudo cat /var/log/secure | grep "Accepted password"
+sudo cat /var/log/secure | grep "Failed password"
+```
+
+```python
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_ssh_log_file_path = "/var/log/secure"
+ubuntu_shh_log_file_path = "/var/log/auth.log"
+
+ssh_log_files = [centos_ssh_log_file_path,ubuntu_shh_log_file_path]
+
+regex_valid_login = 'sshd\[.*\]*Accepted password'
+regex_failed_login = 'sshd\[.*\]*Failed password'
+for log_file in ssh_log_files:
+    if os.path.isfile(log_file) :
+        with open(log_file, "r") as file:
+            for line in file:
+		            for match in re.finditer(regex_valid_login, line, re.S):
+		                print("[*] Valid SSH Login found:\n\t"   + line,end = '')
+		            for match in re.finditer(regex_failed_login, line, re.S):
+		                print("[!] INVALID SSH Login found:\n\t" + line,end = '')
 ```
