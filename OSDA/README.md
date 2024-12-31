@@ -2325,6 +2325,8 @@ Quickly find unusual connections (high data throughput or malicious IP addresses
 
 ## Intrusion Detection Systems
 
+## Detecting Attacks 
+
 Snort rules consist of 2 main components: the rule header and the rule options.
 
 The rule header dictates the action to take (usually alert) and then checks any network-related data, such as the transport protocol (TCP, UDP, or ICMP), source and destination ports/IPs, and the direction of the communication.
@@ -2343,9 +2345,7 @@ A simple rule that alerts whenever ICMP traffic is detected on the local network
 
 The rule below needs to be added in `/usr/local/etc/rules/local.rules` on the snort01 machine, which is already preconfigured with Snort on both network interfaces.
 
-```
-alert icmp $HOME_NET any <> $EXTERNAL_NET any ( msg:"ICMP Traffic Detected"; sid:10000001; metadata:policy security-ips alert;)
-```
+`alert icmp $HOME_NET any <> $EXTERNAL_NET any ( msg:"ICMP Traffic Detected"; sid:10000001; metadata:policy security-ips alert;)`
 
 alert on ICMP traffic originating from local networks ($HOME_NET) to any external network ($EXTERNAL_NET), in a bidirectional fashion. Next, the rule options, delimited by round brackets, include the log message, the snort id, and the metadata tag.
 
@@ -2361,52 +2361,283 @@ ping 192.168.51.40 -c 1
 cat /var/log/snort/alert_fast.txt
 ```
 
-```bash
+E.g., A known vulnerability, Zerologon (CVE-2020-1472), which involves the Microsoft NETLOGON protocol and was addressed in August 2020.
 
+This flaw, affecting the cryptographic AES-CFB8 implementation in Windows, allows an unauthenticated actor to gain domain administrator privileges by establishing a local Netlogon session.
+Among the published exploits, we find that ComputeNetlogonCredential accepts an 8-byte challenge that is used to perform a cryptographic operation that returns an 8-byte result.
+
+In order for this operation to function, a random initialization vector (IV) must be generated for each plaintext object to be encrypted with the same key. The ComputeNetlogonCredential function uses a fixed 16-byte value, which is highly guessable and subject to tampering.
+
+`alert tcp any any -> $HOME_NET any ( msg:"OS-WINDOWS Microsoft Windows Netlogon crafted NetrServerReqChallenge elevation of privilege attempt"; flow:to_server,established; dce_iface:uuid 12345678-1234-abcd-ef00-01234567cffb; dce_opnum:"4"; content:"|04 00|",depth 2,offset 22,fast_pattern; content:"|00 00 00|",distance 0; isdataat:7,relative; isdataat:!8,relative; byte_extract:1,0,first_cc_byte,relative; byte_test:1,=,first_cc_byte,0,relative; byte_test:1,=,first_cc_byte,1,relative; byte_test:1,=,first_cc_byte,2,relative; byte_test:1,=,first_cc_byte,3,relative; detection_filter:track by_src, count 10, seconds 10; metadata:policy balanced-ips drop,policy max-detect-ips drop,policy security-ips drop; service:dcerpc; reference:cve,2020-1472; reference:url,portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-1472; classtype:attempted-admin; sid:55703; rev:4; )`
+
+`flow:to_server,established;` only inspect packets sent to the server on a previously-established TCP communication.
+
+`dce_iface:uuid 12345678-1234-abcd-ef00-01234567cffb; dce_opnum:"4"`
+
+The `dce_iface` rule option filters the packets based on a well-known interface, Netlogon Remote Protocol unique identifier
+
+The `dce_opnum` filters on a specific function call, i.e. the fourth one: `NetrServerReqChallenge`.
+
+`content:"|04 00|",depth 2,offset 22,fast_pattern`
+
+Match (\x04\x00) at offset 22 from the packet's start of payload.
+
+The `depth` keywords tell the Snort engine to search the specified patterns only for the first 2 bytes from the specified offset.
+
+This pattern is going match the value "4" inside the Opnum field of the DCE/RPC header.
+
+The `fast_pattern` option is an optimization keyword that will instruct the Snort engine to give priority to this content statement before others.
+
+`content:"|00 00 00|",distance 0;isdataat:7,relative; isdataat:!8,relative;`
+
+This directive starts from distance 0 and continues until it finds 3 consecutive null-bytes.
+
+The `isdataat` keyword ensures that data exists from an offset of 7 relative to the content match and not from an offset of 8.
+
+Detail byte-level pattern matching and comparison.
+
+`byte_extract:1,0,first_cc_byte,relative;`
+
+Extracts the first byte (1) at offset 0 relative to the previous content match and saves the single byte into the `first_cc_byte` variable.
+
+Use the value saved in the variable in the following 4 directives:
+
+```
+byte_test:1,=,first_cc_byte,0,relative; 
+byte_test:1,=,first_cc_byte,1,relative;
+byte_test:1,=,first_cc_byte,2,relative;
+byte_test:1,=,first_cc_byte,3,relative;
+```
+
+The `byte_test` operation compares the following 4 subsequent bytes to the value previously saved in `first_cc_byte` to make sure they are all equal.
+
+The threshold that will trigger the alert.
+
+`detection_filter:track by_src, count 10, seconds 10;`
+
+Trigger an alert only if it matches 10 packets from the same client within 10 seconds.
+
+```bash
+cat /var/log/snort/alert_fast.txt
+```
+
+Simulate an IDS scenario where the network flows are saved into pcap files
+
+```bash
+sudo tshark -f "tcp" -i ens160 -w /home/offsec/SOC-200/Network_Detections/zerologon.pcap
+```
+
+Display Filter: `rpc_netlogon && ip.dst==172.16.51.10 && netlogon.opnum == 4`
+
+```bash
+sudo truncate -s  0 /var/log/snort/alert_fast.txt
+```
+
+filter the output to get an overview of the actual rules that have been triggered - showing only the content between the [**] and the { values and then remove any duplicate lines.
+
+```bash
+cat /var/log/snort/alert_fast.txt  | grep -o .[\*\*\].*\{ | sort -u
+```
+
+Extract the SID value located in the third field delimited by whitespaces.
+
+```bash
+cat /var/log/snort/alert_fast.txt | cut -d ':' -f 4 | sort | uniq
+```
+
+Map these SIDs into the actual rules
+
+`python3 extract_sql_rules.py`
+
+```python
+#!/usr/bin/env python
+
+import sys
+import re
+import os
+
+snort_sql_rule_file_path = "/usr/local/etc/rules/sql.rules"
+
+rules = os.popen("cat /var/log/snort/alert_fast.txt | cut -d ':' -f 4 | sort | uniq").read()
+rules = rules.split('\n')
+for rule in rules[:-1]:
+    cmd = 'cat {} | grep {}'.format(snort_sql_rule_file_path,rule)
+    ret = os.popen(cmd).read()
+    print(ret)
+```
+
+## Detecting C2 Infrastructure
+
+A C2 server can rely on either fixed IP or domain names in order to be reached by C2 agents.
+
+Static IPs and domains can be quickly mapped and blocked by IPS
+
+=> **domain flux** technique: the domain is dynamically generated by the agents at runtime through a Domain Generation Algorithm (DGA).
+
+This kind of functionality can be embedded inside a C2 agent and customized to use any kind of input seeds to generate domains, such as custom dictionaries, prime numbers, or even other URLs.
+
+DGA can be used by malware to set up its own C2 channel on a social media platform, like the MiniDuke malware.
+
+`python3 dga.py 11.02.2021`
+
+```python
+import sys
+
+def usage():
+    print("Usage: "   + sys.argv[0] + " [date]")
+    print("Usage: "   + sys.argv[0] + " 12.02.2021")
+    sys.exit()
+
+def generate_domain(year: int, month: int, day: int) -> str:
+    domain = ""
+
+    for i in range(0x10):
+        year = ((year ^ 8 * year) >> 11) ^ ((year & 0xFFFFFFF0) << 17)
+        month = ((month ^ 4 * month) >> 25) ^ 16 * (month & 0xFFFFFFF8)
+        day = ((day ^ (day << 13)) >> 19) ^ ((day & 0xFFFFFFFE) << 12)
+        domain += chr(((year ^ month ^ day) % 25) + 97)
+
+    print(domain + ".com")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        date    = sys.argv[1]
+        y,m,d = date.split('.')
+        generate_domain(int(y),int(m),int(d))
+    else:
+        usage()
 ```
 
 ```bash
-
+sudo powershell-empire client
+(Empire) > agents
 ```
 
 ```bash
-
+sudo tshark -f "tcp port 8080" -i ens160 -w /home/offsec/SOC-200/Network_Detections/empire.pcap
 ```
 
+WireShark Display Filter `http`
 
 ```bash
-
+cat /usr/local/etc/rules/c2.rules
 ```
 
-```bash
+`alert tcp $HOME_NET any -> $EXTERNAL_NET $HTTP_PORTS ( msg:"MALWARE-CNC PowerShell Empire variant outbound connection"; flow:to_server,established; content:"/news.php HTTP/1.1|0D 0A|",fast_pattern,nocase; content:"User-Agent: Mozilla/5.0 (Windows NT 6.1|3B| WOW64|3B| Trident/7.0|3B| rv:11.0) like Gecko"; metadata:impact_flag red; service:http; reference:url,attack.mitre.org/techniques/T1086; reference:url,powershellempire.com; classtype:trojan-activity; sid:38259; rev:5; )`
 
-```
+Matches the beginning of the `/news.php` target URI from the beginning of the GET request, followed by the supported HTTP version, a carriage return (0x0D), and line feed (0x0A).
 
-```bash
-
-```
-
-```bash
-
-```
-
-```bash
-
-```
-
-```bash
-
-```
+Matches the Empire agent's entire custom value for the `User-Agent`, including the 0x3B value to match the semicolon (;) ASCII value.
 
 # Antivirus Alerts and Evasion
 
+We disabled remediation with the command => no actions were performed on the file after detection.
+
+```bat
+"C:\Program Files\Windows Defender\MpCmdRun" -Scan -ScanType 3 -File C:\tools\av_alerts_evasion\signature_detect_nonstage.exe -DisableRemediation 
+```
+
+```pwsh
+Start-MpScan -ScanPath C:\tools\av_alerts_evasion\signature_detect_nonstage.exe -ScanType CustomScan; Get-Date
+```
+
+`Import-Module C:\Sysmon\Get-WDLog.psm1`
+
+```pwsh
+function Get-WDLogEvent {
+    param (
+        $eventid,
+        $start,
+        $end
+    )
+    $filters = @{LogName = "Microsoft-Windows-Windows Defender/Operational"}
+    
+    if ($eventid -ne $null) {
+        $filters.ID = $eventid
+    }
+    if ($start -ne $null) {
+        $filters.StartTime = $start
+    }
+
+    if ($end -ne $null) {
+        $filters.EndTime = $end
+    }
+
+    Get-WinEvent -FilterHashtable $filters
+}
+```
+
+Event ID 1116 is the `MALWAREPROTECTION_STATE_MALWARE_DETECTED` event 
+
+```pwsh
+Get-WDLogEvent $null "12/2/2021 10:59:00" "12/2/2021 11:00:00"
+```
+
+```pwsh
+Get-WDLogEvent 1116 "12/2/2021 10:59:20" "12/2/2021 11:59:22" | Format-List
+```
+
+Retrieve a list of all threats currently awaiting mitigation
+
+```pwsh
+Get-MpThreat
+```
+
+`DidThreatExecute` field would be "True" if the detection was discovered during execution rather than a manual scan.
+
+The `IsActive` field refers to whether Windows Defender still considers the file an active threat. Because it is enqueued for remediation, this value is set to "True".
+
+```pwsh
+Remove-MpThreat; Get-Date
+```
+
+Event 1117 reflects an action taken by Windows Defender with the symbolic name `MALWAREPROTECTION_STATE_MALWARE_ACTION_TAKEN`.
+
+```pwsh
+Get-WDLogEvent $null "12/2/2021 11:08:00" "12/2/2021 11:09:00"
+```
+
+```pwsh
+Get-WDLogEvent 1117 "12/2/2021 11:08:07" "12/2/2021 11:08:09" | Format-List
+```
+
+The `Error Code` of 0 matches the Error description, confirming the operation completed successfully.
+
+Definitions of malware and various categories are updated and stored in `%PROGRAMDATA%\Microsoft\Windows Defender\Definition Updates\Default`.
+
+Attackers can use a command like `MpCmdRun.exe` to clear the definitions loaded into memory and render Windows Defender's concrete detections inoperable.
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
 # Network Evasion and Tunneling
+
+
 
 # Active Directory Enumeration
 
+
+
 # Windows Lateral Movement
 
+
+
 # Active Directory Persistence
+
+
 
 # SIEM Part One: Intro to ELK
 
