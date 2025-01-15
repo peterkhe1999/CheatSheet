@@ -4064,31 +4064,511 @@ Function Invoke-PTTSweep {
 
 ## Kerberoasting
 
+SPNs can also be associated with computer accounts, which have randomized 120-character passwords, which in practice means they cannot be cracked.
+
+If an enterprise uses the Microsoft Endpoint Manager (MEM), we would find an SPN for every computer account in the domain mapped to an instance called `CmRcService`. The filter we create will eliminate the unnecessary noise from our result set.
+
+when a TGS service request takes place, event `4769` is generated on the domain controller that facilitated the request.
+
+To view a generated `4769` we can log on to CLIENT03 as offsec and execute
+
+`.\TGS_Request.ps1.`
+
+```pwsh
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.PropertiesToLoad.Add("sAMAccountName") | Out-Null
+$Searcher.PropertiesToLoad.Add("servicePrincipalName") | Out-Null
+$Searcher.PageSize = 1000
+$Searcher.Filter = "(&(objectCategory=person)(objectClass=user)(!userAccountControl:1.2.840.113556.1.4.803:=2)(ServicePrincipalName=*))"
+$SPN = $Searcher.FindAll() | Select Path, @{l='SPN'; e={$_.Properties.serviceprincipalname}}
+foreach($spn in $SPN)
+{
+    Add-Type -AssemblyName System.IdentityModel
+    New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList $spn.SPN
+}
+```
+
+Kerberos tickets can use RC4 or AES encryption but only RC4 encryption can be cracked reliably. event `4769` displays the ticket encryption type of `0x17` or `0x18` represents 2 variations of RC4 encryption, which is what an attacker would prefer.
+
+Log on to DC01 as offsec and run the audit script from an administrative PowerShell prompt.
+
+`.\Audit-Kerberoasting.ps1`
+
+```pwsh
+Function Get-TicketEncryption ($Type) {
+    Begin {
+        $TypeTable = @{
+            '0x17' = 'RC4-HMAC'
+            '0x18' = 'RC4-HMAC-EXP'
+        }
+    }
+    Process {
+        $Value = $TypeTable[$Type]
+        If (!$Value) {
+            $Value = $Type
+        }
+    }
+    End {
+        return $Value
+    }
+}
+
+$FilterXML = @'
+<QueryList>
+  <Query Id="0" Path="Security">
+    <Select Path="Security">
+     *[System[(EventID=4769)]] 
+     and
+     *[EventData[Data[@Name='TicketEncryptionType'] and (Data='0x17' or Data='0x18')]]
+   </Select>
+  </Query>
+</QueryList>
+'@
+
+$Logs = Get-WinEvent -FilterXml $FilterXML
+ForEach ($L in $Logs) {
+   [xml]$XML = $L.toXml()
+   $TimeStamp = $XML.Event.System.TimeCreated.SystemTime
+   $TargetUserName = $XML.Event.EventData.Data[0].'#text'
+   $ServiceName = $XML.Event.EventData.Data[2].'#text'
+   $TicketEncryptionType = Get-TicketEncryption -Type $($XML.Event.EventData.Data[5].'#text')
+   $IPAddress = $XML.Event.EventData.Data[6].'#text'
+   [PSCustomObject]@{'TimeStamp' = $TimeStamp; 'TargetUserName' = $TargetUserName; 'ServiceName' = $ServiceName; 'TicketEncryptionType' = $TicketEncryptionType; 'IPAddress' = $IPAddress }
+}
+```
+
+This works in environments that don't use RC4 encrypted tickets but in most enterprises, some applications or services require RC4, which will lead to false positives.
+
+To avoid false positives, create honey tokens. Honey tokens are service accounts with associated SPNs that no legitimate user would use, but an attacker would attempt to crack.
+
+E.g., Use database and web service SPNs (which are very common) or service accounts with an `admincount` set to 1 (which are very valuable).
+
+When create an SPN honey token, make the password for the associated service account very long and complex. This will make the password difficult to crack, ensuring that the service account can not be used against us.
+
+Wxtract the TGS events that target any of our honey tokens, regardless of the encryption type.
+
+`.\Audit-KerberoastingToken.ps1`
+
+```pwsh
+Function Get-TicketEncryption ($Type) {
+    Begin {
+        $TypeTable = @{
+            '0x17' = 'RC4-HMAC'
+            '0x18' = 'RC4-HMAC-EXP'
+        }
+    }
+    Process {
+        $Value = $TypeTable[$Type]
+        If (!$Value) {
+            $Value = $Type
+        }
+    }
+    End {
+        return $Value
+    }
+}
+
+$FilterXML = @'
+<QueryList>
+  <Query Id="0" Path="Security">
+    <Select Path="Security">
+     *[System[(EventID=4769)]]
+     and
+     *[EventData[Data[@Name='ServiceName'] and (Data='Honeytoken')]]
+   </Select>
+  </Query>
+</QueryList>
+'@
+
+$Logs = Get-WinEvent -FilterXml $FilterXML
+ForEach ($L in $Logs) {
+   [xml]$XML = $L.toXml()
+   $TimeStamp = $XML.Event.System.TimeCreated.SystemTime
+   $TargetUserName = $XML.Event.EventData.Data[0].'#text'
+   $ServiceName = $XML.Event.EventData.Data[2].'#text'
+   $TicketEncryptionType = Get-TicketEncryption -Type ($XML.Event.EventData.Data[5].'#text')
+   $IPAddress = $XML.Event.EventData.Data[6].'#text'
+   [PSCustomObject]@{'TimeStamp' = $TimeStamp; 'TargetUserName' = $TargetUserName; 'ServiceName' = $ServiceName; 'TicketEncryptionType' = $TicketEncryptionType; 'IPAddress' = $IPAddress }
+}
+```
+
 # Active Directory Persistence
 
+## Domain Group Memberships
 
+Within Active Directory, 2 different types of groups exist: **distribution groups** and **security groups**, which are also referred to as **security-disabled** and **security-enabled** groups, respectively.
+
+Distribution groups are used for emailing a targeted group of people, whereas security groups are used for provisioning access to resources via a given group.
+
+By default, a distribution group will not provide an attacker an avenue to establishing persistence.
+
+E.g., A dedicated distribution group used for critical notifications, such as security incidents. An attacker with the right level of access could remove individuals from that group to keep them out of the loop.
+
+3 built-in security groups:
+
+- `Domain Admins`: Grants full control of the domain, is a member of the built-in administrators group on all domain controllers in a domain, and are administrators on the domain-joined machines
+
+- `Enterprise Admins`: Grants full control of all domains in a forest and is a member of the built-in administrators group on all domain controllers in a forest
+
+- `Administrators`: Grants full control of all the domain controllers in a domain
+
+Every group in Active Directory is assigned a **scope**. A group scope defines where a group can be assigned within a domain or forest(s).
+
+- `Universal`: Can be assigned in any domain in the same forest or trusting forests
+
+- `Global`: Can be assigned in any domain in the same forest or trusting domains or forests
+
+- `Domain Local`: Can only be assigned in the current domain
+
+| GROUP NAME | SCOPE NAME |
+| ---------- | ---------- |
+| Domain Admins	| Global |
+| Enterprise Admins | Universal |
+| Administrators | Domain Local |
+
+Yo detect changes to these groups, use the `Account Management` audit policy as the offsec user on DC01.
+
+```pwsh
+auditpol /get /category:"Account Management"
+```
+
+By default, Windows has auditing enabled for the `Security Group Management` subcategory, which raises success events when changes happen on security groups in a domain.
+
+3 conditions that will trigger an alert from this audit policy:
+1. A security group is created, changed, or deleted
+2. A security group has a member added or removed
+3. A security group is changed to a distribution group or vice versa
+
+
+Focus on the conditions where a member is added or removed from a security group. These actions will raise 1 of 6 different events because each group scope has its own set of event IDs for each auditable condition.
+
+| EVENT ID | DESCRIPTION |
+| -------- | ----------- |
+| 4728 | A member was added to a security-enabled global group |
+| 4729 | A member was removed from a security-enabled global group |
+| 4732 | A member was added to a security-enabled local group |
+| 4733 | A member was removed from a security-enabled local group |
+| 4756 | A member was added to a security-enabled universal group |
+| 4757 | A member was removed from a security-enabled universal group |
+
+
+These events will tell us 3 critical pieces of information:
+
+1.	Which user account made the change (Subject)
+2.	Which user account was added to the security group (Member)
+3.	Which security group the user account was added to (Group)
+
+Computer accounts can also be added to security groups. These can be identified in a group as having a "$" appended to their name.
+
+To monitor for all changes, regardless of the targeted group, run the audit script from an elevated PowerShell prompt
+
+`.\Get-SecurityGroupChanges.ps1`
+
+```pwsh
+Function Get-ChangeType ([System.String]$EventId) {
+    Begin {
+        $ChangeTable = @{
+            '4728' = 'A member was added to a security-enabled global group.'
+            '4729' = 'A member was removed from a security-enabled global group.'
+            '4732' = 'A member was added to a security-enabled local group.'
+            '4733' = 'A member was removed from a security-enabled local group.'
+            '4756' = 'A member was added to a security-enabled universal group.'
+            '4757' = 'A member was removed from a security-enabled universal group.'
+        }
+    }
+    Process {
+        $Value = $ChangeTable[$EventId]
+        If (!$Value) {
+            $Value = $EventId
+        }
+    }
+    End {
+        return $Value
+    }
+}
+
+$FilterXML = @'
+<QueryList>
+  <Query Id="0" Path="Security">
+    <Select Path="Security">*[System[(EventID=4728 or EventID=4729 or EventID=4732 or EventID=4733 or EventID=4756 or EventID=4757)]]
+    and
+    *[EventData[Data[@Name='TargetUserName'] and (Data='Domain Admins' or Data='Administrators' or Data='Enterprise Admins')]]
+    </Select>
+  </Query>
+</QueryList>
+'@
+
+$Logs = Get-WinEvent -FilterXml $FilterXML
+ForEach ($L in $Logs) {
+   [xml]$XML = $L.toXml()
+   $TimeStamp = $XML.Event.System.TimeCreated.SystemTime
+   $EventId = $XML.Event.System.EventID
+   $MemberName = $XML.Event.EventData.Data[0].'#text'
+   $GroupName = $XML.Event.EventData.Data[2].'#text'
+   $SubjectUserName = $XML.Event.EventData.Data[6].'#text'
+   $ChangeType = Get-ChangeType -EventId $EventId
+   [PSCustomObject]@{'TimeStamp' = $TimeStamp; 'MemberName' = $MemberName; 'GroupName' = $GroupName; 'SubjectUserName' = $SubjectUserName; 'ChangeType' = "($EventID) $ChangeType" }
+}
+```
+
+## Domain User Modifications
+
+An admin account called `dadmin`, which is used for onboarding new employee accounts in Active Directory.
+
+The attacker could take advantage of this access to create their own accounts or even modify existing compromised accounts so they are easier to regain access to later. E.g. Changing account passwords to never expire.
+
+```pwsh
+auditpol /get /category:"Account Management"
+```
+
+The User `Account Management` audit policy contains 17 different events that could be raised.
+
+Create an audit script that provides a high-level overview of what changes were made by a specific account `dadmin`
+
+```pwsh
+Function Get-ChangeType ([System.String]$EventId) {
+    Begin {
+        $ChangeTable = @{
+            '4720' = 'A user account was created.'
+            '4722' = 'A user account was enabled.'
+            '4723' = 'An attempt was made to change an account''s password.'
+            '4724' = 'An attempt was made to reset an account''s password.'
+            '4738' = 'A user account was changed.'
+            '4740' = 'A user account was locked out.'
+            '4765' = 'SID History was added to an account.'
+            '4766' = 'An attempt to add SID History to an account failed.'
+            '4767' = 'A user account was unlocked.'
+            '4780' = 'The ACL was set on accounts which are members of administrators groups.'
+            '4781' = 'The name of an account was changed.'
+            '4794' = 'An attempt was made to set the Directory Services Restore Mode administrator password.'
+            '4798' = 'A user''s local group membership was enumerated.'
+            '5376' = 'Credential Manager credentials were backed up.'
+            '5377' = 'Credential Manager credentials were restored from a backup.'
+            '5379' = 'Credential Manager credentials were read'
+        }
+    }
+    Process {
+        $Value = $ChangeTable[$EventId]
+        If (!$Value) {
+            $Value = $EventId
+        }
+    }
+    End {
+        return $Value
+    }
+}
+
+$FilterXML = @'
+<QueryList>
+  <Query Id="0" Path="Security">
+    <Select Path="Security">*[System[Provider[@Name='Microsoft-Windows-Security-Auditing'] and Task = 13824]]
+    and 
+    *[EventData[Data[@Name='SubjectUserName'] and (Data='dadmin')]]
+    </Select>
+  </Query>
+</QueryList>
+'@
+
+$Logs = Get-WinEvent -FilterXml $FilterXML
+ForEach ($L in $Logs) {
+   [xml]$XML = $L.toXml()
+   $TimeStamp = $XML.Event.System.TimeCreated.SystemTime
+   $TargetUserName = $XML.Event.EventData.Data[1].'#text'
+   $EventId = $XML.Event.System.EventID
+   $SubjectUserName = ($XML.Event.EventData.Data | Where {$_.Name -eq 'SubjectUserName'}) | Select -ExpandProperty '#text'
+   $TargetUserName = ($XML.Event.EventData.Data | Where {$_.Name -eq 'TargetUserName'}) | Select -ExpandProperty '#text'
+   $ChangeType = Get-ChangeType -EventId $EventId
+   [PSCustomObject]@{'TimeStamp' = $TimeStamp; 'SubjectUserName' = $SubjectUserName; 'TargetUserName' = $TargetUserName; 'ChangeType' = "($EventID) $ChangeType" }
+}
+```
+
+## Golden Tickets
+
+logging into client03 as the domain user offsec.
+
+```pwsh
+klist
+```
+
+```
+Current LogonId is 0:0xa54c6
+
+Cached Tickets: (1)
+
+#0>     Client: dadmin @ corp.com
+        Server: krbtgt/corp.com @ corp.com
+        KerbTicket Encryption Type: RSADSI RC4-HMAC(NT)
+        Ticket Flags 0x40e00000 -> forwardable renewable initial pre_authent
+        Start Time: 3/9/2022 12:39:54 (local)
+        End Time:   3/6/2032 12:39:54 (local)
+        Renew Time: 3/6/2032 12:39:54 (local)
+        Session Key Type: RSADSI RC4-HMAC(NT)
+        Cache Flags: 0x1 -> PRIMARY
+        Kdc Called:
+```
+
+The end and renewal time have values set to 10 years. This is because Mimikatz includes a set of optional parameters that contain default values when they’re not explicitly used.
+
+In this scenario, the parameters `/endin` and `/renewmax` were not included, which are used to set ticket age and renewal deadline.
+
+Since these parameters were not used, their values were automatically set to ten years.
+
+Kerberos tickets are assigned to logon sessions, which are identified by logon IDs. When we execute klist without any parameters, we only find the cached tickets for the current session.
+
+Get a list of all the sessions on a computer
+
+```pwsh
+klist sessions
+```
+
+View the cached tickets for a specific session, we’ll need to use the -li parameter and provide the logon ID value.
+
+```pwsh
+klist -li 0x3e7
+```
+
+3 tasks:
+1.	Retrieve all the session logon IDs
+2.	Retrieve the cached tickets for all sessions
+3.	Analyze the results from each session
+
+
+```pwsh
+. .\Get-LogonIds.ps1
+. .\Get-Tickets.ps1
+Get-LogonIds | Get-Tickets
+```
+
+```pwsh
+Function Get-LogonIds {
+    Begin {
+        $Klist = klist sessions
+    }
+    Process {
+        $Sessions = $Klist | Where-Object { $_ -like '* Session*' } | ForEach-Object { (($_ -split ' ')[3]).substring(2) }
+    }
+    End {
+        return $Sessions
+    }
+}
+```
+
+```pwsh
+Function Get-Tickets {
+    [cmdletbinding()]
+    param (
+        [parameter(mandatory = $false, ValueFromPipeline = $true)]
+        [System.String]$LogonId
+    )
+    Begin {
+        $CachedTickets = @()
+        $Klist = klist
+        $Current = ((($klist) -split 'Current LogonId is')[2] -split ':')[1]
+    }
+    Process {
+        try {
+            if ($LogonId -eq $Current -or $LogonId -eq '') {
+                $Klist = klist
+                $LogonId = $Current
+            }
+            else {           
+                $Klist = klist -li $LogonId
+            }
+            
+            $Tickets = 5..$Klist.count | ForEach-Object { $Klist[$_] } | Where-Object { $_ }
+            if ($Klist -notcontains 'Cached Tickets: (0)') {
+                0..$(($Tickets | Select-String "^#\d>").Count - 1) | ForEach-Object {
+                    $Index = $_ * 10
+                    $Properties = [ordered]@{
+                        'LogonId'        = $LogonId
+                        'Ticket'         = $_
+                        'Client'         = $($Tickets[0 + $Index] -split ':')[1].Trim()
+                        'Server'         = $($Tickets[1 + $Index] -split ':')[1].Trim()
+                        'EncryptionType' = $($Tickets[2 + $Index] -split ':')[1].Trim()
+                        'TicketFlags'    = $($Tickets[3 + $Index] -split 'Ticket Flags')[1].Trim()
+                        'StartTime'      = $($Tickets[4 + $Index] -split 'Start Time:')[1].Trim()
+                        'EndTime'        = $($Tickets[5 + $Index] -split 'End Time:')[1].Trim()
+                        'RenewTime'      = $($Tickets[6 + $Index] -split 'Renew Time:')[1].Trim()
+                        'SessionKeyType' = $($Tickets[7 + $Index] -split ':')[1].Trim()
+                        'CacheFlags'     = $($Tickets[8 + $Index] -split ':')[1].Trim()
+                        'KdcCalled'      = $($Tickets[9 + $Index] -split ':')[1].Trim()
+                    }
+                    
+                    if ($Properties) {
+                        $CachedTickets += New-Object -TypeName PSObject -Property $Properties
+                    }
+                }
+            }
+        }
+        catch {
+            if ($_ -like "*Error calling API*") {
+                $_ | Out-null
+            }
+        }
+    }
+    End {
+        return $CachedTickets
+    }
+}
+```
+
+Retrieve all the cached tickets on the current system, retrieve the ticket time values, and sort the results.
+
+```pwsh
+Get-LogonIds | Get-Tickets | Select LogonId,StartTime,EndTime | Sort EndTime
+```
+
+Running this command has revealed a cached ticket, associated with logon ID `0xa54c6`, with a suspiciously long end time.
+
+Because the normal maximum ticket age is 10 hours and maximum renewal time is 7 days, we can create another function that will parse all cached tickets and alert if any exceed those standard values.
+
+```pwsh
+. .\Invoke-GoldenSweep.ps1
+Get-LogonIds | Get-Tickets | Invoke-GoldenSweep
+```
+
+```pwsh
+Function Invoke-GoldenSweep {
+    [cmdletbinding()]
+    param (
+        [parameter(mandatory = $true, ValueFromPipeline = $true)]
+        $Ticket
+    )
+    Process {
+        # Time Beacons
+        $StartTime = ($Ticket.StartTime -split ' ')[0]
+        $EndTime = ($Ticket.EndTime -split ' ')[0]
+        $RenewTime = ($Ticket.RenewTime -split ' ')[0]
+
+        if ((New-TimeSpan -Start $StartTime -End $EndTime).Days -gt 10) {
+            $Flagged = $Ticket
+        }
+
+        if ($RenewTime -ne 0) {
+            if ((New-TimeSpan -Start $StartTime -End $RenewTime).Days -gt 7) {
+                $Flagged = $Ticket
+            }
+        }
+        
+        # Encryption Beacons
+        $EncryptionType = $Ticket.EncryptionType  
+        if ($EncryptionType -eq 'RSADSI RC4-HMAC(NT)') {
+            $Flagged = $Ticket
+        }
+    }
+    End {
+        return $Flagged
+    }
+}
+```
+
+Mimikatz will encrypt tickets using RC4 encryption when the NTLM hash of the krbtgt account is used. In updated infrastructure environments, AES-128/256 encryption is more dominant and will provide a visible difference.
+
+Changing the `krbtgt` password only once would be insufficient because if a signature validation fails, the KDC will attempt to verify a ticket using the second NTLM password hash in the `krbtgt` password history.
 
 # SIEM Part One: Intro to ELK
 
-```pwsh
-
-```
-
-```pwsh
-
-```
-
-```pwsh
-
-```
-
-```pwsh
-
-```
-
-```pwsh
-
-```
+## Elastic Stack (ELK)
 
 ```bash
 
@@ -4118,9 +4598,7 @@ Function Invoke-PTTSweep {
 
 ```
 
-```bash
-
-```
+## ELK Integrations with OSQuery
 
 ```bash
 
@@ -4150,9 +4628,7 @@ Function Invoke-PTTSweep {
 
 ```
 
-```bash
-
-```
+## Rules and Alerts
 
 ```bash
 
@@ -4182,9 +4658,7 @@ Function Invoke-PTTSweep {
 
 ```
 
-```bash
-
-```
+## Timelines and Cases
 
 ```bash
 
@@ -4214,13 +4688,9 @@ Function Invoke-PTTSweep {
 
 ```
 
-```bash
+# SIEM Part Two: Combining the Logs
 
-```
-
-```bash
-
-```
+## Phase One: Web Server Initial Access
 
 ```bash
 
@@ -4250,6 +4720,20 @@ Function Invoke-PTTSweep {
 
 ```
 
+### Enumeration and Command Injection of web01
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
 ```bash
 
 ```
@@ -4265,6 +4749,278 @@ Function Invoke-PTTSweep {
 ```bash
 
 ```
+
+### Phase One Detection Rules
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+## Phase Two: Lateral Movement to Application Server
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Brute Force and Authentication to appsrv01
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Phase Two Detection Rules
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+## Phase Three: Persistence and Privilege Escalation on Application Server
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Persistence and Privilege Escalation on appsrv01
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Phase Three Detection Rules
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+## Phase Four: Perform Actions on Domain Controller
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Dump AD Database
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+```bash
+
+```
+
+### Phase Four Detection Rules
 
 ```bash
 

